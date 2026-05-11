@@ -1,0 +1,3 @@
+[submodule "CVA6-fork"]
+	path = CVA6-fork
+	url = https://github.com/10x-Engineers/CVA6-fork.git

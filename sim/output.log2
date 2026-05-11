@@ -1,0 +1,332 @@
+vlib work
+** Warning: (vlib-34) Library already exists at "work".
+Errors: 0, Warnings: 1
+vlog -sv -timescale 1ns/1ps +incdir+../tb/jtag_vip +incdir+../tb ../riscv-dbg/src/dm_pkg.sv ../riscv-dbg/src/tb_stubs.sv ../riscv-dbg/debug_rom/debug_rom.sv ../riscv-dbg/debug_rom/debug_rom_one_scratch.sv ../riscv-dbg/src/dmi_jtag_tap.sv ../riscv-dbg/src/dmi_cdc.sv ../riscv-dbg/src/dmi_jtag.sv ../riscv-dbg/src/dm_csrs.sv ../riscv-dbg/src/dm_sba.sv ../riscv-dbg/src/dm_mem.sv ../riscv-dbg/src/dm_top.sv ../tb/jtag_vip/dm_defines_pkg.sv ../tb/jtag_vip/jtag_if.sv ../tb/jtag_vip/jtag_pkg.sv ../tb/debug_pkg.sv ../tb/jtag_bitbang.sv ../tb/tb_top.sv
+QuestaSim-64 vlog 2021.2_1 Compiler 2021.05 May 15 2021
+Start time: 15:04:52 on May 08,2026
+vlog -sv -timescale 1ns/1ps "+incdir+../tb/jtag_vip" "+incdir+../tb" ../riscv-dbg/src/dm_pkg.sv ../riscv-dbg/src/tb_stubs.sv ../riscv-dbg/debug_rom/debug_rom.sv ../riscv-dbg/debug_rom/debug_rom_one_scratch.sv ../riscv-dbg/src/dmi_jtag_tap.sv ../riscv-dbg/src/dmi_cdc.sv ../riscv-dbg/src/dmi_jtag.sv ../riscv-dbg/src/dm_csrs.sv ../riscv-dbg/src/dm_sba.sv ../riscv-dbg/src/dm_mem.sv ../riscv-dbg/src/dm_top.sv ../tb/jtag_vip/dm_defines_pkg.sv ../tb/jtag_vip/jtag_if.sv ../tb/jtag_vip/jtag_pkg.sv ../tb/debug_pkg.sv ../tb/jtag_bitbang.sv ../tb/tb_top.sv 
+-- Compiling package dm
+-- Compiling module cluster_clock_inverter
+-- Compiling module pulp_clock_mux2
+-- Compiling module cdc_2phase
+-- Compiling module fifo_v2
+-- Compiling module debug_rom
+-- Compiling module debug_rom_one_scratch
+-- Compiling module dmi_jtag_tap
+-- Compiling module dmi_cdc
+-- Importing package dm
+** Warning: ../riscv-dbg/src/dmi_cdc.sv(24): (vlog-13314) Defaulting port 'jtag_dmi_req_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ../riscv-dbg/src/dmi_cdc.sv(40): (vlog-13314) Defaulting port 'core_dmi_resp_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+-- Compiling module dmi_jtag
+** Warning: ../riscv-dbg/src/dmi_jtag.sv(31): (vlog-13314) Defaulting port 'dmi_resp_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+-- Compiling module dm_csrs
+** Warning: ../riscv-dbg/src/dm_csrs.sv(29): (vlog-13314) Defaulting port 'dmi_req_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ../riscv-dbg/src/dm_csrs.sv(39): (vlog-13314) Defaulting port 'hartinfo_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ../riscv-dbg/src/dm_csrs.sv(58): (vlog-13314) Defaulting port 'data_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+-- Compiling module dm_sba
+-- Compiling module dm_mem
+** Warning: ../riscv-dbg/src/dm_mem.sv(39): (vlog-13314) Defaulting port 'progbuf_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ../riscv-dbg/src/dm_mem.sv(41): (vlog-13314) Defaulting port 'data_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ../riscv-dbg/src/dm_mem.sv(46): (vlog-13314) Defaulting port 'cmd_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+-- Compiling module dm_top
+** Warning: ../riscv-dbg/src/dm_top.sv(36): (vlog-13314) Defaulting port 'hartinfo_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ../riscv-dbg/src/dm_top.sv(58): (vlog-13314) Defaulting port 'dmi_req_i' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+-- Compiling package dm_defines_pkg
+-- Compiling interface jtag_if
+-- Compiling package jtag_pkg
+-- Importing package mtiUvm.uvm_pkg (uvm-1.1d Built-in)
+-- Importing package dm_defines_pkg
+** Note: (vlog-2286) ../tb/jtag_vip/jtag_pkg.sv(9): Using implicit +incdir+/home/jk/mentor/questasim/uvm-1.1d/../verilog_src/uvm-1.1d/src from import uvm_pkg
+-- Compiling package debug_pkg
+-- Importing package jtag_pkg
+-- Compiling module jtag_bitbang
+-- Compiling module tb_top
+-- Importing package debug_pkg
+
+Top level modules:
+	tb_top
+End time: 15:04:52 on May 08,2026, Elapsed time: 0:00:00
+Errors: 0, Warnings: 11
+🚀 Starting vsim...
+vsim -c -do "run -all; quit -f" \
+     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
+     +UVM_TESTNAME=debug_test \
+     "+PYTHON_SEQ=../run.py --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
+     +JTAG_MASTER=openocd \
+     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 &
+⏳ Waiting for JTAG bitbang server to start...
+Reading pref.tcl
+
+# 2021.2_1
+
+# vsim -c -do "run -all; quit -f" -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top "+UVM_TESTNAME=debug_test" "+PYTHON_SEQ=../run.py --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" "+JTAG_MASTER=openocd" "+UVM_VERBOSITY=UVM_MEDIUM" 
+# Start time: 15:04:54 on May 08,2026
+# ** Note: (vsim-8009) Loading existing optimized design _opt4
+# //  Questa Sim-64
+# //  Version 2021.2_1 linux_x86_64 May 15 2021
+# //
+# //  Copyright 1991-2021 Mentor Graphics Corporation
+# //  All Rights Reserved.
+# //
+# //  QuestaSim and its associated documentation contain trade
+# //  secrets and commercial or financial information that are the property of
+# //  Mentor Graphics Corporation and are privileged, confidential,
+# //  and exempt from disclosure under the Freedom of Information Act,
+# //  5 U.S.C. Section 552. Furthermore, this information
+# //  is prohibited from disclosure under the Trade Secrets Act,
+# //  18 U.S.C. Section 1905.
+# //
+# Loading sv_std.std
+# Loading work.jtag_if(fast)
+# Loading work.dm_defines_pkg(fast)
+# Loading mtiUvm.uvm_pkg(fast)
+# Loading work.jtag_pkg(fast)
+# Loading work.debug_pkg(fast)
+# Loading work.dm(fast)
+# Loading mtiUvm.questa_uvm_pkg(fast)
+# Loading work.tb_top(fast)
+# Loading work.dm_top(fast)
+# ** Warning: (vsim-3764) Stand-alone call to function 'get' treated as implicit void cast.
+#    Time: 0 ps  Iteration: 0  Region: /debug_pkg File: ../tb/debug_pkg.sv Line: 300
+# Loading ./uvm_bridge.so
+# Loading /home/jk/mentor/questasim/uvm-1.1d/linux_x86_64/uvm_dpi.so
+# run -all
+JTAG remote bitbang server is ready
+Listening on port 9824
+[bitbang-tick] 1M ticks, client_fd=0
+[bitbang-tick] 2M ticks, client_fd=0
+[bitbang-tick] 3M ticks, client_fd=0
+[bitbang-tick] 4M ticks, client_fd=0
+[bitbang-tick] 5M ticks, client_fd=0
+[bitbang-tick] 6M ticks, client_fd=0
+[bitbang-tick] 7M ticks, client_fd=0
+[bitbang-tick] 8M ticks, client_fd=0
+[bitbang-tick] 9M ticks, client_fd=0
+[bitbang-tick] 10M ticks, client_fd=0
+[bitbang-tick] 11M ticks, client_fd=0
+[bitbang-tick] 12M ticks, client_fd=0
+# ----------------------------------------------------------------
+# UVM-1.1d
+# (C) 2007-2013 Mentor Graphics Corporation
+# (C) 2007-2013 Cadence Design Systems, Inc.
+# (C) 2006-2013 Synopsys, Inc.
+# (C) 2011-2013 Cypress Semiconductor Corp.
+# ----------------------------------------------------------------
+# 
+#   ***********       IMPORTANT RELEASE NOTES         ************
+# 
+#   You are using a version of the UVM library that has been compiled
+#   with `UVM_NO_DEPRECATED undefined.
+#   See http://www.eda.org/svdb/view.php?id=3313 for more details.
+# 
+#   You are using a version of the UVM library that has been compiled
+#   with `UVM_OBJECT_MUST_HAVE_CONSTRUCTOR undefined.
+#   See http://www.eda.org/svdb/view.php?id=3770 for more details.
+# 
+#       (Specify +UVM_NO_RELNOTES to turn off this notice)
+# 
+# UVM_INFO verilog_src/questa_uvm_pkg-1.2/src/questa_uvm_pkg.sv(277) @ 0: reporter [Questa UVM] QUESTA_UVM-1.2.3
+# UVM_INFO verilog_src/questa_uvm_pkg-1.2/src/questa_uvm_pkg.sv(278) @ 0: reporter [Questa UVM]  questa_uvm::init(+struct)
+# UVM_INFO @ 0: reporter [RNTST] Running test debug_test...
+# UVM_INFO ../tb/debug_pkg.sv(311) @ 0: uvm_test_top [TEST] OpenOCD mode â bitbang server active, waiting for quit signal
+[bitbang-tick] 13M ticks, client_fd=0
+[bitbang-tick] 14M ticks, client_fd=0
+[bitbang-tick] 15M ticks, client_fd=0
+[bitbang-tick] 16M ticks, client_fd=0
+[bitbang-tick] 17M ticks, client_fd=0
+[bitbang-tick] 18M ticks, client_fd=0
+[bitbang-tick] 19M ticks, client_fd=0
+[bitbang-tick] 20M ticks, client_fd=0
+[bitbang-tick] 21M ticks, client_fd=0
+[bitbang-tick] 22M ticks, client_fd=0
+[bitbang-tick] 23M ticks, client_fd=0
+OpenOCD flow...
+openocd -f ../configs/openocd_bitbang.cfg > openocd.log 2>&1 &
+Accepted successfully.
+[bitbang] 1000 commands processed (last='R')
+[bitbang] 2000 commands processed (last='5')
+[bitbang] 3000 commands processed (last='0')
+[bitbang-tick] 24M ticks, client_fd=6
+[bitbang] 4000 commands processed (last='0')
+[bitbang] 5000 commands processed (last='4')
+[bitbang-tick] 25M ticks, client_fd=6
+[bitbang] 6000 commands processed (last='R')
+[bitbang] 7000 commands processed (last='0')
+[bitbang] 8000 commands processed (last='4')
+[bitbang-tick] 26M ticks, client_fd=6
+[bitbang] 9000 commands processed (last='5')
+[bitbang] 10000 commands processed (last='0')
+[bitbang-tick] 27M ticks, client_fd=6
+[bitbang] 11000 commands processed (last='R')
+[bitbang] 12000 commands processed (last='4')
+[bitbang-tick] 28M ticks, client_fd=6
+[bitbang] 13000 commands processed (last='R')
+[bitbang] 14000 commands processed (last='4')
+[bitbang-tick] 29M ticks, client_fd=6
+[bitbang] 15000 commands processed (last='0')
+[bitbang] 16000 commands processed (last='R')
+[bitbang-tick] 30M ticks, client_fd=6
+[bitbang] 17000 commands processed (last='0')
+[bitbang-tick] 31M ticks, client_fd=6
+[bitbang] 18000 commands processed (last='0')
+[bitbang-tick] 32M ticks, client_fd=6
+[bitbang] 19000 commands processed (last='4')
+[bitbang-tick] 33M ticks, client_fd=6
+[bitbang-tick] 34M ticks, client_fd=6
+[bitbang] 20000 commands processed (last='4')
+[bitbang-tick] 35M ticks, client_fd=6
+[bitbang] 21000 commands processed (last='1')
+[bitbang-tick] 36M ticks, client_fd=6
+[bitbang] 22000 commands processed (last='4')
+[bitbang-tick] 37M ticks, client_fd=6
+[bitbang-tick] 38M ticks, client_fd=6
+[bitbang] 23000 commands processed (last='4')
+[bitbang-tick] 39M ticks, client_fd=6
+[bitbang] 24000 commands processed (last='R')
+[bitbang-tick] 40M ticks, client_fd=6
+[bitbang] 25000 commands processed (last='4')
+[bitbang-tick] 41M ticks, client_fd=6
+[bitbang] 26000 commands processed (last='5')
+[bitbang-tick] 42M ticks, client_fd=6
+[bitbang] 27000 commands processed (last='R')
+[bitbang-tick] 43M ticks, client_fd=6
+[bitbang] 28000 commands processed (last='R')
+[bitbang-tick] 44M ticks, client_fd=6
+[bitbang] 29000 commands processed (last='0')
+[bitbang-tick] 45M ticks, client_fd=6
+[bitbang-tick] 46M ticks, client_fd=6
+[bitbang] 30000 commands processed (last='1')
+[bitbang-tick] 47M ticks, client_fd=6
+[bitbang] 31000 commands processed (last='R')
+[bitbang-tick] 48M ticks, client_fd=6
+[bitbang] 32000 commands processed (last='0')
+[bitbang-tick] 49M ticks, client_fd=6
+[bitbang] 33000 commands processed (last='0')
+[bitbang] 34000 commands processed (last='4')
+[bitbang-tick] 50M ticks, client_fd=6
+[bitbang-tick] 51M ticks, client_fd=6
+[bitbang] 35000 commands processed (last='5')
+[bitbang-tick] 52M ticks, client_fd=6
+[bitbang] 36000 commands processed (last='2')
+[bitbang-tick] 53M ticks, client_fd=6
+[bitbang] 37000 commands processed (last='4')
+[bitbang-tick] 54M ticks, client_fd=6
+[bitbang] 38000 commands processed (last='4')
+[bitbang-tick] 55M ticks, client_fd=6
+[bitbang] 39000 commands processed (last='R')
+[bitbang-tick] 56M ticks, client_fd=6
+[bitbang] 40000 commands processed (last='R')
+[bitbang-tick] 57M ticks, client_fd=6
+[bitbang] 41000 commands processed (last='6')
+[bitbang-tick] 58M ticks, client_fd=6
+[bitbang] 42000 commands processed (last='R')
+[bitbang-tick] 59M ticks, client_fd=6
+[bitbang] 43000 commands processed (last='R')
+[bitbang-tick] 60M ticks, client_fd=6
+[bitbang] 44000 commands processed (last='0')
+[bitbang-tick] 61M ticks, client_fd=6
+[bitbang] 45000 commands processed (last='0')
+[bitbang-tick] 62M ticks, client_fd=6
+[bitbang] 46000 commands processed (last='6')
+[bitbang-tick] 63M ticks, client_fd=6
+[bitbang] 47000 commands processed (last='0')
+[bitbang-tick] 64M ticks, client_fd=6
+[bitbang-tick] 65M ticks, client_fd=6
+[bitbang] 48000 commands processed (last='0')
+[bitbang-tick] 66M ticks, client_fd=6
+[bitbang] 49000 commands processed (last='4')
+[bitbang-tick] 67M ticks, client_fd=6
+[bitbang] 50000 commands processed (last='4')
+[bitbang-tick] 68M ticks, client_fd=6
+[bitbang] 51000 commands processed (last='4')
+[bitbang-tick] 69M ticks, client_fd=6
+[bitbang] 52000 commands processed (last='4')
+[bitbang-tick] 70M ticks, client_fd=6
+[bitbang] 53000 commands processed (last='4')
+[bitbang-tick] 71M ticks, client_fd=6
+[bitbang] 54000 commands processed (last='R')
+[bitbang-tick] 72M ticks, client_fd=6
+[bitbang] 55000 commands processed (last='R')
+[bitbang-tick] 73M ticks, client_fd=6
+[bitbang] 56000 commands processed (last='0')
+[bitbang-tick] 74M ticks, client_fd=6
+[bitbang] 57000 commands processed (last='R')
+[bitbang-tick] 75M ticks, client_fd=6
+[bitbang] 58000 commands processed (last='R')
+[bitbang-tick] 76M ticks, client_fd=6
+[bitbang] 59000 commands processed (last='0')
+[bitbang-tick] 77M ticks, client_fd=6
+[bitbang-tick] 78M ticks, client_fd=6
+[bitbang] 60000 commands processed (last='0')
+[bitbang-tick] 79M ticks, client_fd=6
+[bitbang] 61000 commands processed (last='0')
+[bitbang-tick] 80M ticks, client_fd=6
+[bitbang] 62000 commands processed (last='0')
+[bitbang-tick] 81M ticks, client_fd=6
+[bitbang] 63000 commands processed (last='0')
+[bitbang-tick] 82M ticks, client_fd=6
+[bitbang] 64000 commands processed (last='4')
+[bitbang-tick] 83M ticks, client_fd=6
+[bitbang] 65000 commands processed (last='4')
+[bitbang-tick] 84M ticks, client_fd=6
+[bitbang] 66000 commands processed (last='0')
+[bitbang-tick] 85M ticks, client_fd=6
+[bitbang] 67000 commands processed (last='4')
+[bitbang-tick] 86M ticks, client_fd=6
+[bitbang] 68000 commands processed (last='4')
+[bitbang-tick] 87M ticks, client_fd=6
+[bitbang] 69000 commands processed (last='R')
+[bitbang-tick] 88M ticks, client_fd=6
+[bitbang] 70000 commands processed (last='R')
+[bitbang-tick] 89M ticks, client_fd=6
+[bitbang] 71000 commands processed (last='0')
+[bitbang-tick] 90M ticks, client_fd=6
+[bitbang] 72000 commands processed (last='R')
+[bitbang-tick] 91M ticks, client_fd=6
+[bitbang] 73000 commands processed (last='R')
+[bitbang-tick] 92M ticks, client_fd=6
+[bitbang] 74000 commands processed (last='0')
+[bitbang-tick] 93M ticks, client_fd=6
+[bitbang] 75000 commands processed (last='0')
+[bitbang-tick] 94M ticks, client_fd=6
+[bitbang] 76000 commands processed (last='0')
+[bitbang-tick] 95M ticks, client_fd=6
+[bitbang] 77000 commands processed (last='0')
+[bitbang-tick] 96M ticks, client_fd=6
+[bitbang] 78000 commands processed (last='0')
+[bitbang-tick] 97M ticks, client_fd=6
+[bitbang-tick] 98M ticks, client_fd=6
+[bitbang] 79000 commands processed (last='4')
+[bitbang-tick] 99M ticks, client_fd=6
+[bitbang] 80000 commands processed (last='4')
+[bitbang-tick] 100M ticks, client_fd=6
+[bitbang] 81000 commands processed (last='0')
+[bitbang-tick] 101M ticks, client_fd=6
+[bitbang] 82000 commands processed (last='4')
+[bitbang-tick] 102M ticks, client_fd=6
+[bitbang-tick] 103M ticks, client_fd=6
+[bitbang] 83000 commands processed (last='4')
+[bitbang-tick] 104M ticks, client_fd=6
+[bitbang] 84000 commands processed (last='R')
+[bitbang-tick] 105M ticks, client_fd=6
+[bitbang] 85000 commands processed (last='R')
+[bitbang-tick] 106M ticks, client_fd=6
+[bitbang] 86000 commands processed (last='6')
+[bitbang-tick] 107M ticks, client_fd=6
+[bitbang] 87000 commands processed (last='R')
+[bitbang-tick] 108M ticks, client_fd=6
+[bitbang-tick] 109M ticks, client_fd=6
+[bitbang] 88000 commands processed (last='R')
+[bitbang-tick] 110M ticks, client_fd=6
+[bitbang] 89000 commands processed (last='0')
+[bitbang-tick] 111M ticks, client_fd=6
+[bitbang] 90000 commands processed (last='0')
+[bitbang-tick] 112M ticks, client_fd=6
+[bitbang] 91000 commands processed (last='4')
+[bitbang-tick] 113M ticks, client_fd=6
+[bitbang-tick] 114M ticks, client_fd=6
+[bitbang] 92000 commands processed (last='0')
+simulator: Unexpected EOF on RPC channel sock5b9b760
+** Fatal: Read failure in vlm process (0,0)
+Kernel lost connection to front end process.
+simulator: Unexpected EOF on RPC channel sock5be9b20

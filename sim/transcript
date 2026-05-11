@@ -1,0 +1,78 @@
+# vsim -c -do "run -all; quit -f" -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top "+UVM_TESTNAME=debug_test" "+PYTHON_SEQ=../run.py --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" "+JTAG_MASTER=openocd" "+UVM_VERBOSITY=UVM_MEDIUM" 
+# Start time: 18:18:04 on May 08,2026
+# ** Note: (vsim-8009) Loading existing optimized design _opt7
+# //  Questa Sim-64
+# //  Version 2021.2_1 linux_x86_64 May 15 2021
+# //
+# //  Copyright 1991-2021 Mentor Graphics Corporation
+# //  All Rights Reserved.
+# //
+# //  QuestaSim and its associated documentation contain trade
+# //  secrets and commercial or financial information that are the property of
+# //  Mentor Graphics Corporation and are privileged, confidential,
+# //  and exempt from disclosure under the Freedom of Information Act,
+# //  5 U.S.C. Section 552. Furthermore, this information
+# //  is prohibited from disclosure under the Trade Secrets Act,
+# //  18 U.S.C. Section 1905.
+# //
+# Loading sv_std.std
+# Loading work.jtag_if(fast)
+# Loading work.dm_defines_pkg(fast)
+# Loading mtiUvm.uvm_pkg(fast)
+# Loading work.jtag_pkg(fast)
+# Loading work.debug_pkg(fast)
+# Loading work.dm(fast)
+# Loading mtiUvm.questa_uvm_pkg(fast)
+# Loading work.tb_top(fast)
+# Loading work.dm_top(fast)
+# ** Warning: (vsim-3764) Stand-alone call to function 'get' treated as implicit void cast.
+#    Time: 0 ps  Iteration: 0  Region: /debug_pkg File: ../tb/debug_pkg.sv Line: 300
+# Loading ./uvm_bridge.so
+# Loading /home/jk/mentor/questasim/uvm-1.1d/linux_x86_64/uvm_dpi.so
+# run -all
+# ----------------------------------------------------------------
+# UVM-1.1d
+# (C) 2007-2013 Mentor Graphics Corporation
+# (C) 2007-2013 Cadence Design Systems, Inc.
+# (C) 2006-2013 Synopsys, Inc.
+# (C) 2011-2013 Cypress Semiconductor Corp.
+# ----------------------------------------------------------------
+# 
+#   ***********       IMPORTANT RELEASE NOTES         ************
+# 
+#   You are using a version of the UVM library that has been compiled
+#   with `UVM_NO_DEPRECATED undefined.
+#   See http://www.eda.org/svdb/view.php?id=3313 for more details.
+# 
+#   You are using a version of the UVM library that has been compiled
+#   with `UVM_OBJECT_MUST_HAVE_CONSTRUCTOR undefined.
+#   See http://www.eda.org/svdb/view.php?id=3770 for more details.
+# 
+#       (Specify +UVM_NO_RELNOTES to turn off this notice)
+# 
+# UVM_INFO verilog_src/questa_uvm_pkg-1.2/src/questa_uvm_pkg.sv(277) @ 0: reporter [Questa UVM] QUESTA_UVM-1.2.3
+# UVM_INFO verilog_src/questa_uvm_pkg-1.2/src/questa_uvm_pkg.sv(278) @ 0: reporter [Questa UVM]  questa_uvm::init(+struct)
+# UVM_INFO @ 0: reporter [RNTST] Running test debug_test...
+# UVM_INFO ../tb/debug_pkg.sv(311) @ 0: uvm_test_top [TEST] OpenOCD mode — bitbang server active, waiting for quit signal
+# UVM_INFO ../tb/debug_pkg.sv(317) @ 299100000000: uvm_test_top [TEST] Remote bitbang client disconnected — ending sim
+# UVM_INFO ../tb/debug_pkg.sv(329) @ 299100000000: uvm_test_top [TEST] Session complete — ending simulation
+# UVM_INFO verilog_src/uvm-1.1d/src/base/uvm_objection.svh(1267) @ 299100000000: reporter [TEST_DONE] 'run' phase is ready to proceed to the 'extract' phase
+# UVM_INFO ../tb/debug_pkg.sv(160) @ 299100000000: uvm_test_top.m_env.m_scoreboard [SCB] Checked=0 Errors=0
+# 
+# --- UVM Report Summary ---
+# 
+# ** Report counts by severity
+# UVM_INFO :    8
+# UVM_WARNING :    0
+# UVM_ERROR :    0
+# UVM_FATAL :    0
+# ** Report counts by id
+# [Questa UVM]     2
+# [RNTST]     1
+# [SCB]     1
+# [TEST]     3
+# [TEST_DONE]     1
+# ** Note: $finish    : /home/jk/mentor/questasim/linux_x86_64/../verilog_src/uvm-1.1d/src/base/uvm_root.svh(430)
+#    Time: 299100 us  Iteration: 54  Instance: /tb_top
+# End time: 18:18:48 on May 08,2026, Elapsed time: 0:00:44
+# Errors: 0, Warnings: 1
