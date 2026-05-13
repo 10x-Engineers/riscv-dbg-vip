@@ -336,14 +336,14 @@ questa_soc_batch: questa_soc_compile
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_soc_batch_*.log 2>/dev/null | wc -l); \
 	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_soc_batch_$$TEST_NUM.log; \
 	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
-	 vsim -voptargs="+nopt=fpnew_cast_multi" -suppress 12110 -c -do "run -all; quit -f" \
+	 vsim -novopt -suppress 12110 -c -do "run -all; quit -f" \
 	      -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
 	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
 
 questa_soc_interactive: questa_soc_compile
-	vsim -voptargs="+nopt=fpnew_cast_multi" -suppress 12110 -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
+	vsim -novopt -suppress 12110 -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(RUNNER) --config $(CFG_FILE) --mode interactive" \
 	     +PYTHON_MODE=interactive \
@@ -351,7 +351,7 @@ questa_soc_interactive: questa_soc_compile
 
 questa_soc_openocd: questa_soc_compile
 	@echo "🚀 Starting vsim SoC..."
-	vsim -voptargs="+nopt=fpnew_cast_multi" -suppress 12110 -c -do "run -all; quit -f" \
+	vsim -novopt -suppress 12110 -c -do "run -all; quit -f" \
 	     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
 	     "+PYTHON_SEQ=$(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
