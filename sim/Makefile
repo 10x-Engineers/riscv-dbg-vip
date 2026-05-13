@@ -17,11 +17,15 @@
 
 # Path definitions for different project components
 TB_DIR    = ../tb
-VIP_DIR   = $(TB_DIR)/jtag_vip
+TB_TEST_DIR = $(TB_DIR)/tests
+VIP_DIR   = ../dv/agents/jtag
+ENV_DIR   = ../dv/env
+RV_DBG_ENV_DIR = $(ENV_DIR)/rv_dbg
+SV_SEQ_DIR = ../dv/seq_lib/rv_dbg
 RTL_DIR   = ../riscv-dbg/src
-C_DIR     = ../c_bridge
-SEQ_DIR   = ../sequences
+C_DIR     = ../lib/C/py_uvm_bridge
 CFG_DIR   = ../configs
+PY_DIR    = ../lib/python
 
 # ── RTL source list (dependency order) ────────────────────────────────────────
 # SRC_RTL lists all SystemVerilog files required for the simulation.
@@ -38,21 +42,21 @@ SRC_RTL = \
     $(RTL_DIR)/dm_sba.sv                        \
     $(RTL_DIR)/dm_mem.sv                        \
     $(RTL_DIR)/dm_top.sv                        \
-    $(VIP_DIR)/dm_defines_pkg.sv \
-    $(VIP_DIR)/jtag_if.sv       \
-    $(VIP_DIR)/jtag_pkg.sv      \
-    $(TB_DIR)/debug_pkg.sv      \
-    $(TB_DIR)/jtag_bitbang.sv   \
+    $(VIP_DIR)/dm_defines_pkg.sv                 \
+    $(VIP_DIR)/jtag_if.sv                        \
+    $(VIP_DIR)/jtag_pkg.sv                       \
+    $(ENV_DIR)/debug_pkg.sv                      \
+    $(VIP_DIR)/jtag_bitbang.sv                   \
     $(TB_DIR)/tb_top.sv
 
 # C sources for the DPI bridges (UVM bridge and Remote Bitbang server)
 SRC_C   = $(C_DIR)/uvm_bridge.c $(C_DIR)/remote_bitbang.c
 
 # +incdir so that jtag_pkg's `include "types.sv" etc. resolve correctly
-INCDIRS = +incdir+$(VIP_DIR) +incdir+$(TB_DIR)
+INCDIRS = +incdir+$(VIP_DIR) +incdir+$(RV_DBG_ENV_DIR) +incdir+$(SV_SEQ_DIR) +incdir+$(TB_TEST_DIR) +incdir+$(TB_DIR)
 
 # Default Python runner and config
-RUNNER   = ../run.py
+RUNNER   = $(PY_DIR)/run.py
 CFG_FILE = $(CFG_DIR)/halt_uvm.json
 
 # Default command-line to run the Python sequencer
@@ -66,6 +70,8 @@ SIM_OUTPUT_DIR = ./sim_outputs
 # Questa
 # ══════════════════════════════════════════════════════════════════════════════
 QUESTA_FLAGS = -sv -timescale 1ns/1ps $(INCDIRS)
+VSIM ?= env -u DISPLAY vsim
+VSIM_BATCH ?= env -u DISPLAY vsim -batch
 
 # Compile the C sources into a shared object library (.so) for Questa's DPI
 uvm_bridge.so: $(SRC_C)
@@ -86,7 +92,7 @@ questa_batch: questa_compile
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_batch_*.log 2>/dev/null | wc -l); \
 	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_batch_$$TEST_NUM.log; \
 	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
-	 vsim  -c -do "run -all; quit -f" \
+	 $(VSIM_BATCH) -do "run -all; quit -f" \
 	      -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
@@ -94,7 +100,7 @@ questa_batch: questa_compile
 
 # Run in interactive mode (GUI usually, or just interactive terminal)
 questa_interactive: questa_compile
-	vsim  -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
+	$(VSIM)  -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(RUNNER) --config $(CFG_FILE) --mode interactive" \
 	     +PYTHON_MODE=interactive \
@@ -106,10 +112,10 @@ questa_mem_scan: questa_compile
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_mem_scan_*.log 2>/dev/null | wc -l); \
 	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_mem_scan_$$TEST_NUM.log; \
 	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
-	 vsim  -c -do "run -all; quit -f" \
+	 $(VSIM_BATCH) -do "run -all; quit -f" \
 	      -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	      +UVM_TESTNAME=debug_test \
-	      +PYTHON_SEQ=$(SEQ_DIR)/mem_scan_sequence.py \
+	      +PYTHON_SEQ="$(RUNNER) --scenario mem_scan --transport uvm --mode batch" \
 	      +PYTHON_MODE=batch \
 	      +PYTHON_EXTRA="--base 0x80000000 --count 8" \
 	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
@@ -120,7 +126,7 @@ questa_read_dmstatus: questa_compile
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_read_dmstatus_*.log 2>/dev/null | wc -l); \
 	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_read_dmstatus_$$TEST_NUM.log; \
 	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
-	 vsim  -c -do "run -all; quit -f" \
+	 $(VSIM_BATCH) -do "run -all; quit -f" \
 	      -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	      +UVM_TESTNAME=debug_test \
 	      "+PYTHON_SEQ=$(RUNNER) --config $(CFG_DIR)/read_dmstatus_uvm.json" \
@@ -133,13 +139,14 @@ questa_openocd_cleanup:
 	@sleep 1
 # Target to run OpenOCD alongside the simulator using an orchestration script
 questa_openocd: questa_compile
+	@rm -f sim.log
 	@echo "🚀 Starting vsim..."
-	vsim  -c -do "run -all; quit -f" \
+	$(VSIM_BATCH) -do "run -all; quit -f" \
 	     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	     +UVM_TESTNAME=debug_test \
 	     "+PYTHON_SEQ=$(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
 	     +JTAG_MASTER=openocd \
-	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 &
+	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
 
 # Wait for bitbang server to be ready
 	@echo "⏳ Waiting for JTAG bitbang server to start..."
@@ -326,8 +333,8 @@ questa_soc_compile: uvm_bridge.so
 	    $(VIP_DIR)/dm_defines_pkg.sv \
 	    $(VIP_DIR)/jtag_if.sv \
 	    $(VIP_DIR)/jtag_pkg.sv \
-	    $(TB_DIR)/debug_pkg.sv \
-	    $(TB_DIR)/jtag_bitbang.sv \
+	    $(ENV_DIR)/debug_pkg.sv \
+	    $(VIP_DIR)/jtag_bitbang.sv \
 	    $(TB_DIR)/tb_top_soc.sv
 	@rm -f flist_soc.tmp
 
@@ -337,27 +344,28 @@ questa_soc_batch: questa_soc_compile
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_soc_batch_*.log 2>/dev/null | wc -l); \
 	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_soc_batch_$$TEST_NUM.log; \
 	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
-	 vsim -novopt -suppress 12110 -c -do "run -all; quit -f" \
+	 $(VSIM_BATCH) -novopt -suppress 12110 -do "run -all; quit -f" \
 	      -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
 	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
 
 questa_soc_interactive: questa_soc_compile
-	vsim -novopt -suppress 12110 -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
+	$(VSIM) -novopt -suppress 12110 -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(RUNNER) --config $(CFG_FILE) --mode interactive" \
 	     +PYTHON_MODE=interactive \
 	     +UVM_VERBOSITY=UVM_MEDIUM
 
 questa_soc_openocd: questa_soc_compile
+	@rm -f sim.log
 	@echo "🚀 Starting vsim SoC..."
-	vsim -novopt -suppress 12110 -c -do "run -all; quit -f" \
+	$(VSIM_BATCH) -novopt -suppress 12110 -do "run -all; quit -f" \
 	     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
 	     "+PYTHON_SEQ=$(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
 	     +JTAG_MASTER=openocd \
-	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 &
+	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
 	@echo "⏳ Waiting for JTAG bitbang server to start..."
 	@for i in $$(seq 1 40); do \
 		if grep -q "Listening on port 9824" sim.log 2>/dev/null; then \
@@ -431,7 +439,7 @@ openocd_interactive:
 # Standalone Python test (mock transport)
 # ══════════════════════════════════════════════════════════════════════════════
 python_test:
-	python3 -m pytest ../tests/ -v
+	python3 -m pytest ../lib/python/tests/ -v
 
 # Remove all generated files (compiled libs, logs, wave files)
 clean:

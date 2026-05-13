@@ -45,5 +45,5 @@ ps aux | grep -E "vsim|questa" | grep -v grep
 ps aux | grep vsim
 
 echo "Running test..."
-python3 -u ../run.py --transport openocd --scenario "$SCENARIO" --mode batch --log-level DEBUG
+python3 -u ../lib/python/run.py --transport openocd --scenario "$SCENARIO" --mode batch --log-level DEBUG
 exit $?
