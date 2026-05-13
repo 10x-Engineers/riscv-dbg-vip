@@ -140,7 +140,6 @@ questa_openocd_cleanup:
 # Target to run OpenOCD alongside the simulator using an orchestration script
 questa_openocd: questa_compile
 	@rm -f sim.log
-	@echo "🚀 Starting vsim..."
 	$(VSIM_BATCH) -do "run -all; quit -f" \
 	     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	     +UVM_TESTNAME=debug_test \
