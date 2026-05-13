@@ -331,6 +331,7 @@ questa_soc_compile: uvm_bridge.so
 	    $(TB_DIR)/tb_top_soc.sv
 	@rm -f flist_soc.tmp
 
+# Remove the vopt flag because the simulation is too slow. find a workaround
 questa_soc_batch: questa_soc_compile
 	@mkdir -p $(SIM_OUTPUT_DIR); \
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_soc_batch_*.log 2>/dev/null | wc -l); \
