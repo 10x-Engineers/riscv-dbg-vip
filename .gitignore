@@ -1,0 +1,54 @@
+# Simulation outputs - one per test run
+sim/sim_outputs/
+
+# Compiled and generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Simulator generated files
+sim/work/
+sim/*.so
+sim/*.o
+sim/transcript
+sim/vsim_stacktrace.vstf
+sim/vopt_stacktrace.vstf
+sim/vish_stacktrace.vstf
+sim/flist_soc.tmp
+sim/flist_soc_test.tmp
+sim/output.log*
+sim/trace_hart_*.log
+sim/*.vstf
+
+# Debug library pycache
+debug_lib/__pycache__/
+debug_lib/*.pyc
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# System files
+*.pid
+openocd.pid
