@@ -33,9 +33,10 @@ sim/vopt_stacktrace.vstf
 sim/vish_stacktrace.vstf
 sim/flist_soc.tmp
 sim/flist_soc_test.tmp
-sim/output.log*
-sim/trace_hart_*.log
 sim/*.vstf
+
+# Log files (anywhere in the project)
+*.log
 
 # Debug library pycache
 debug_lib/__pycache__/

@@ -1,0 +1,116 @@
+`timescale 1ns/1ps
+
+// ──────────────────────────────────────────────────────────────────────────────
+// tb_top_soc.sv
+//
+// Testbench top connecting:
+//   jtag_agent (JTAG VIP) / OpenOCD Bitbang  →  Full CVA6 SoC (ariane_testharness)
+// ──────────────────────────────────────────────────────────────────────────────
+module tb_top_soc;
+
+    import uvm_pkg::*;
+    `include "uvm_macros.svh"
+    import dm::*;
+    import debug_pkg::*;
+
+    // ── System clock & reset ───────────────────────────────────────────────
+    logic clk;
+    logic rtc;
+    logic rst_n;
+
+    initial clk = 1'b0;
+    always  #5 clk = ~clk;  // 100 MHz
+
+    initial rtc = 1'b0;
+    always #100 rtc = ~rtc; // slower RTC clock
+
+    initial begin
+        rst_n = 1'b0;
+        repeat (10) @(posedge clk);
+        rst_n = 1'b1;
+    end
+
+    // ── JTAG interface ─────────────────────────────────────────────────────
+    jtag_if jtag_vif (.clk(clk), .rst_n(rst_n));
+
+    // ── OpenOCD Remote Bitbang ─────────────────────────────────────────────
+    logic bb_tck, bb_tms, bb_tdi, bb_trstn, bb_quit;
+    logic jtag_use_openocd;
+    
+    initial begin
+        string jtag_master;
+        jtag_use_openocd = 1'b0;
+        if ($value$plusargs("JTAG_MASTER=%s", jtag_master)) begin
+            if (jtag_master == "openocd") begin
+                jtag_use_openocd = 1'b1;
+            end
+        end
+    end
+
+    jtag_bitbang #(
+        .PORT(9824)
+    ) i_jtag_bitbang (
+        .clk_i(clk),
+        .rst_ni(rst_n),
+        .enable_i(jtag_use_openocd),
+        .tck_o(bb_tck),
+        .tms_o(bb_tms),
+        .tdi_o(bb_tdi),
+        .trstn_o(bb_trstn),
+        .tdo_i(jtag_vif.tdo),
+        .quit_o(bb_quit)
+    );
+
+    // ── JTAG Mux ───────────────────────────────────────────────────────────
+    logic muxed_tck, muxed_tms, muxed_tdi, muxed_trstn;
+    assign muxed_tck   = jtag_use_openocd ? bb_tck   : jtag_vif.tck;
+    assign muxed_tms   = jtag_use_openocd ? bb_tms   : jtag_vif.tms;
+    assign muxed_tdi   = jtag_use_openocd ? bb_tdi   : jtag_vif.tdi;
+    assign muxed_trstn = jtag_use_openocd ? bb_trstn : jtag_vif.trst_n;
+
+    // ── Boot Control ───────────────────────────────────────────────────────
+    logic enable_boot;
+    initial begin
+        // User request: "disable that signal to avoid boot so that only the external path can be used."
+        enable_boot = 1'b0;
+        if ($test$plusargs("enable_boot")) begin
+            enable_boot = 1'b1;
+        end
+    end
+
+    // ── DUT: Full CVA6 SoC (ariane_testharness) ────────────────────────────
+    ariane_testharness #(
+        .InclSimDTM (1'b0)
+    ) dut (
+        .clk_i           (clk),
+        .rtc_i           (rtc),
+        .rst_ni          (rst_n),
+        .exit_o          (),
+`ifdef RISCV_VIP_MODE
+        .enable_boot_i   (enable_boot),
+        .jtag_TCK_i      (muxed_tck),
+        .jtag_TMS_i      (muxed_tms),
+        .jtag_TDI_i      (muxed_tdi),
+        .jtag_TRSTn_i    (muxed_trstn),
+        .jtag_TDO_data_o (jtag_vif.tdo)
+`endif
+    );
+
+    // ── Push JTAG virtual interface into UVM config DB ─────────────────────
+    initial begin
+        uvm_config_db #(virtual jtag_if)::set(
+            null, "uvm_test_top.*", "jtag_vif", jtag_vif);
+    end
+
+    // ── Monitor bb_quit and signal via config_db ──────────────────────────
+    initial begin
+        if (jtag_use_openocd) begin
+            @(posedge bb_quit);
+            uvm_config_db #(int)::set(null, "*", "bb_quit", 1);
+        end
+    end
+
+    // ── UVM start ──────────────────────────────────────────────────────────
+    initial run_test("debug_test");
+
+endmodule

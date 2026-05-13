@@ -85,7 +85,7 @@ module dm_mem #(
   logic [7:0][63:0]   abstract_cmd;
   logic [NrHarts-1:0] halted_d, halted_q;
   logic [NrHarts-1:0] resuming_d, resuming_q;
-  logic               resume, go, going;
+  logic               going;
 
   logic exception;
   logic unsupported_command;
@@ -137,8 +137,6 @@ module dm_mem #(
     cmderror_valid_o = 1'b0;
     cmderror_o       = dm::CmdErrNone;
     state_d          = state_q;
-    go               = 1'b0;
-    resume           = 1'b0;
     cmdbusy_o        = 1'b1;
 
     unique case (state_q)
@@ -163,7 +161,6 @@ module dm_mem #(
       Go: begin
         // we are already busy here since we scheduled the execution of a program
         cmdbusy_o = 1'b1;
-        go        = 1'b1;
         // the thread is now executing the command, track its state
         if (going) begin
             state_d = CmdExecuting;
@@ -172,7 +169,6 @@ module dm_mem #(
 
       Resume: begin
         cmdbusy_o = 1'b1;
-        resume = 1'b1;
         if (resuming_q_aligned[hartsel]) begin
           state_d = Idle;
         end
@@ -180,7 +176,6 @@ module dm_mem #(
 
       CmdExecuting: begin
         cmdbusy_o = 1'b1;
-        go        = 1'b0;
         // wait until the hart has halted again
         if (halted_aligned[hartsel]) begin
           state_d = Idle;
@@ -278,7 +273,7 @@ module dm_mem #(
             end
 
             // there is a command active so jump there
-            if (cmdbusy_o) begin
+            if (state_q != Idle) begin
               // transfer not set is shortcut to the program buffer if postexec is set
               // keep this statement narrow to not catch invalid commands
               if (cmd_i.cmdtype == dm::AccessRegister &&
@@ -316,7 +311,8 @@ module dm_mem #(
             // release the corresponding hart
             if (({addr_i[DbgAddressBits-1:3], 3'b0} - FlagsBaseAddr[DbgAddressBits-1:0]) ==
               (DbgAddressBits'(hartsel) & {{(DbgAddressBits-3){1'b1}}, 3'b0})) begin
-              rdata[DbgAddressBits'(hartsel) & DbgAddressBits'(3'b111)] = {6'b0, resume, go};
+              rdata[DbgAddressBits'(hartsel) & DbgAddressBits'(3'b111)] =
+                  {6'b0, (state_q == Resume), (state_q == Go)};
             end
             rdata_d = rdata;
           end

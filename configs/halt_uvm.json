@@ -8,6 +8,6 @@
     },
     "uvm": {
         "socket_path": "/tmp/uvm_bridge.sock",
-        "timeout":     10.0
+        "timeout":     300.0
     }
 }
