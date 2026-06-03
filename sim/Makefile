@@ -68,6 +68,13 @@ CFG_FILE = $(CFG_DIR)/halt_uvm.json
 # Default command-line to run the Python sequencer
 PYTHON_SEQ ?= $(RUNNER) --config $(CFG_FILE)
 
+# ── OpenOCD defaults ─────────────────────────────────────────────────────────
+# Override on command-line:  make questa_openocd OPENOCD_SCENARIO=halt
+OPENOCD_SCENARIO ?= read_dmstatus
+OPENOCD_CFG      ?= $(CFG_DIR)/openocd_bitbang.cfg
+OPENOCD_SOC_CFG  ?= $(CFG_DIR)/openocd_bitbang_soc.cfg
+OPENOCD_BIN      ?= /home/jk/Documents/riscv/bin/openocd
+
 # ── Simulation output directory ──────────────────────────────────────────────
 # Simulation outputs are logged to numbered files in the output directory
 SIM_OUTPUT_DIR = ./sim_outputs
@@ -148,32 +155,43 @@ questa_read_dmstatus: questa_compile
 
 questa_openocd_cleanup:
 	@echo "🔄 Cleaning up any existing Questa/OpenOCD processes..."
-	@kill -9 -f "vsim" 2>/dev/null || true
-	@kill -9 -f "openocd" 2>/dev/null || true
+	@-pkill -f vsim 2>/dev/null || true
+	@-pkill -f openocd 2>/dev/null || true
 	@sleep 1
-# Target to run OpenOCD alongside the simulator using an orchestration script
+
+# ── Standalone OpenOCD target (tb_top: dm_top + dmi_jtag + dummy core) ───────
+# Usage:
+#   make questa_openocd                                        # read_dmstatus (default)
+#   make questa_openocd OPENOCD_SCENARIO=halt                  # halt + inspect
+#   make questa_openocd_halt                                   # convenience shortcut
 questa_openocd: questa_compile
 	@rm -f sim.log
+	@mkdir -p $(SIM_OUTPUT_DIR)
+	@echo "🚀 Starting vsim (standalone dm_top) with JTAG bitbang server..."
 	$(VSIM_BATCH) -do "run -all; quit -f" \
 	     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top \
 	     +UVM_TESTNAME=debug_test \
-	     "+PYTHON_SEQ=$(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
+	     "+PYTHON_SEQ=unused" \
 	     +JTAG_MASTER=openocd \
 	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
-
-# Wait for bitbang server to be ready
-	@echo "⏳ Waiting for JTAG bitbang server to start..."
-	@for i in $$(seq 1 40); do \
+	@echo "⏳ Waiting for JTAG bitbang server on port 9824..."
+	@for i in $$(seq 1 60); do \
 		if grep -q "Listening on port 9824" sim.log 2>/dev/null; then \
-			echo "✅ Bitbang server ready on port 9824"; \
+			echo "✅ Bitbang server ready"; \
 			break; \
 		fi; \
+		if [ $$i -eq 60 ]; then echo "❌ Timeout waiting for bitbang server"; exit 1; fi; \
 		sleep 1; \
 	done
+	@echo "🚀 Starting OpenOCD + Python runner (scenario=$(OPENOCD_SCENARIO))..."
+	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --log-level DEBUG
 
-# run.py launches OpenOCD itself, waits for "Examination succeed", then connects
-	@echo "🚀 Starting Python runner (manages OpenOCD lifecycle)..."
-	python3 $(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG
+# Convenience shortcuts for standalone OpenOCD
+questa_openocd_halt: OPENOCD_SCENARIO = halt
+questa_openocd_halt: questa_openocd
+
+questa_openocd_read_dmstatus: OPENOCD_SCENARIO = read_dmstatus
+questa_openocd_read_dmstatus: questa_openocd
 
 
 # ── Questa SoC Integration targets ────────────────────────────────────────────
@@ -317,26 +335,38 @@ questa_soc_interactive: questa_soc_compile
 	     $(ELF_PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM
 
+# ── SoC OpenOCD target (tb_top_soc: full CVA6 SoC with real CPU) ─────────────
+# Usage:
+#   make questa_soc_openocd                                                  # read_dmstatus (no ELF)
+#   make questa_soc_openocd OPENOCD_SCENARIO=halt ELF=../sw/infinite_loop.elf # halt running program
+#   make questa_soc_openocd_halt                                             # convenience shortcut
 questa_soc_openocd: questa_soc_compile
 	@rm -f sim.log
-	@echo "🚀 Starting vsim SoC..."
+	@mkdir -p $(SIM_OUTPUT_DIR)
+	@echo "🚀 Starting vsim (full CVA6 SoC) with JTAG bitbang server..."
 	$(VSIM_BATCH) $(VSIM_SOC_FLAGS) -do $(VSIM_SOC_DO) \
 	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
-	     "+PYTHON_SEQ=$(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
+	     "+PYTHON_SEQ=unused" \
 	     +JTAG_MASTER=openocd \
 	     $(ELF_PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
-	@echo "⏳ Waiting for JTAG bitbang server to start..."
-	@for i in $$(seq 1 40); do \
+	@echo "⏳ Waiting for JTAG bitbang server on port 9824..."
+	@for i in $$(seq 1 60); do \
 		if grep -q "Listening on port 9824" sim.log 2>/dev/null; then \
-			echo "✅ Bitbang server ready on port 9824"; \
+			echo "✅ Bitbang server ready"; \
 			break; \
 		fi; \
+		if [ $$i -eq 60 ]; then echo "❌ Timeout waiting for bitbang server"; exit 1; fi; \
 		sleep 1; \
 	done
-	@echo "🚀 Starting Python runner (manages OpenOCD lifecycle)..."
-	python3 $(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG
+	@echo "🚀 Starting OpenOCD + Python runner (scenario=$(OPENOCD_SCENARIO))..."
+	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --log-level DEBUG
+
+# Convenience: halt the infinite loop test on CVA6 SoC via OpenOCD
+questa_soc_openocd_halt: OPENOCD_SCENARIO = halt
+questa_soc_openocd_halt: ELF = ../sw/infinite_loop.elf
+questa_soc_openocd_halt: questa_soc_openocd
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -410,7 +440,9 @@ clean:
 .PHONY: vcs_compile vcs_batch vcs_interactive \
         xrun_batch xrun_interactive \
         questa_compile questa_batch questa_interactive questa_mem_scan \
-        questa_soc_compile questa_soc_batch questa_soc_interactive questa_soc_openocd \
+        questa_openocd questa_openocd_halt questa_openocd_read_dmstatus questa_openocd_cleanup \
+        questa_soc_compile questa_soc_batch questa_soc_interactive \
+        questa_soc_openocd questa_soc_openocd_halt \
         questa_soc_test questa_soc_halt_test \
         openocd_batch openocd_interactive \
         python_test clean
