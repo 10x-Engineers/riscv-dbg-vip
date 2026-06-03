@@ -15,6 +15,9 @@
 # It also handles the compilation of the C-DPI bridge used for Python integration.
 # ──────────────────────────────────────────────────────────────────────────────
 
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c
+
 # Path definitions for different project components
 TB_DIR    = ../tb
 TB_TEST_DIR = $(TB_DIR)/tests
@@ -52,6 +55,9 @@ SRC_RTL = \
 # C sources for the DPI bridges (UVM bridge and Remote Bitbang server)
 SRC_C   = $(C_DIR)/uvm_bridge.c $(C_DIR)/remote_bitbang.c
 
+# SoC-specific C sources (adds standalone ELF loader for preloading into SRAM)
+SRC_C_SOC = $(SRC_C) $(C_DIR)/elfloader.c
+
 # +incdir so that jtag_pkg's `include "types.sv" etc. resolve correctly
 INCDIRS = +incdir+$(VIP_DIR) +incdir+$(RV_DBG_ENV_DIR) +incdir+$(SV_SEQ_DIR) +incdir+$(TB_TEST_DIR) +incdir+$(TB_DIR)
 
@@ -80,6 +86,14 @@ uvm_bridge.so: $(SRC_C)
 	    -I/usr/include/x86_64-linux-gnu \
 	    -I/home/jk/mentor/questasim/include \
 	    $(SRC_C) -o uvm_bridge.so -lpthread
+
+# SoC variant — includes the standalone ELF loader for SRAM preloading
+uvm_bridge_soc.so: $(SRC_C_SOC)
+	gcc -shared -fPIC -std=c11 \
+	    -I"$(C_DIR)" \
+	    -I/usr/include/x86_64-linux-gnu \
+	    -I/home/jk/mentor/questasim/include \
+	    $(SRC_C_SOC) -o uvm_bridge_soc.so -lpthread
 
 # Create work library and compile all SV RTL/TB files
 questa_compile: uvm_bridge.so
@@ -163,7 +177,22 @@ questa_openocd: questa_compile
 
 
 # ── Questa SoC Integration targets ────────────────────────────────────────────
-questa_soc_compile: uvm_bridge.so
+
+# Common vsim flags for SoC targets.  -novopt is required because vopt
+# crashes on this design (Signal 11).  Suppress Questa's deprecation warning
+# for -novopt, but leave iteration-limit errors visible so real combinational
+# loops fail loudly.
+VSIM_SOC_FLAGS = -novopt -suppress 12110
+VSIM_SOC_DO    = "run -all; quit -f"
+
+# ── ELF preloading plusargs (auto-derived from ELF variable) ──────────────────
+# When ELF is set, also enables boot so the bootrom jumps to DRAM.
+# Usage:  make questa_soc_test ELF=../sw/infinite_loop.elf
+#         make questa_soc_test                              (no ELF, bootrom spin)
+ELF ?=
+ELF_PLUSARGS = $(if $(ELF),+enable_boot "+elf_file=$(abspath $(ELF))",)
+
+questa_soc_compile: uvm_bridge_soc.so
 	vlib work
 	@echo "Creating absolute flist for CVA6 core using native flist_flattener..."
 	@export CVA6_REPO_DIR=../CVA6-fork; \
@@ -243,33 +272,60 @@ questa_soc_compile: uvm_bridge.so
 	    $(TB_DIR)/tb_top_soc.sv
 	@rm -f flist_soc.tmp
 
+# ── Generic SoC test target ──────────────────────────────────────────────────
+# This is the main entry point for running any RISC-V test on the CVA6 SoC.
+#
+# Usage:
+#   make questa_soc_test ELF=../sw/infinite_loop.elf                         # halt test
+#   make questa_soc_test ELF=../sw/infinite_loop.elf CFG_FILE=../configs/read_dmstatus_uvm.json
+#   make questa_soc_test                                                      # no ELF, bootrom spin
+#   make questa_soc_halt_test                                                 # convenience shortcut
+questa_soc_test: questa_soc_compile
+	@mkdir -p $(SIM_OUTPUT_DIR); \
+	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_soc_test_*.log 2>/dev/null | wc -l); \
+	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_soc_test_$$TEST_NUM.log; \
+	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
+	 $(VSIM_BATCH) $(VSIM_SOC_FLAGS) -do $(VSIM_SOC_DO) \
+	      -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_soc \
+	      +UVM_TESTNAME=debug_test \
+	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	      $(ELF_PLUSARGS) \
+	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
+
+# Convenience shortcut: infinite_loop + halt sequence
+questa_soc_halt_test: ELF = ../sw/infinite_loop.elf
+questa_soc_halt_test: questa_soc_test
+
 # Remove the vopt flag because the simulation is too slow. find a workaround
 questa_soc_batch: questa_soc_compile
 	@mkdir -p $(SIM_OUTPUT_DIR); \
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_soc_batch_*.log 2>/dev/null | wc -l); \
 	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_soc_batch_$$TEST_NUM.log; \
 	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
-	 $(VSIM_BATCH) -novopt -suppress 12110 -do "run -all; quit -f" \
-	      -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
+	 $(VSIM_BATCH) $(VSIM_SOC_FLAGS) -do $(VSIM_SOC_DO) \
+	      -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_soc \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	      $(ELF_PLUSARGS) \
 	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
 
 questa_soc_interactive: questa_soc_compile
-	$(VSIM) -novopt -suppress 12110 -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
+	$(VSIM) $(VSIM_SOC_FLAGS) -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(RUNNER) --config $(CFG_FILE) --mode interactive" \
 	     +PYTHON_MODE=interactive \
+	     $(ELF_PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM
 
 questa_soc_openocd: questa_soc_compile
 	@rm -f sim.log
 	@echo "🚀 Starting vsim SoC..."
-	$(VSIM_BATCH) -novopt -suppress 12110 -do "run -all; quit -f" \
-	     -dpioutoftheblue 1 -sv_lib uvm_bridge work.tb_top_soc \
+	$(VSIM_BATCH) $(VSIM_SOC_FLAGS) -do $(VSIM_SOC_DO) \
+	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_soc \
 	     +UVM_TESTNAME=debug_test \
 	     "+PYTHON_SEQ=$(RUNNER) --transport openocd --scenario read_dmstatus --mode batch --log-level DEBUG" \
 	     +JTAG_MASTER=openocd \
+	     $(ELF_PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
 	@echo "⏳ Waiting for JTAG bitbang server to start..."
 	@for i in $$(seq 1 40); do \
@@ -348,12 +404,13 @@ python_test:
 
 # Remove all generated files (compiled libs, logs, wave files)
 clean:
-	rm -rf simv simv.daidir csrc xcelium.d work uvm_bridge.so \
+	rm -rf simv simv.daidir csrc xcelium.d work uvm_bridge.so uvm_bridge_soc.so \
 	       *.log *.vcd *.vpd ucli.key novas* verdiLog* transcript
 
 .PHONY: vcs_compile vcs_batch vcs_interactive \
         xrun_batch xrun_interactive \
         questa_compile questa_batch questa_interactive questa_mem_scan \
         questa_soc_compile questa_soc_batch questa_soc_interactive questa_soc_openocd \
+        questa_soc_test questa_soc_halt_test \
         openocd_batch openocd_interactive \
         python_test clean

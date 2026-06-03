@@ -5,7 +5,26 @@
 //
 // Testbench top connecting:
 //   jtag_agent (JTAG VIP) / OpenOCD Bitbang  →  Full CVA6 SoC (ariane_testharness)
+//
+// Supports preloading any RISC-V ELF into the SoC SRAM via +elf_file=<path>.
+// When +elf_file is provided, also pass +enable_boot so the bootrom jumps
+// to DRAM instead of spinning.
 // ──────────────────────────────────────────────────────────────────────────────
+
+// ── Hierarchical access to SoC SRAM for ELF preloading ──────────────────────
+// Write directly to the behavioural sram[] array (not the init_val[] shadow).
+// init_val[] is only copied into sram[] during reset, so post-reset writes
+// must target sram[] to actually appear in memory.
+`define MAIN_MEM(P) dut.i_sram.gen_cut[0].i_tc_sram_wrapper.i_tc_sram.sram[(``P``)]
+
+// ── DPI-C imports for ELF loading (same functions used by ariane_tb.sv) ─────
+`ifndef READ_ELF_T
+`define READ_ELF_T
+import "DPI-C" function void read_elf(input string filename);
+import "DPI-C" function byte get_section(output longint address, output longint len);
+import "DPI-C" context function void read_section_sv(input longint address, inout byte buffer[]);
+`endif
+
 module tb_top_soc;
 
     import uvm_pkg::*;
@@ -107,6 +126,55 @@ module tb_top_soc;
         if (jtag_use_openocd) begin
             @(posedge bb_quit);
             uvm_config_db #(int)::set(null, "*", "bb_quit", 1);
+        end
+    end
+
+    // ── ELF preloading ─────────────────────────────────────────────────────
+    // Mirrors ariane_tb.sv preloading logic.
+    // Usage: +elf_file=path/to/test.elf (also needs +enable_boot)
+    initial begin
+        automatic string binary = "";
+        automatic logic [7:0][7:0] mem_row;
+        longint address, load_address, last_load_address, len;
+        byte buffer[];
+
+        void'($value$plusargs("elf_file=%s", binary));
+
+        if (binary != "") begin
+            `uvm_info("TB_SOC", $sformatf("Preloading ELF: %s", binary), UVM_LOW)
+
+            read_elf(binary);
+            // Wait for clock to start before preloading (avoids race with SIM_INIT)
+            wait(clk);
+
+            last_load_address = 'hFFFFFFFF;
+            // Iterate over all ELF sections
+            while (get_section(address, len)) begin
+                automatic int num_words = (len+7)/8;
+                `uvm_info("TB_SOC", $sformatf("Loading section: addr=0x%016x  len=0x%x (%0d bytes)",
+                    address, len, len), UVM_LOW)
+                buffer = new [num_words*8];
+                read_section_sv(address, buffer);
+
+                // Preload into SRAM — 64-bit words
+                for (int i = 0; i < num_words; i++) begin
+                    mem_row = '0;
+                    for (int j = 0; j < 8; j++) begin
+                        mem_row[j] = buffer[i*8 + j];
+                    end
+                    load_address = (address[23:0] >> 3) + i;
+                    if (load_address != last_load_address) begin
+                        if (address[31:0] < 'h84000000) begin
+                            `MAIN_MEM(load_address) = mem_row;
+                        end
+                        last_load_address = load_address;
+                    end
+                end
+            end
+            `uvm_info("TB_SOC", "ELF preloading complete", UVM_LOW)
+        end else begin
+            `uvm_info("TB_SOC",
+                "No +elf_file specified — core will execute bootrom only", UVM_LOW)
         end
     end
 

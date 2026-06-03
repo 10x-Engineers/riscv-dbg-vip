@@ -31,6 +31,10 @@ sim/transcript
 sim/vsim_stacktrace.vstf
 sim/vopt_stacktrace.vstf
 sim/vish_stacktrace.vstf
+sim/modelsim.ini
+sim/fpnew_lib/
+sim/flist_*.tmp
+sim/opt_config.txt
 sim/flist_soc.tmp
 sim/flist_soc_test.tmp
 sim/*.vstf
