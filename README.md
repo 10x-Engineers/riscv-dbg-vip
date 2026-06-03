@@ -60,9 +60,11 @@ The framework decouples high-level test intent (written in Python) from the phys
 ```
 pydebug/
 ├── configs/                            # JSON test configurations & OpenOCD config
-│   ├── halt_openocd.json               #   Halt scenario -> OpenOCD hardware config
+│   ├── halt_openocd.json               #   Halt scenario -> OpenOCD transport config
 │   ├── halt_uvm.json                   #   Halt scenario -> UVM simulation config
-│   ├── openocd_bitbang.cfg             #   OpenOCD target configuration for remote JTAG bitbang
+│   ├── openocd_bitbang.cfg             #   OpenOCD config for standalone tb_top (IDCODE 0xDEAD0001)
+│   ├── openocd_bitbang_soc.cfg         #   OpenOCD config for CVA6 SoC tb_top_soc (IDCODE 0x00000001)
+│   ├── read_dmstatus_openocd.json      #   Read dmstatus scenario -> OpenOCD transport config
 │   └── read_dmstatus_uvm.json          #   Read dmstatus scenario -> UVM simulation config
 ├── dv/                                 # UVM verification components
 │   ├── agents/                         #   UVM Agents
@@ -127,7 +129,7 @@ pydebug/
 *   **`run.py`**: The master entry point. It parses CLI arguments and loads a JSON config. If using UVM, it waits for the Unix socket to appear. If using OpenOCD, it launches the OpenOCD subprocess, monitors stdout for JTAG examination success (`"Examination succeed"`), connects to the OpenOCD TCL port, instantiates the selected Python test sequence, and runs it.
 *   **`rv_dbg_python_api/transport.py`**: Defines `DebugTransport`, an abstract base class (interface) enforcing `connect()`, `disconnect()`, `read(addr)`, `write(addr, data)`, and `reset()`.
 *   **`rv_dbg_python_api/uvm_transport.py`**: A subclass of `DebugTransport`. Implements IPC via JSON messages (`{"op": "read", "addr": A}`) sent over a Unix socket (`/tmp/uvm_bridge.sock`) to communicate with the C DPI bridge.
-*   **`rv_dbg_python_api/openocd_transport.py`**: A subclass of `DebugTransport`. Communicates with OpenOCD via a TCP connection (port `6666`). It translates high-level register reads/writes into JTAG instruction/data scan TCL strings (`irscan` and `drscan`) which are processed by OpenOCD.
+*   **`rv_dbg_python_api/openocd_transport.py`**: A subclass of `DebugTransport`. Communicates with OpenOCD via a TCP connection (port `6666`). It translates high-level DMI register reads/writes into OpenOCD's native `riscv dmi_read` and `riscv dmi_write` TCL commands, which handle all JTAG framing internally.
 *   **`rv_dbg_python_api/riscv_dm.py`**: The RISC-V Debug Module translation layer. It defines register addresses (e.g. `DMCONTROL`, `DMSTATUS`, `COMMAND`) and wraps them in high-level APIs like `activate()`, `halt()`, `resume()`, `read_gpr()`, and `read_mem32()`. It implements error-checking logic (polling abstract command status `abstractcs` or system bus status `sbcs`).
 *   **`rv_dbg_python_api/session.py`**: Manages test execution. In `batch` mode, steps are run sequentially, and errors abort execution. In `interactive` mode, the user is prompted at every step to execute, skip, or quit.
 *   **`py_seq_lib/halt_sequence.py`**: Implements a standard debug compliance scenario. It activates the DM, halts the core, reads the program counter (`DPC`), registers `ra` and `sp`, reads memory at a specified address, and resumes.
@@ -219,19 +221,19 @@ Use this path to test the exact same Python scenarios against real hardware, FPG
  └──────────────┘
 ```
 
-1.  **Simulator Ready**: If running in simulation, the simulator launches `tb_top.sv` with the `+JTAG_MASTER=openocd` plusarg.
+1.  **Simulator Ready**: If running in simulation, the simulator launches `tb_top.sv` (standalone) or `tb_top_soc.sv` (full SoC) with the `+JTAG_MASTER=openocd` plusarg.
 2.  **Bitbang Server Initialized**: This activates `jtag_bitbang.sv`, which calls the DPI function `rbs_init(9824)`. This starts a TCP server listening on port `9824` for OpenOCD Remote Bitbang commands.
-3.  **Launching OpenOCD**: The master Python script `run.py` launches the OpenOCD daemon in the background using `openocd -f configs/openocd_bitbang.cfg`.
+3.  **Launching OpenOCD**: The master Python script `run.py` launches the OpenOCD daemon in the background using `openocd -f configs/openocd_bitbang.cfg` (standalone) or `openocd -f configs/openocd_bitbang_soc.cfg` (SoC — uses a different IDCODE).
 4.  **Bitbang Link**: OpenOCD connects to the simulator on port `9824`. It sends commands to toggle `TCK`, `TMS`, and `TDI` pins in the simulator and reads the returning `TDO` pin states.
 5.  **JTAG Examination**: OpenOCD conducts JTAG scans to discover the CPU TAP. Once it reads the IDCODE and initializes successfully, it outputs `Examination succeed`.
 6.  **Python Connection**: The master script `run.py` monitors OpenOCD's log. Upon detecting success, it instantiates `OpenOCDTransport` and connects to OpenOCD's TCL command port (`6666`).
 7.  **DMI Requests**: The Python test calls `dm.halt()`.
-8.  **TCL Command Translation**: `openocd_transport.py` translates the register request into JTAG scan commands:
-    *   `irscan riscv.cpu 0x11` (Selects DMI register IR)
-    *   `drscan riscv.cpu 41 0x...` (Shifts address, data, and read/write op)
-    *   `drscan riscv.cpu 41 0x0` (Shifts a NOP to scan out the DMI response)
+8.  **TCL Command Translation**: `openocd_transport.py` translates the register request into OpenOCD's native RISC-V DMI commands:
+    *   `riscv dmi_write 0x10 0x80000001` (Write dmcontrol: haltreq=1, dmactive=1)
+    *   `riscv dmi_read 0x11` (Read dmstatus to poll for allhalted)
+    *   OpenOCD handles all the JTAG IR/DR shifting internally.
 9.  **JTAG execution**: OpenOCD receives the TCL commands, translates them to bitbang packets, drives JTAG pins in the simulator (or on physical pins if connected to an FPGA via a JTAG adapter), and reads back the shifted values.
-10. **Result Returned**: OpenOCD returns the scanned data as a hex string to Python. Python parses the result and unblocks to run the next test step.
+10. **Result Returned**: OpenOCD returns the register data as a hex string (e.g., `0x00030382`) to Python. Python parses the result and unblocks to run the next test step.
 
 ---
 
@@ -346,34 +348,83 @@ Run interactive step-by-step debug:
 make questa_interactive
 ```
 
-### 2. OpenOCD JTAG Emulation Mode (Questa)
-Compiles the design, starts the remote bitbang JTAG server, launches OpenOCD, and executes the Python test:
+### 2. OpenOCD Mode — Standalone Debug Module (Questa + OpenOCD)
+
+Tests the Debug Module (`dm_top` + `dmi_jtag`) in isolation with a dummy core model.
+Three processes are orchestrated: **vsim** (bitbang server on port 9824) → **OpenOCD** (connects to bitbang, opens TCL port 6666) → **Python** (sends DMI commands via TCL).
+
+#### Read dmstatus register:
 ```bash
 make questa_openocd
+```
+
+#### Halt + read registers (PC, ra, sp):
+```bash
+make questa_openocd_halt
+```
+
+#### Custom scenario:
+```bash
+make questa_openocd OPENOCD_SCENARIO=halt
+make questa_openocd OPENOCD_SCENARIO=read_dmstatus
 ```
 
 ### 3. SoC-level UVM Simulation Mode (Questa)
 Compiles CVA6 core within the full APU SoC architecture and runs the halt sequence:
 ```bash
-make questa_soc_batch
+make questa_soc_test ELF=../sw/infinite_loop.elf
 ```
-To run OpenOCD JTAG emulation at the SoC level:
+Run without ELF (CPU spins in bootrom):
+```bash
+make questa_soc_test
+```
+Custom config:
+```bash
+make questa_soc_test ELF=../sw/infinite_loop.elf CFG_FILE=../configs/read_dmstatus_uvm.json
+```
+
+### 4. OpenOCD Mode — Full CVA6 SoC (Questa + OpenOCD)
+
+Tests the complete CVA6 SoC with a real CPU executing the preloaded ELF.
+Uses `openocd_bitbang_soc.cfg` (IDCODE `0x00000001` matching the CVA6 SoC's `dmi_jtag`).
+
+#### Halt the infinite loop test program via OpenOCD:
+```bash
+make questa_soc_openocd_halt
+```
+This is equivalent to:
+```bash
+make questa_soc_openocd OPENOCD_SCENARIO=halt ELF=../sw/infinite_loop.elf
+```
+
+#### Read dmstatus on SoC (no ELF, CPU spins in bootrom):
 ```bash
 make questa_soc_openocd
 ```
 
-### 4. VCS & Xcelium Simulators
+### 5. Real Hardware (OpenOCD only, no simulator)
+Run against physical board / FPGA connected via a JTAG adapter:
+```bash
+make openocd_batch
+make openocd_interactive
+```
+
+### 6. VCS & Xcelium Simulators
 To run UVM batch tests using VCS or Xcelium:
 ```bash
 make vcs_batch
 make xrun_batch
 ```
 
-### 5. Cleanup
+### 7. Cleanup
 To delete work directories, compiled binaries, and temporary log files:
 ```bash
 make clean
 ```
+
+> **Note on IDCODE**: The standalone testbench (`tb_top.sv`) uses IDCODE `0xDEAD0001`, while the CVA6 SoC (`tb_top_soc.sv`) uses the default `0x00000001`. The framework provides two OpenOCD configs to match:
+> - `openocd_bitbang.cfg` → standalone (IDCODE `0xDEAD0001`)
+> - `openocd_bitbang_soc.cfg` → CVA6 SoC (IDCODE `0x00000001`)
 
 ---
 
