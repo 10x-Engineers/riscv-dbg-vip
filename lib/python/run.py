@@ -153,6 +153,10 @@ def main():
         help="Execution mode (overrides config)"
     )
     parser.add_argument(
+        "--openocd-config",
+        help="Path to OpenOCD config file (overrides JSON config)"
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR)"
@@ -186,6 +190,8 @@ def main():
         cfg["transport"] = args.transport
     if args.mode:
         cfg["mode"] = args.mode
+    if args.openocd_config:
+        cfg["openocd"]["config"] = args.openocd_config
 
     log.info("Scenario=%s  Transport=%s  Mode=%s",
              cfg["scenario"], cfg["transport"], cfg["mode"])

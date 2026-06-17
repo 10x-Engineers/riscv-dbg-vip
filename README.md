@@ -63,6 +63,7 @@ pydebug/
 │   ├── halt_openocd.json               #   Halt scenario -> OpenOCD transport config
 │   ├── halt_uvm.json                   #   Halt scenario -> UVM simulation config
 │   ├── openocd_bitbang.cfg             #   OpenOCD config for standalone tb_top (IDCODE 0xDEAD0001)
+│   ├── openocd_bitbang_ibex.cfg        #   OpenOCD config for Ibex MCU tb_top_ibex (IDCODE 0x11001cdf)
 │   ├── openocd_bitbang_soc.cfg         #   OpenOCD config for CVA6 SoC tb_top_soc (IDCODE 0x00000001)
 │   ├── read_dmstatus_openocd.json      #   Read dmstatus scenario -> OpenOCD transport config
 │   └── read_dmstatus_uvm.json          #   Read dmstatus scenario -> UVM simulation config
@@ -402,28 +403,62 @@ make questa_soc_openocd OPENOCD_SCENARIO=halt ELF=../sw/infinite_loop.elf
 make questa_soc_openocd
 ```
 
-### 5. Real Hardware (OpenOCD only, no simulator)
-Run against physical board / FPGA connected via a JTAG adapter:
+### 5. Ibex Demo System (Questa)
+
+Tests the `ibex-demo-system` MCU target with full debug verification and execution tracing (`ibex_tracer`).
+
+#### UVM Mode (DPI Bridge):
+Run the halt test with the preloaded ELF:
 ```bash
-make openocd_batch
-make openocd_interactive
+make questa_ibex_halt_test
 ```
 
-### 6. VCS & Xcelium Simulators
+#### OpenOCD Mode (JTAG Bitbang):
+Halt the infinite loop test program via OpenOCD:
+```bash
+make questa_ibex_openocd_halt
+```
+*Note: Both modes generate an instruction trace log at `sim/sim_outputs/trace_core_*`.*
+
+### 6. Real Hardware (Arty A7-100T & FPGA Testing)
+You can compile the Ibex Demo System and flash it to an Arty A7-100T to run Python debug sequences against physical silicon.
+
+**1. Build the FPGA Bitstream (Synthesis & Implementation):**
+```bash
+cd ibex-demo-system
+fusesoc --cores-root=. run --target=synth --setup --build lowrisc:ibex:demo_system
+```
+
+**2. Program the FPGA:**
+Ensure the Arty board is connected via USB.
+```bash
+fusesoc --cores-root=. run --target=synth --run lowrisc:ibex:demo_system
+```
+
+**3. Run Python Debug Sequences via USB-JTAG:**
+Once the bitstream is running, use the dedicated hardware targets to attach OpenOCD and run tests.
+```bash
+cd sim
+make hw_arty_openocd_read_dmstatus  # Passive test (doesn't halt)
+make hw_arty_openocd_halt           # Active test (halts the core)
+```
+
+### 7. VCS & Xcelium Simulators
 To run UVM batch tests using VCS or Xcelium:
 ```bash
 make vcs_batch
 make xrun_batch
 ```
 
-### 7. Cleanup
+### 8. Cleanup
 To delete work directories, compiled binaries, and temporary log files:
 ```bash
 make clean
 ```
 
-> **Note on IDCODE**: The standalone testbench (`tb_top.sv`) uses IDCODE `0xDEAD0001`, while the CVA6 SoC (`tb_top_soc.sv`) uses the default `0x00000001`. The framework provides two OpenOCD configs to match:
+> **Note on IDCODE**: The standalone testbench (`tb_top.sv`) uses IDCODE `0xDEAD0001`, the Ibex system (`tb_top_ibex.sv`) uses `0x11001cdf`, and the CVA6 SoC (`tb_top_soc.sv`) uses the default `0x00000001`. The framework provides three OpenOCD configs to match:
 > - `openocd_bitbang.cfg` → standalone (IDCODE `0xDEAD0001`)
+> - `openocd_bitbang_ibex.cfg` → Ibex Demo System (IDCODE `0x11001cdf`)
 > - `openocd_bitbang_soc.cfg` → CVA6 SoC (IDCODE `0x00000001`)
 
 ---
