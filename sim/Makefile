@@ -512,6 +512,18 @@ openocd_batch:
 openocd_interactive:
 	python3 $(RUNNER) --config $(CFG_DIR)/halt_openocd.json --mode interactive
 
+# Hardware Targets (Arty A7-100T USB-JTAG)
+hw_arty_openocd: OPENOCD_SCENARIO ?= read_dmstatus
+hw_arty_openocd:
+	@echo "🚀 Starting OpenOCD + Python runner on Arty A7-100T (scenario=$(OPENOCD_SCENARIO))..."
+	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config ../configs/openocd_arty_a7_100t.cfg --log-level DEBUG
+
+hw_arty_openocd_read_dmstatus: OPENOCD_SCENARIO = read_dmstatus
+hw_arty_openocd_read_dmstatus: hw_arty_openocd
+
+hw_arty_openocd_halt: OPENOCD_SCENARIO = halt
+hw_arty_openocd_halt: hw_arty_openocd
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Standalone Python test (mock transport)
 # ══════════════════════════════════════════════════════════════════════════════
