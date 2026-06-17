@@ -184,7 +184,7 @@ questa_openocd: questa_compile
 		sleep 1; \
 	done
 	@echo "🚀 Starting OpenOCD + Python runner (scenario=$(OPENOCD_SCENARIO))..."
-	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --log-level DEBUG
+	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config ../configs/openocd_bitbang.cfg --log-level DEBUG
 
 # Convenience shortcuts for standalone OpenOCD
 questa_openocd_halt: OPENOCD_SCENARIO = halt
@@ -361,12 +361,98 @@ questa_soc_openocd: questa_soc_compile
 		sleep 1; \
 	done
 	@echo "🚀 Starting OpenOCD + Python runner (scenario=$(OPENOCD_SCENARIO))..."
-	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --log-level DEBUG
+	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config ../configs/openocd_bitbang_soc.cfg --log-level DEBUG
 
 # Convenience: halt the infinite loop test on CVA6 SoC via OpenOCD
 questa_soc_openocd_halt: OPENOCD_SCENARIO = halt
 questa_soc_openocd_halt: ELF = ../sw/infinite_loop.elf
 questa_soc_openocd_halt: questa_soc_openocd
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Questa — Ibex Demo System Integration
+# ══════════════════════════════════════════════════════════════════════════════
+# Uses the ibex-demo-system submodule as a lightweight MCU target for debug
+# compliance testing.  Full vopt is enabled (design is small enough).
+
+IBEX_DIR = ../ibex-demo-system
+
+# Ibex-specific include directories
+IBEX_INCDIRS = +incdir+$(IBEX_DIR)/vendor/lowrisc_ip/ip/prim/rtl \
+               +incdir+$(IBEX_DIR)/vendor/lowrisc_ibex/vendor/lowrisc_ip/dv/sv/dv_utils \
+               +incdir+$(IBEX_DIR)/vendor/lowrisc_ibex/dv/uvm/core_ibex/common/prim \
+               +incdir+./prim_shims
+
+questa_ibex_compile: uvm_bridge_soc.so
+	vlib work
+	vlog $(QUESTA_FLAGS) $(IBEX_INCDIRS) \
+	    +define+PRIM_DEFAULT_IMPL=prim_pkg::ImplGeneric \
+	    +define+INC_ASSERT \
+	    +define+RVFI \
+	    -f flist_ibex.f \
+	    $(VIP_DIR)/dm_defines_pkg.sv \
+	    $(VIP_DIR)/jtag_if.sv \
+	    $(VIP_DIR)/jtag_pkg.sv \
+	    $(ENV_DIR)/debug_pkg.sv \
+	    $(VIP_DIR)/jtag_bitbang.sv \
+	    $(TB_DIR)/tb_top_ibex.sv
+
+# ── Generic Ibex test target ────────────────────────────────────────────────
+# Usage:
+#   make questa_ibex_test ELF=../sw/infinite_loop.elf
+#   make questa_ibex_test ELF=../sw/infinite_loop.elf CFG_FILE=../configs/read_dmstatus_uvm.json
+#   make questa_ibex_test                                              # no ELF
+#   make questa_ibex_halt_test                                         # convenience shortcut
+questa_ibex_test: questa_ibex_compile
+	@mkdir -p $(SIM_OUTPUT_DIR); \
+	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/questa_ibex_test_*.log 2>/dev/null | wc -l); \
+	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/questa_ibex_test_$$TEST_NUM.log; \
+	 echo "📝 Logging output to: $$OUTPUT_FILE"; \
+	 $(VSIM_BATCH) -do "run -all; quit -f" \
+	      -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_ibex \
+	      +ibex_tracer_enable=1 +ibex_tracer_file_base=$(SIM_OUTPUT_DIR)/trace_core \
+	      +UVM_TESTNAME=debug_test \
+	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	      $(ELF_PLUSARGS) \
+	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
+
+# Convenience: infinite_loop + halt sequence on Ibex
+questa_ibex_halt_test: ELF = ../sw/infinite_loop.elf
+questa_ibex_halt_test: questa_ibex_test
+
+# ── Ibex OpenOCD target ─────────────────────────────────────────────────────
+# Usage:
+#   make questa_ibex_openocd                                           # read_dmstatus (default)
+#   make questa_ibex_openocd OPENOCD_SCENARIO=halt ELF=../sw/infinite_loop.elf
+#   make questa_ibex_openocd_halt                                      # convenience shortcut
+questa_ibex_openocd: questa_ibex_compile
+	@rm -f sim.log
+	@mkdir -p $(SIM_OUTPUT_DIR)
+	@echo "🚀 Starting vsim (Ibex Demo System) with JTAG bitbang server..."
+	$(VSIM_BATCH) -do "run -all; quit -f" \
+	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_ibex \
+	     +ibex_tracer_enable=1 +ibex_tracer_file_base=$(SIM_OUTPUT_DIR)/trace_core_openocd \
+	     +UVM_TESTNAME=debug_test \
+	     "+PYTHON_SEQ=unused" \
+	     +JTAG_MASTER=openocd \
+	     $(ELF_PLUSARGS) \
+	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
+	@echo "⏳ Waiting for JTAG bitbang server on port 9824..."
+	@for i in $$(seq 1 60); do \
+		if grep -q "Listening on port 9824" sim.log 2>/dev/null; then \
+			echo "✅ Bitbang server ready"; \
+			break; \
+		fi; \
+		if [ $$i -eq 60 ]; then echo "❌ Timeout waiting for bitbang server"; exit 1; fi; \
+		sleep 1; \
+	done
+	@echo "🚀 Starting OpenOCD + Python runner (scenario=$(OPENOCD_SCENARIO))..."
+	python3 $(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config ../configs/openocd_bitbang_ibex.cfg --log-level DEBUG
+
+# Convenience: halt the infinite loop test on Ibex via OpenOCD
+questa_ibex_openocd_halt: OPENOCD_SCENARIO = halt
+questa_ibex_openocd_halt: ELF = ../sw/infinite_loop.elf
+questa_ibex_openocd_halt: questa_ibex_openocd
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -444,5 +530,7 @@ clean:
         questa_soc_compile questa_soc_batch questa_soc_interactive \
         questa_soc_openocd questa_soc_openocd_halt \
         questa_soc_test questa_soc_halt_test \
+        questa_ibex_compile questa_ibex_test questa_ibex_halt_test \
+        questa_ibex_openocd questa_ibex_openocd_halt \
         openocd_batch openocd_interactive \
         python_test clean
