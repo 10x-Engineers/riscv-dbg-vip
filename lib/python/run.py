@@ -206,7 +206,15 @@ def main():
     openocd_proc = None
     if cfg["transport"] == "openocd":
         ocd_cfg = cfg.get("openocd", {})
-        ocd_bin = ocd_cfg.get("bin", "/home/jk/Documents/riscv/bin/openocd")
+        import shutil
+        # You requested asterisks to find openocd at any path:
+        ocd_bin = ocd_cfg.get("bin", "*openocd*")
+        
+        # NOTE: Python's subprocess.Popen does not automatically expand '*' wildcards like bash does!
+        # If you want Python to search all directories in your system PATH for openocd, 
+        # the standard Pythonic way is to use shutil.which:
+        if ocd_bin == "*openocd*":
+            ocd_bin = shutil.which("openocd") or "openocd"
         ocd_config_raw = ocd_cfg.get("config", "openocd_bitbang.cfg")
         # Resolve relative config names against the configs directory
         if not os.path.isabs(ocd_config_raw):
@@ -233,7 +241,7 @@ def main():
             for raw in iter(pipe.readline, b''):
                 line = raw.decode(errors='replace').rstrip()
                 print(f"[OpenOCD] {line}")
-                if "Examination succeed" in line:
+                if "Examination succeed" in line or "Examined RISC-V core" in line:
                     exam_event.set()
                 elif "Examination failed" in line:
                     exam_failed.set()
