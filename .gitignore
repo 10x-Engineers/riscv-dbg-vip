@@ -1,7 +1,4 @@
-# Simulation outputs - one per test run
-sim/sim_outputs/
-
-# Compiled and generated files
+# Python package build/dev artifacts
 __pycache__/
 *.pyc
 *.pyo
@@ -21,29 +18,32 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
 
-# Simulator generated files
-sim/work/
-sim/*.so
-sim/*.o
-sim/transcript
-sim/vsim_stacktrace.vstf
-sim/vopt_stacktrace.vstf
-sim/vish_stacktrace.vstf
-sim/modelsim.ini
-sim/fpnew_lib/
-sim/flist_*.tmp
-sim/opt_config.txt
-sim/flist_soc.tmp
-sim/flist_soc_test.tmp
-sim/*.vstf
+# Simulation outputs
+cva6_sim/sim_outputs/
+ibex_sim/sim_outputs/
+cva6_sim/work/
+ibex_sim/work/
+*.so
+*.o
+transcript
+vsim.wlf
+vsim_stacktrace.vstf
+vopt_stacktrace.vstf
+vish_stacktrace.vstf
+modelsim.ini
+flist_soc.tmp
+flist_soc_test.tmp
 
-# Log files (anywhere in the project)
+# Compiled test ELFs (rebuilt from source, not shipped)
+cva6_sim/sw/*.o
+cva6_sim/sw/*.elf
+ibex_sim/sw/*.o
+ibex_sim/sw/*.elf
+
+# Log files
 *.log
-
-# Debug library pycache
-debug_lib/__pycache__/
-debug_lib/*.pyc
 
 # IDE and editor files
 .vscode/
@@ -53,6 +53,8 @@ debug_lib/*.pyc
 *~
 .DS_Store
 
-# System files
+# Runtime pidfiles
 *.pid
 openocd.pid
+cva6_sim/uart
+ibex_sim/uart

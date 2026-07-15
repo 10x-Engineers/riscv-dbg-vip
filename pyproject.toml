@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydebug"
+version = "0.1.0"
+description = "RISC-V Debug Compliance Framework — portable across SoCs and platforms"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "JK"},
+]
+dependencies = []  # stdlib only — no external deps
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+pydebug = "pydebug.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pydebug = [
+    "c_bridge/*.c",
+    "c_bridge/*.h",
+    "sv_kit/**/*.sv",
+    "sv_kit/configs/*.json",
+    "sv_kit/configs/*.cfg",
+]
