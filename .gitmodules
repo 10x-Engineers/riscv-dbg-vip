@@ -4,6 +4,3 @@
 [submodule "ibex-demo-system"]
 	path = ibex-demo-system
 	url = https://github.com/10x-Engineers/ibex-demo-system
-[submodule "riscv-dbg"]
-	path = riscv-dbg
-	url = https://github.com/10x-Engineers/riscv-dbg.git
