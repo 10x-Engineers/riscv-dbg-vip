@@ -169,7 +169,7 @@ def cmd_run(args):
     if cfg["transport"] == "openocd":
         ocd_cfg = cfg.get("openocd", {})
         ocd_bin = ocd_cfg.get("bin", "*openocd*")
-        
+
         if ocd_bin == "*openocd*":
             ocd_bin = shutil.which("openocd") or "openocd"
         ocd_config_raw = ocd_cfg.get("config", "openocd_bitbang.cfg")
