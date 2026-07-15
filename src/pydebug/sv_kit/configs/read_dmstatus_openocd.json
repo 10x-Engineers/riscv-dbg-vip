@@ -1,0 +1,12 @@
+{
+    "scenario":  "read_dmstatus",
+    "transport": "openocd",
+    "mode":      "batch",
+    "params": {},
+    "openocd": {
+        "host": "127.0.0.1",
+        "port": 6666,
+        "config": "openocd_bitbang.cfg",
+        "startup_wait": 60.0
+    }
+}

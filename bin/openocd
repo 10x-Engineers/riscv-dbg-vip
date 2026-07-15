@@ -1,3 +1,0 @@
-#!/bin/bash
-BUNDLE=/work/10x-jkhalid/openocd
-LD_LIBRARY_PATH=$BUNDLE/lib exec $BUNDLE/openocd "$@"

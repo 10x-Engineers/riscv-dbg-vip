@@ -1,0 +1,15 @@
+{
+    "scenario":  "halt",
+    "transport": "openocd",
+    "mode":      "batch",
+    "params": {
+        "mem_addr":     "0x80000000",
+        "resume_after": true
+    },
+    "openocd": {
+        "host": "127.0.0.1",
+        "port": 6666,
+        "config": "openocd_bitbang.cfg",
+        "startup_wait": 60.0
+    }
+}
