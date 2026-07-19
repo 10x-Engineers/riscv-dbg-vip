@@ -20,6 +20,17 @@ test = ["pytest>=7.0"]
 [project.scripts]
 pydebug = "pydebug.cli:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Unknown markers are errors: a typo'd tier marker would otherwise silently drop
+# a test out of the smoke regression with no warning.
+addopts = "--strict-markers"
+markers = [
+    "smoke: the one basic, happy-path test for a feature. Runs in the smoke tier.",
+    "feature(id): the regressions.json feature this test belongs to. Required on every test.",
+    "sim: requires a live simulator; excluded from the mock-only tiers.",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

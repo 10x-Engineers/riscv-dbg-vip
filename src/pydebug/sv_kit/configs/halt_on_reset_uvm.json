@@ -1,0 +1,12 @@
+{
+    "scenario":  "halt_on_reset",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {
+        "num_harts": 1
+    },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout":     300.0
+    }
+}
