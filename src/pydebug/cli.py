@@ -63,6 +63,26 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.mem_scan_sequence",
         "builder": "build_mem_scan_sequence",
     },
+    "run_control": {
+        "module": "pydebug.sequences.run_control_sequence",
+        "builder": "build_run_control_sequence",
+    },
+    "reset_ctrl": {
+        "module": "pydebug.sequences.reset_ctrl_sequence",
+        "builder": "build_reset_ctrl_sequence",
+    },
+    "halt_on_reset": {
+        "module": "pydebug.sequences.halt_on_reset_sequence",
+        "builder": "build_halt_on_reset_sequence",
+    },
+    "dm_activation": {
+        "module": "pydebug.sequences.dm_activation_sequence",
+        "builder": "build_dm_activation_sequence",
+    },
+    "hart_selection": {
+        "module": "pydebug.sequences.hart_selection_sequence",
+        "builder": "build_hart_selection_sequence",
+    },
 }
 
 

@@ -12,6 +12,8 @@ package debug_pkg;
   `include "dmi_write_seq.sv"
   `include "reset_tap_seq.sv"
   `include "scoreboard.sv"
+  // Must precede env.sv: env instantiates debug_coverage.
+  `include "covergroups.sv"
   `include "env.sv"
   `include "py_bridge.sv"
   `include "rv_dbg_base_test.sv"

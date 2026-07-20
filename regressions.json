@@ -1,0 +1,196 @@
+{
+  "version": 1,
+  "spec_target": "RISC-V Debug Specification v1.0.0-rc3",
+  "description": [
+    "Regression definition for the pydebug RISC-V Debug verification suite.",
+    "",
+    "This file declares the TIERS and the FEATURE list. It deliberately does NOT",
+    "list individual test names: those are carried by pytest markers on the tests",
+    "themselves, so a test cannot silently fall out of the regression by someone",
+    "forgetting to update a manifest. tests/test_regression_integrity.py enforces",
+    "the policy below against the live test session.",
+    "",
+    "To add a test to the regression: mark it @pytest.mark.feature('<feature id>').",
+    "That alone puts it in the static tier. Add @pytest.mark.smoke to also make it",
+    "that feature's smoke test."
+  ],
+  "tiers": {
+    "smoke": {
+      "description": "One basic test per feature. The fast gate.",
+      "goal": "Prove every feature is minimally alive. Catches gross breakage in seconds, with no simulator.",
+      "selection": "pytest -m smoke",
+      "policy": [
+        "Every feature with implemented tests MUST have at least one smoke test.",
+        "Smoke tests must be the BASIC, happy-path case for their feature -- not a corner case.",
+        "Smoke must stay fast: mock-backed only, no simulator, no hardware."
+      ]
+    },
+    "static": {
+      "description": "Every test. Maximum coverage.",
+      "goal": "Run the complete suite and close functional coverage. This is the tier that must give maximum architectural coverage whenever it runs.",
+      "selection": "pytest",
+      "policy": [
+        "Contains every test, including all smoke tests.",
+        "Includes the coverage-closure check: the functional coverage model must report every non-excluded bin hit.",
+        "Includes the invariant check: no architectural violation across the whole trace.",
+        "Excluded coverage bins must carry a spec-cited reason and are reported separately -- never counted as covered."
+      ]
+    }
+  },
+  "status_values": {
+    "planned": "Declared, tests not written yet. Exempt from the must-have-tests rule.",
+    "partial": "Some tests exist; the feature is not fully covered yet.",
+    "complete": "Every planned TC-ID for this feature has a test.",
+    "framework": "Not a spec feature - infrastructure that still needs regression cover."
+  },
+  "features": [
+    {
+      "id": "dm_activation",
+      "name": "DM activation (dmactive)",
+      "spec": "#3.14.2 dmactive",
+      "testplan_area": "3. DM Registers - dmcontrol/dmstatus",
+      "tc_ids": ["TC-DMA-001", "TC-DMA-002"],
+      "status": "complete"
+    },
+    {
+      "id": "hart_selection",
+      "name": "Hart Selection (hasel, hartsello, hartselhi)",
+      "spec": "#3.14.2 hartsel/hasel",
+      "testplan_area": "4. Hart Selection",
+      "tc_ids": ["TC-HS-001", "TC-HS-002", "TC-HS-003"],
+      "status": "complete"
+    },
+    {
+      "id": "run_control",
+      "name": "Run control - halt / resume",
+      "spec": "#3.5 Run Control",
+      "testplan_area": "5. Run Control",
+      "tc_ids": ["TC-RC-001", "TC-RC-002", "TC-RC-003", "TC-RC-004", "TC-RC-005", "TC-RC-006", "TC-RC-007"],
+      "status": "complete"
+    },
+    {
+      "id": "reset_control",
+      "name": "Reset control - ndmreset / hartreset / havereset",
+      "spec": "#3.2 Reset",
+      "testplan_area": "5. Run Control",
+      "tc_ids": ["TC-RST-001", "TC-RST-002", "TC-RST-003", "TC-RST-004", "TC-RST-005", "TC-RST-006"],
+      "status": "complete"
+    },
+    {
+      "id": "halt_on_reset",
+      "name": "Halt-on-reset (set/clrresethaltreq)",
+      "spec": "#3.5 halt-on-reset",
+      "testplan_area": "5. Run Control",
+      "tc_ids": ["TC-HOR-001", "TC-HOR-002", "TC-HOR-003", "TC-HOR-004", "TC-HOR-005"],
+      "status": "complete"
+    },
+    {
+      "id": "abstract_commands",
+      "name": "Abstract commands - GPR/CSR access",
+      "spec": "#3.7.1.1 Access Register",
+      "testplan_area": "6. Abstract Commands",
+      "tc_ids": [],
+      "status": "partial"
+    },
+    {
+      "id": "system_bus",
+      "name": "System Bus Access",
+      "spec": "#3.10 System Bus Access",
+      "testplan_area": "8. System Bus Access (SBA)",
+      "tc_ids": [],
+      "status": "partial"
+    },
+    {
+      "id": "coverage_model",
+      "name": "Functional coverage model closure",
+      "spec": "cross-cutting",
+      "testplan_area": "14. Coverage Model",
+      "tc_ids": [],
+      "status": "partial"
+    },
+    {
+      "id": "assertions",
+      "name": "Architectural invariants",
+      "spec": "cross-cutting",
+      "testplan_area": "15. SVA Assertions",
+      "tc_ids": [],
+      "status": "partial"
+    },
+    {
+      "id": "session",
+      "name": "DebugSession / StepResult orchestration",
+      "spec": "n/a - framework",
+      "testplan_area": "n/a - framework",
+      "tc_ids": [],
+      "status": "framework"
+    },
+    {
+      "id": "transport",
+      "name": "Transport abstraction and swap",
+      "spec": "n/a - framework",
+      "testplan_area": "n/a - framework",
+      "tc_ids": [],
+      "status": "framework"
+    },
+    {
+      "id": "packaging",
+      "name": "Package layout, shipped sources, imports",
+      "spec": "n/a - framework",
+      "testplan_area": "n/a - framework",
+      "tc_ids": [],
+      "status": "framework"
+    }
+  ],
+  "sim_regressions": {
+    "description": [
+      "Simulator-backed regressions are NOT part of the pytest tiers above: they need",
+      "Questa and a built DUT, and run via the per-SoC Makefiles. Listed here so the",
+      "regression definition is complete in one place."
+    ],
+    "targets": [
+      {
+        "tier": "smoke",
+        "scenario": "halt",
+        "config": "configs/halt_uvm.json",
+        "command": "make -C integration_with_cva6/cva6_sim soc_test"
+      },
+      {
+        "tier": "static",
+        "scenario": "run_control",
+        "config": "configs/run_control_uvm.json",
+        "command": "make -C integration_with_cva6/cva6_sim soc_test CFG_FILE=configs/run_control_uvm.json",
+        "tc_ids": ["TC-RC-001", "TC-RC-002", "TC-RC-003", "TC-RC-004", "TC-RC-005", "TC-RC-006", "TC-RC-007"]
+      },
+      {
+        "tier": "static",
+        "scenario": "reset_ctrl",
+        "config": "configs/reset_ctrl_uvm.json",
+        "command": "make -C integration_with_cva6/cva6_sim soc_test CFG_FILE=configs/reset_ctrl_uvm.json",
+        "tc_ids": ["TC-RST-001", "TC-RST-002", "TC-RST-003", "TC-RST-004", "TC-RST-005", "TC-RST-006"]
+      },
+      {
+        "tier": "static",
+        "scenario": "halt_on_reset",
+        "config": "configs/halt_on_reset_uvm.json",
+        "command": "make -C integration_with_cva6/cva6_sim soc_test CFG_FILE=configs/halt_on_reset_uvm.json",
+        "tc_ids": ["TC-HOR-001", "TC-HOR-002", "TC-HOR-003", "TC-HOR-004", "TC-HOR-005"],
+        "note": "hasresethaltreq=0 on CVA6 (dm_csrs.sv:235) — TC-HOR-002..005 report N/A on this DUT; only TC-HOR-001 (the gate) and TC-HOR-005 (ungated negative test) exercise real DUT behaviour here."
+      },
+      {
+        "tier": "static",
+        "scenario": "dm_activation",
+        "config": "configs/dm_activation_uvm.json",
+        "command": "make -C integration_with_cva6/cva6_sim soc_test CFG_FILE=configs/dm_activation_uvm.json",
+        "tc_ids": ["TC-DMA-001", "TC-DMA-002"]
+      },
+      {
+        "tier": "static",
+        "scenario": "hart_selection",
+        "config": "configs/hart_selection_uvm.json",
+        "command": "make -C integration_with_cva6/cva6_sim soc_test CFG_FILE=configs/hart_selection_uvm.json",
+        "tc_ids": ["TC-HS-001", "TC-HS-002", "TC-HS-003"],
+        "note": "TC-HS-002's nonexistent-hart assertion is only rigorous against a golden-model-backed transport (real num_harts is not otherwise discoverable); on real DUTs this step is informational only, per hart_selection_sequence.py."
+      }
+    ]
+  }
+}

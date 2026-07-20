@@ -42,34 +42,138 @@ class DMI:
     SBDATA0     = 0x3C
 
 # ── dmcontrol field helpers ───────────────────────────────────────────────────
+#
+# Bit positions below are taken verbatim from the ratified spec's own register
+# table (#3.14.2 dmcontrol), the same source `pydebug.model.registers.DMCONTROL`
+# encodes. The two are deliberately NOT unified via a shared import: mock_transport.py
+# already imports `DMI` from this module, and `pydebug.model`'s package __init__
+# imports mock_transport.py, so an import of `pydebug.model.registers` from here
+# would close a circular-import loop (pydebug.model -> mock_transport ->
+# api.riscv_dm -> model.registers -> pydebug.model, mid-initialization). Verified
+# with `python3 -c "import pydebug"` after every change to this boundary. A few
+# duplicated shift expressions is the cheaper price to pay.
 
 def dmcontrol(
-    dmactive:     bool = False,
-    hartreset:    bool = False,
-    resumereq:    bool = False,
-    haltreq:      bool = False,
-    ackhavereset: bool = False,
-    hartsel:      int  = 0,
+    dmactive:        bool = False,
+    hartreset:       bool = False,
+    resumereq:       bool = False,
+    haltreq:         bool = False,
+    ackhavereset:    bool = False,
+    hartsel:         int  = 0,
+    ndmreset:        bool = False,
+    setresethaltreq: bool = False,
+    clrresethaltreq: bool = False,
+    ackunavail:      bool = False,
+    hasel:           bool = False,
 ) -> int:
-    v  = (1 if dmactive     else 0)
-    v |= (1 if ackhavereset else 0) << 28
-    v |= (1 if hartreset    else 0) << 29
-    v |= (1 if resumereq    else 0) << 30
-    v |= (1 if haltreq      else 0) << 31
-    v |= (hartsel & 0x3FF) << 16
+    """
+    Encode a dmcontrol (DMI 0x10) word, spec #3.14.2.
+
+    `hartsel` is the full 20-bit hart index (spec #3.14.2 hartsel: "hartsello
+    ... hartselhi ... form a single field called hartsel"), assembled from two
+    disjoint 10-bit fields: hartsello at bits[25:16], hartselhi at bits[15:6].
+    Splitting across both — instead of masking to 10 bits — is what makes hart
+    indices >= 1024 reachable at all; a debugger discovers the DUT's actual
+    HARTSELLEN (0..20) by writing all ones and reading back which bits stuck.
+    """
+    v  = (1 if dmactive        else 0)
+    v |= (1 if ndmreset        else 0) << 1
+    v |= (1 if clrresethaltreq else 0) << 2
+    v |= (1 if setresethaltreq else 0) << 3
+    # bits 4:5 are set/clrkeepalive — not yet exercised by any TC-ID, so left
+    # unencoded here rather than half-implemented; see testplan coverage notes.
+    v |= ((hartsel >> 10) & 0x3FF)     << 6    # hartselhi, bits[15:6]
+    v |= (hartsel & 0x3FF)             << 16   # hartsello, bits[25:16]
+    v |= (1 if hasel           else 0) << 26
+    v |= (1 if ackunavail      else 0) << 27
+    v |= (1 if ackhavereset    else 0) << 28
+    v |= (1 if hartreset       else 0) << 29
+    v |= (1 if resumereq       else 0) << 30
+    v |= (1 if haltreq         else 0) << 31
     return v
 
 
+def dmcontrol_hartsel(dmcontrol_word: int) -> int:
+    """Assemble the 20-bit hartsel back out of a dmcontrol read-back word."""
+    hi = (dmcontrol_word >> 6) & 0x3FF
+    lo = (dmcontrol_word >> 16) & 0x3FF
+    return (hi << 10) | lo
+
+
+def dmcontrol_dmactive(dmcontrol_word: int) -> bool:
+    return bool(dmcontrol_word & 1)
+
+
+def dmcontrol_ndmreset(dmcontrol_word: int) -> bool:
+    return bool((dmcontrol_word >> 1) & 1)
+
+
+def dmcontrol_hartreset(dmcontrol_word: int) -> bool:
+    """Read back dmcontrol.hartreset (WARL, #3.14.2 hartreset).
+
+    Spec: "If this feature is not implemented, the bit always stays 0." A
+    debugger discovers support by writing 1 and reading back this bit — the
+    exact mechanism TC-RST-002 uses.
+    """
+    return bool((dmcontrol_word >> 29) & 1)
+
+
+def dmcontrol_hasel(dmcontrol_word: int) -> bool:
+    return bool((dmcontrol_word >> 26) & 1)
+
+
 # ── dmstatus field accessors ─────────────────────────────────────────────────
+#
+# Same rationale as above: bit positions mirror registers.py's DMSTATUS (#3.14.1)
+# but are re-derived here as plain shifts to keep this module import-cycle-free.
 
 def allhalted(dmstatus: int) -> bool:
     return bool((dmstatus >> 9) & 1)
 
+def anyhalted(dmstatus: int) -> bool:
+    return bool((dmstatus >> 8) & 1)
+
 def allrunning(dmstatus: int) -> bool:
     return bool((dmstatus >> 11) & 1)
 
+def anyrunning(dmstatus: int) -> bool:
+    return bool((dmstatus >> 10) & 1)
+
 def anyunavail(dmstatus: int) -> bool:
     return bool((dmstatus >> 12) & 1)
+
+def allresumeack(dmstatus: int) -> bool:
+    return bool((dmstatus >> 17) & 1)
+
+def anyresumeack(dmstatus: int) -> bool:
+    return bool((dmstatus >> 16) & 1)
+
+def allhavereset(dmstatus: int) -> bool:
+    return bool((dmstatus >> 19) & 1)
+
+def anyhavereset(dmstatus: int) -> bool:
+    return bool((dmstatus >> 18) & 1)
+
+def allnonexistent(dmstatus: int) -> bool:
+    return bool((dmstatus >> 15) & 1)
+
+def anynonexistent(dmstatus: int) -> bool:
+    return bool((dmstatus >> 14) & 1)
+
+def hasresethaltreq(dmstatus: int) -> bool:
+    """dmstatus.hasresethaltreq (#3.14.1) — the TC-HOR-001 gate bit.
+
+    0 means set/clrresethaltreq are not implemented; every other HOR TC-ID
+    is then N/A for this DUT rather than a failure (spec #3.5 halt-on-reset
+    is explicitly Optional, Ch.3 op 6).
+    """
+    return bool((dmstatus >> 5) & 1)
+
+def ndmresetpending(dmstatus: int) -> bool:
+    """dmstatus.ndmresetpending (#3.14.1) — not present at all in some DUTs'
+    v0.13 dm_pkg (e.g. CVA6's dm_pkg.sv dmstatus_t). Verify against the golden
+    model in that case rather than the DUT's read-back (see TC-RST-001)."""
+    return bool((dmstatus >> 24) & 1)
 
 def version(dmstatus: int) -> int:
     return dmstatus & 0xF
@@ -94,6 +198,11 @@ class RISCVDebug:
 
     def __init__(self, transport: DebugTransport):
         self.t = transport
+        #: hartsel currently in force (spec #3.14.2: "Writes apply to the new
+        #: value of hartsel"). Tracked here, not on the transport, so every
+        #: subsequent dmcontrol-writing method folds in the right selection
+        #: without every sequence having to thread a hartsel argument through.
+        self._hartsel = 0
 
     # ── Activation ────────────────────────────────────────────────────────────
 
@@ -103,6 +212,7 @@ class RISCVDebug:
         Translates to: write dmcontrol with dmactive=1
         """
         log.info("[DM] activate: writing dmcontrol dmactive=1")
+        self._hartsel = 0
         self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, ackhavereset=True))
         # Verify DM version
         status = self.t.read(DMI.DMSTATUS)
@@ -110,6 +220,20 @@ class RISCVDebug:
         log.info("[DM] dmstatus=0x%08x  version=%d", status, v)
         if v == 0:
             raise DebugError("DM version=0 — Debug Module not present or not responding")
+
+    # ── Hart selection ────────────────────────────────────────────────────────
+
+    def select_hart(self, hartsel: int) -> None:
+        """
+        Select a hart for every subsequent dmcontrol-writing call.
+
+        Translates to: write dmcontrol with dmactive=1, hartsel=<hartsel>
+        Spec #3.14.2 hartsel: a 20-bit index split across hartselhi/hartsello;
+        "Writes apply to the new value of hartsel and hasel," which is why this
+        performs a real write rather than only updating local bookkeeping.
+        """
+        self._hartsel = hartsel
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, hartsel=hartsel))
 
     # ── Halt ──────────────────────────────────────────────────────────────────
 
@@ -123,7 +247,7 @@ class RISCVDebug:
             3. write dmcontrol: dmactive=1, haltreq=0  (clear haltreq)
         """
         log.info("[DM] halt: requesting halt")
-        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, haltreq=True))
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, haltreq=True, hartsel=self._hartsel))
         self._poll_until(
             lambda s: allhalted(s),
             register=DMI.DMSTATUS,
@@ -131,7 +255,7 @@ class RISCVDebug:
             timeout=timeout,
         )
         # Clear haltreq
-        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, haltreq=False))
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, haltreq=False, hartsel=self._hartsel))
         log.info("[DM] halt: hart is halted ✓")
 
     # ── Resume ────────────────────────────────────────────────────────────────
@@ -146,15 +270,135 @@ class RISCVDebug:
             3. write dmcontrol: dmactive=1, resumereq=0
         """
         log.info("[DM] resume: requesting resume")
-        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=True))
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=True, hartsel=self._hartsel))
         self._poll_until(
             lambda s: allrunning(s),
             register=DMI.DMSTATUS,
             msg="allrunning",
             timeout=timeout,
         )
-        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=False))
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=False, hartsel=self._hartsel))
         log.info("[DM] resume: hart is running ✓")
+
+    # ── Reset control (#3.2, #3.14.2) ────────────────────────────────────────
+
+    def ndmreset(self, assert_reset: bool = True) -> None:
+        """
+        Assert or deassert the platform (non-debug-module) reset.
+
+        Translates to: write dmcontrol: dmactive=1, ndmreset=<assert_reset>
+        Spec #3.2: "the debugger writes 1, and then writes 0 to deassert the
+        reset" — ndmreset is a level, not a pulse, so the caller controls both
+        edges explicitly rather than this method polling anything.
+        """
+        log.info("[DM] ndmreset: %s", "asserting" if assert_reset else "deasserting")
+        self.t.write(
+            DMI.DMCONTROL,
+            dmcontrol(dmactive=True, ndmreset=assert_reset, hartsel=self._hartsel),
+        )
+
+    def hartreset(self, assert_reset: bool = True) -> None:
+        """
+        Assert or deassert hartreset for the currently selected hart(s).
+
+        Translates to: write dmcontrol: dmactive=1, hartreset=<assert_reset>
+        Spec #3.14.2 hartreset (WARL): "If this feature is not implemented,
+        the bit always stays 0" — read back dmcontrol after calling this with
+        assert_reset=True to discover support (see TC-RST-002).
+        """
+        log.info("[DM] hartreset: %s", "asserting" if assert_reset else "deasserting")
+        self.t.write(
+            DMI.DMCONTROL,
+            dmcontrol(dmactive=True, hartreset=assert_reset, hartsel=self._hartsel),
+        )
+
+    def ackhavereset(self) -> None:
+        """
+        Clear havereset for the currently selected hart(s).
+
+        Translates to: write dmcontrol: dmactive=1, ackhavereset=1
+        Spec #3.14.2 ackhavereset (W1): "Writing 1 to this bit clears havereset
+        for any selected harts."
+        """
+        log.info("[DM] ackhavereset")
+        self.t.write(
+            DMI.DMCONTROL,
+            dmcontrol(dmactive=True, ackhavereset=True, hartsel=self._hartsel),
+        )
+
+    def ackunavail(self) -> None:
+        """
+        Clear stickyunavail for currently-available selected harts.
+
+        Translates to: write dmcontrol: dmactive=1, ackunavail=1
+        Spec #3.14.2 ackunavail (W1): "Clears unavail for any selected harts
+        that are currently available."
+        """
+        log.info("[DM] ackunavail")
+        self.t.write(
+            DMI.DMCONTROL,
+            dmcontrol(dmactive=True, ackunavail=True, hartsel=self._hartsel),
+        )
+
+    # ── Halt-on-reset (#3.5, optional) ───────────────────────────────────────
+
+    def set_reset_haltreq(self) -> None:
+        """
+        Request halt-on-reset for the currently selected hart(s).
+
+        Translates to: write dmcontrol: dmactive=1, setresethaltreq=1
+        Spec #3.14.2 setresethaltreq (W1) / #3.5: "the hart will immediately
+        enter debug mode on the next deassertion of its reset."
+        """
+        log.info("[DM] set_reset_haltreq")
+        self.t.write(
+            DMI.DMCONTROL,
+            dmcontrol(dmactive=True, setresethaltreq=True, hartsel=self._hartsel),
+        )
+
+    def clr_reset_haltreq(self) -> None:
+        """
+        Clear the halt-on-reset request for the currently selected hart(s).
+
+        Translates to: write dmcontrol: dmactive=1, clrresethaltreq=1
+        Spec #3.14.2 clrresethaltreq (W1).
+        """
+        log.info("[DM] clr_reset_haltreq")
+        self.t.write(
+            DMI.DMCONTROL,
+            dmcontrol(dmactive=True, clrresethaltreq=True, hartsel=self._hartsel),
+        )
+
+    # ── Low-level dmcontrol / dmstatus access ────────────────────────────────
+    #
+    # For stimulus that needs an exact field combination the helpers above do
+    # not (and, for the illegal ones, deliberately must not) expose — e.g.
+    # TC-RC-005's simultaneous haltreq=1/resumereq=1, or TC-HOR-005's illegal
+    # multi-mutex-bit write. Still goes through RISCVDebug/dmcontrol(), never
+    # a bare transport write from inside a sequence.
+
+    def write_dmcontrol(self, **fields) -> int:
+        """
+        Write an arbitrary dmcontrol field combination.
+
+        `dmactive` and `hartsel` default to their currently-tracked values
+        unless explicitly overridden, so callers only need to name the fields
+        they actually care about. Returns the encoded word that was written.
+        """
+        fields.setdefault("dmactive", True)
+        fields.setdefault("hartsel", self._hartsel)
+        word = dmcontrol(**fields)
+        self.t.write(DMI.DMCONTROL, word)
+        return word
+
+    def read_dmstatus(self) -> int:
+        """Raw dmstatus (DMI 0x11) word, for fields this class does not wrap
+        as a single-purpose method (e.g. ndmresetpending, hasresethaltreq)."""
+        return self.t.read(DMI.DMSTATUS)
+
+    def read_dmcontrol(self) -> int:
+        """Raw dmcontrol (DMI 0x10) read-back word — WARL/hartsel discovery."""
+        return self.t.read(DMI.DMCONTROL)
 
     # ── GPR access (abstract commands) ───────────────────────────────────────
 

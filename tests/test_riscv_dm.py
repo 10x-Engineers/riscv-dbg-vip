@@ -75,11 +75,14 @@ def mock_dm():
 
 # ── Tests: activation ─────────────────────────────────────────────────────────
 
+@pytest.mark.feature("dm_activation")
+@pytest.mark.smoke
 def test_activate_writes_dmcontrol(mock_dm):
     dm, t = mock_dm
     dm.activate()
     assert any(op == "write" and addr == DMI.DMCONTROL for op, addr, _ in t.log)
 
+@pytest.mark.feature("dm_activation")
 def test_activate_reads_dmstatus(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -88,12 +91,15 @@ def test_activate_reads_dmstatus(mock_dm):
 
 # ── Tests: halt ───────────────────────────────────────────────────────────────
 
+@pytest.mark.feature("run_control")
+@pytest.mark.smoke
 def test_halt_sets_halted(mock_dm):
     dm, t = mock_dm
     dm.activate()
     dm.halt()
     assert t.halted is True
 
+@pytest.mark.feature("run_control")
 def test_halt_clears_haltreq(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -103,12 +109,14 @@ def test_halt_clears_haltreq(mock_dm):
     last_dmcontrol = writes[-1][1]
     assert not (last_dmcontrol >> 31 & 1), "haltreq should be cleared after halt"
 
+@pytest.mark.feature("run_control")
 def test_is_halted_true_after_halt(mock_dm):
     dm, t = mock_dm
     dm.activate()
     dm.halt()
     assert dm.is_halted() is True
 
+@pytest.mark.feature("run_control")
 def test_is_running_false_after_halt(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -118,6 +126,7 @@ def test_is_running_false_after_halt(mock_dm):
 
 # ── Tests: resume ─────────────────────────────────────────────────────────────
 
+@pytest.mark.feature("run_control")
 def test_resume_clears_halted(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -125,6 +134,7 @@ def test_resume_clears_halted(mock_dm):
     dm.resume()
     assert t.halted is False
 
+@pytest.mark.feature("run_control")
 def test_is_running_after_resume(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -135,6 +145,8 @@ def test_is_running_after_resume(mock_dm):
 
 # ── Tests: GPR / mem access ───────────────────────────────────────────────────
 
+@pytest.mark.feature("abstract_commands")
+@pytest.mark.smoke
 def test_read_gpr_triggers_command_write(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -142,6 +154,8 @@ def test_read_gpr_triggers_command_write(mock_dm):
     _ = dm.read_gpr(0x1001)   # ra (x1)
     assert any(op == "write" and addr == DMI.COMMAND for op, addr, _ in t.log)
 
+@pytest.mark.feature("system_bus")
+@pytest.mark.smoke
 def test_read_mem32_uses_sbaddress(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -150,6 +164,7 @@ def test_read_mem32_uses_sbaddress(mock_dm):
     writes = [addr for op, addr, _ in t.log if op == "write"]
     assert DMI.SBADDRESS0 in writes
 
+@pytest.mark.feature("system_bus")
 def test_write_mem32_writes_sbdata(mock_dm):
     dm, t = mock_dm
     dm.activate()
@@ -160,6 +175,8 @@ def test_write_mem32_writes_sbdata(mock_dm):
 
 # ── Tests: session (batch) ────────────────────────────────────────────────────
 
+@pytest.mark.feature("session")
+@pytest.mark.smoke
 def test_batch_session_all_pass(mock_dm):
     dm, _ = mock_dm
     session = DebugSession(mode="batch")
@@ -169,6 +186,7 @@ def test_batch_session_all_pass(mock_dm):
     results = session.run()
     assert session.all_passed
 
+@pytest.mark.feature("session")
 def test_batch_session_fails_on_error(mock_dm):
     dm, _ = mock_dm
     session = DebugSession(mode="batch", stop_on_error=True)
@@ -179,6 +197,7 @@ def test_batch_session_fails_on_error(mock_dm):
     assert not session.all_passed
     assert len(results) == 2   # third step never runs
 
+@pytest.mark.feature("session")
 def test_step_exception_captured(mock_dm):
     dm, _ = mock_dm
     session = DebugSession(mode="batch", stop_on_error=False)
@@ -190,6 +209,8 @@ def test_step_exception_captured(mock_dm):
 
 # ── Tests: transport swap (OpenOCD mock) ──────────────────────────────────────
 
+@pytest.mark.feature("transport")
+@pytest.mark.smoke
 def test_transport_swap_same_sequence():
     """
     The halt sequence is unaware of the transport.
@@ -208,6 +229,7 @@ def test_transport_swap_same_sequence():
     assert session.all_passed
 
 
+@pytest.mark.feature("transport")
 def test_halt_sequence_can_resume_after_inspection():
     from pydebug.api.riscv_dm import RISCVDebug
     from pydebug.sequences.halt_sequence import build_halt_sequence
@@ -225,6 +247,7 @@ def test_halt_sequence_can_resume_after_inspection():
 
 # ── Tests: DMI register constants ────────────────────────────────────────────
 
+@pytest.mark.feature("packaging")
 def test_dmi_constants():
     assert DMI.DMCONTROL  == 0x10
     assert DMI.DMSTATUS   == 0x11
@@ -236,6 +259,8 @@ def test_dmi_constants():
 
 # ── Tests: bridge_utils ──────────────────────────────────────────────────────
 
+@pytest.mark.feature("packaging")
+@pytest.mark.smoke
 def test_c_bridge_files_discoverable():
     from pydebug.bridge_utils import get_c_bridge_files
     files = get_c_bridge_files()
@@ -244,6 +269,7 @@ def test_c_bridge_files_discoverable():
     assert "uvm_bridge.h" in names
     assert "remote_bitbang.c" in names
 
+@pytest.mark.feature("packaging")
 def test_sv_kit_files_discoverable():
     from pydebug.bridge_utils import get_sv_kit_files
     files = get_sv_kit_files()
@@ -251,6 +277,7 @@ def test_sv_kit_files_discoverable():
     assert "py_bridge.sv" in names
     assert "jtag_driver.sv" in names
 
+@pytest.mark.feature("packaging")
 def test_sv_kit_files_exclude_templates():
     """Per-SoC testbench templates are copied out via `init`, not compiled
     alongside the shared VIP/kit — naively compiling every file returned by
@@ -261,6 +288,7 @@ def test_sv_kit_files_exclude_templates():
     template_dir = get_template_dir()
     assert not any(template_dir in f.parents for f in files)
 
+@pytest.mark.feature("packaging")
 def test_top_level_imports():
     """Verify the top-level package exposes the full API."""
     from pydebug import (
