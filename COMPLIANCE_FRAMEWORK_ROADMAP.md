@@ -135,10 +135,11 @@ The original four-option comparison, kept for rationale/context:
 
 **Superseded 2026-07-20.** The R1-R9 release breakdown drafted 2026-07-17 is
 replaced by the 17-item status/plan Jahanzeb Khalid wrote directly on
-2026-07-20, now restated below as Milestones 1-17 (alongside the pre-existing
-Milestone 0), each broken into the concrete tasks needed to achieve it.
+2026-07-20, now restated below as Milestones 1-20 (alongside the pre-existing
+Milestone 0, plus Milestones 10/16 added the same day for coverage tooling),
+each broken into the concrete tasks needed to achieve it.
 Confirmed scope: **the 2026-08-17 target covers External-Debug/DM-only
-verification only** (Milestones 1-13, gated by Milestone 17's completion
+verification only** (Milestones 1-16, gated by Milestone 20's completion
 criteria). Native Debug (Sdext/Sdtrig) and the SV-UVM architectural model are
 a separate, later track (Milestones 14-16) with no date attached yet — a real
 scope reduction from the prior draft, which had folded Sdext/Sdtrig's 63
@@ -249,16 +250,29 @@ Depends on Milestone 8's component reviews completing first.
 | Re-run/cross-check Milestone 5's CVA6/Ibex numbers | Milestone 5's "authenticity" concern closed |
 | Formal sign-off recorded for Milestones 1-7 collectively | This section updated with sign-off dates |
 
-### Milestone 10 — Stimulus Generation from Testplan, Specification and Functional Coverpoints
+### Milestone 10 — Coverage Tooling Enablement (Functional Coverage)
+
+Added 2026-07-20: neither coverage substrate's readiness had a dedicated
+milestone before now, despite Milestone 20 depending on it working. **Code
+coverage specifically is sequenced later (Milestone 16, after paper
+submission)** — functional coverage is the near-term need, since Milestone
+12's 100% functional-coverage claim feeds the paper.
+
+| Task | Tangible output | Status |
+|---|---|---|
+| Diagnose local Questa's coverage support | Confirmed live: SV functional coverage (covergroups) works (`cg.get_coverage()` returns real percentages) — usable now. Code coverage (`+cover=`/`-coverage`/`vcover`) silently no-ops — zero errors, but no `.ucdb` produced even from a clean rebuild; that gap is Milestone 16's problem, not this one's. | **Done** |
+| Diagnose and confirm Xcelium functional coverage on the RAVI/Apollo server | Not attempted from this environment per instruction — `jk-ravi` (port 1020) times out from here, `jk-apollo-remote` (port 1015) is reachable but rejects every locally-available key, `jk-apollo` is a LAN-only address unreachable from this sandbox. To be diagnosed directly by Jahanzeb Khalid, or this environment's access fixed first. | Not started |
+
+### Milestone 11 — Stimulus Generation from Testplan, Specification and Functional Coverpoints
 
 | Task | Tangible output |
 |---|---|
-| Model the registers/fields for each Milestone-11 feature group not yet modeled (external trigger `dmcs2`, abstract commands, program buffer, multi-hart halt/resume mask) | `model/` additions |
+| Model the registers/fields for each Milestone-12 feature group not yet modeled (external trigger `dmcs2`, abstract commands, program buffer, multi-hart halt/resume mask) | `model/` additions |
 | Build SV covergroups + coverpoints for the same | `sv_kit/covergroups.sv` additions |
 | Build Python stimulus sequences + pytest for the same | New `sequences/*.py` + `tests/*.py` |
 | Register new scenarios | `SCENARIO_REGISTRY` entries + sim configs |
 
-### Milestone 11 — External Debug features verified on simulation, 100% functional coverage
+### Milestone 12 — External Debug features verified on simulation, 100% functional coverage
 
 Each feature group below is its own functional-coverpoint target, mapped to
 the testplan prefix that already covers it:
@@ -277,32 +291,44 @@ the testplan prefix that already covers it:
 | Program buffer execution | `PB` | Build driver support **from zero**, then stimulus | Not started — highest-effort item in this milestone |
 | Close coverage | — | Every `DebugCoverageModel` bin above closed or excluded-with-reason | Not started |
 
-### Milestone 12 — External Debug features run and pass on Emulation on Arty-A7 with Ibex-demo-system as SoC
+### Milestone 13 — External Debug features run and pass on Emulation on Arty-A7 with Ibex-demo-system as SoC
 
 | Task | Tangible output |
 |---|---|
-| Port each Milestone-11 scenario to `--transport openocd` | Config entries per scenario |
+| Port each Milestone-12 scenario to `--transport openocd` | Config entries per scenario |
 | Run against Arty A7 hardware | Recorded pass/fail per feature |
 | Reproduce any emulation failure on simulation for root-cause | `testplans/results/` entries, emulation-fail→sim-reproduce workflow |
 
-### Milestone 13 — Paper final draft completion
+### Milestone 14 — Paper final draft completion
 
 | Task | Tangible output |
 |---|---|
-| Incorporate Milestone 11/12 results, extending the paper's Table II | Updated draft |
+| Incorporate Milestone 12/13 results, extending the paper's Table II | Updated draft |
 | Update methodology/discussion sections if results change the narrative | Updated draft |
 
-### Milestone 14 — Review of Final Draft for DVCon paper submission
+### Milestone 15 — Review of Final Draft for DVCon paper submission
 
 | Task | Tangible output |
 |---|---|
 | Internal review pass | Comments resolved |
 | Submit | Submission confirmation |
 
-**Milestone 18 is the gate for Milestones 1-14** (see below) — reached when
-Milestones 8-12 close, independent of Milestones 15-17.
+**Milestone 20 is the gate for Milestones 1-15** (see below) — reached when
+Milestones 8-13 and 16 close, independent of Milestones 17-19.
 
-### Milestone 15 — SV-UVM Arch-Model for the RISC-V Debug Module, external-debug features only
+### Milestone 16 — Coverage Tooling Enablement (Code Coverage)
+
+**Sequenced after paper submission (Milestone 15)**, per instruction —
+code coverage isn't needed for the paper, only for Milestone 20's sign-off.
+
+| Task | Tangible output |
+|---|---|
+| Resolve the local Questa code-coverage gap diagnosed in Milestone 10 | Either a working license/config fix, or a confirmed decision to rely on Xcelium instead |
+| Diagnose and add Xcelium code-coverage support on the RAVI/Apollo server | Same access blockers as Milestone 10 apply — needs direct diagnosis by Jahanzeb Khalid or fixed environment access |
+| Verify a real UCDB gets produced against the actual CVA6/Ibex sims (not just a trivial testbench) | Recorded proof, `testplans/results/` |
+| Wire the working tool into Milestone 20's code-coverage task | `Makefile`/regression config updated |
+
+### Milestone 17 — SV-UVM Arch-Model for the RISC-V Debug Module, external-debug features only
 
 **No date — separate track.**
 
@@ -313,7 +339,7 @@ Milestones 8-12 close, independent of Milestones 15-17.
 | Integrate into the existing UVM env | `env.sv` wiring |
 | Cross-check against the Python model | Agreement report |
 
-### Milestone 16 — Native Debug support tests in ASM/C
+### Milestone 18 — Native Debug support tests in ASM/C
 
 **No date — separate track.**
 
@@ -323,7 +349,7 @@ Milestones 8-12 close, independent of Milestones 15-17.
 | Build the cross-compile + preload flow | Build scripts |
 | Self-checking trap handlers (sentinel PASS/FAIL, per `VERIFICATION_STRATEGY.md`'s native-debugging firmware pattern) | Firmware + readback harness |
 
-### Milestone 17 — Native Debug support in the Model
+### Milestone 19 — Native Debug support in the Model
 
 **No date — separate track.**
 
@@ -333,19 +359,19 @@ Milestones 8-12 close, independent of Milestones 15-17.
 | Model Sdtrig registers, native (`action=0`) variants | `model/` additions (`TRIG` testplan prefix) |
 | Coverage + assertions for native paths | Python + SV |
 
-Milestones 15-17 together deliver the Sdext/Sdtrig work already scoped in
+Milestones 17-19 together deliver the Sdext/Sdtrig work already scoped in
 the testplan (`DCSR`/`SSTEP`/`TRIG`, 40 TC-IDs) — deferred out of the Aug-17
 window per the 2026-07-20 scope confirmation, not dropped.
 
-### Milestone 18 — System-Level Verification Complete (DM-only) — target 2026-08-17
+### Milestone 20 — System-Level Verification Complete (DM-only) — target 2026-08-17
 
-**The Aug-17 gate.** Reached once Milestones 8-12 close.
+**The Aug-17 gate.** Reached once Milestones 8-13 and 16 close.
 
 | Task | Tangible output |
 |---|---|
 | Full regression (`make static`) green on Ibex, and CVA6 wherever access allows | Recorded results, `testplans/results/` |
 | 100% functional coverage (DM only) | Every `DebugCoverageModel` bin closed or excluded-with-reason — not a silently-inflated percentage |
-| 100% RTL code coverage (DM only) | Flagged, not assumed achievable by stimulus alone — some lines may need an explicit waiver list (see Known Risks) |
+| 100% RTL code coverage (DM only) | Depends on Milestone 16 closing first — flagged, not assumed achievable by stimulus alone even once tooling works; some lines may need an explicit waiver list (see Known Risks) |
 | 0 regression failures | Confirmed across the full DM-only suite |
 | Final sign-off | Go/no-go recorded, residual open items named explicitly |
 
@@ -363,20 +389,22 @@ window per the 2026-07-20 scope confirmation, not dropped.
 | 7 — Emulation smoke tests, CVA6 | — | Deferred (FPGA unavailable) |
 | 8 — Component-by-Component Review | TBD | In progress — 8 review issues open |
 | 9 — DV flow reviewed and finalized | TBD | Not started |
-| 10 — Stimulus generation | TBD | Not started |
-| 11 — External-debug features, 100% functional coverage (sim) | TBD | Not started — 4 of 10 rows already have stimulus |
-| 12 — External-debug features on emulation | TBD | Not started |
-| 13 — Paper final draft | TBD | Not started |
-| 14 — Paper review for DVCon | TBD | Not started |
-| 18 — System-level verification complete (DM-only) | **2026-08-17** | Not started |
-| 15 — SV-UVM arch-model, external-debug only | No date | Not started |
-| 16 — Native debug tests (ASM/C) | No date | Not started |
-| 17 — Native debug model support | No date | Not started |
+| 10 — Coverage Tooling Enablement (Functional Coverage) | TBD | In progress — local-Questa functional coverage confirmed working, Xcelium/RAVI-Apollo task open |
+| 11 — Stimulus generation | TBD | Not started |
+| 12 — External-debug features, 100% functional coverage (sim) | TBD | Not started — 4 of 10 rows already have stimulus |
+| 13 — External-debug features on emulation | TBD | Not started |
+| 14 — Paper final draft | TBD | Not started |
+| 15 — Paper review for DVCon | TBD | Not started |
+| 16 — Coverage Tooling Enablement (Code Coverage) | TBD | Not started — sequenced after Milestone 15, local-Questa gap already diagnosed under Milestone 10 |
+| 20 — System-level verification complete (DM-only) | **2026-08-17** | Not started |
+| 17 — SV-UVM arch-model, external-debug only | No date | Not started |
+| 18 — Native debug tests (ASM/C) | No date | Not started |
+| 19 — Native debug model support | No date | Not started |
 
 ## Known Risks
 
 - **CVA6 emulation deferral removes cross-platform proof from the Aug-17
-  target.** Item 17's DM-only scope now closes on Ibex/Arty-A7 alone if
+  target.** Milestone 20's DM-only scope now closes on Ibex/Arty-A7 alone if
   CVA6/Genesys2 access doesn't return in time — the paper's own central
   portability thesis would rest on one platform for this milestone, with
   CVA6 named as a documented gap, not silently dropped.
@@ -406,10 +434,16 @@ window per the 2026-07-20 scope confirmation, not dropped.
 - **Optional-feature variance across DUTs makes "100% coverage" DUT-relative,
   not spec-absolute.** CVA6 already can't exercise 6 of 16 run-control-cluster
   TC-IDs because it doesn't implement `hasresethaltreq`/`hartreset`. Every
-  feature group in item 10 needs the same RTL-verified (not assumed)
+  feature group in Milestone 12 needs the same RTL-verified (not assumed)
   N/A-detection gate before claiming completion.
 - **External trigger and Program Buffer are the two highest-effort items in
-  item 10's list** — External trigger likely caps out at register-level
+  Milestone 12's list** — External trigger likely caps out at register-level
   proof (per the paper's own precedent); Program Buffer has zero driver
   support today and needs new `api/riscv_dm.py` code before any stimulus can
   exist at all.
+- **RAVI/Apollo server access is unresolved from this environment.**
+  `jk-ravi` (port 1020) times out, `jk-apollo-remote` (port 1015) rejects
+  every locally-available SSH key, and `jk-apollo` is a LAN-only address —
+  none reachable from this sandbox. Milestones 10 and 16's Xcelium tasks
+  are blocked on this until either access is fixed here or Jahanzeb Khalid
+  diagnoses Xcelium availability directly.
