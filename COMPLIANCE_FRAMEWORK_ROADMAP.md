@@ -147,13 +147,17 @@ TC-IDs into the same Aug-17 window.
 
 Staffing: solo (Jahanzeb Khalid) directing AI agents.
 
-**Target dates (2026-07-20, estimates added 2026-07-21):** four dates were
-concretely discussed — 2026-07-22 (paper content ready), 2026-07-24 (paper
-review done), 2026-07-25 (paper submission), and 2026-08-17 (final DM-only
-sign-off), all originally set in the superseded R1-R9 draft. Reapplied onto
-the closest-matching milestones: **Milestone 14** (paper final draft) →
-2026-07-22, **Milestone 15** (review + DVCon submission) →
-2026-07-24/2026-07-25, **Milestone 20** → 2026-08-17 (unchanged).
+**Target dates (2026-07-20, estimates added 2026-07-21, paper date moved
+2026-07-21):** four dates were concretely discussed — 2026-07-22 (paper
+content ready), 2026-07-24 (paper review done), 2026-07-25 (paper
+submission), and 2026-08-17 (final DM-only sign-off), all originally set in
+the superseded R1-R9 draft. Reapplied onto the closest-matching milestones:
+**Milestone 14** (paper final draft), **Milestone 15** (review + DVCon
+submission), **Milestone 20** → 2026-08-17 (unchanged). Milestone 14 was
+then moved from 2026-07-22 to **2026-07-24** per Jahanzeb Khalid's
+2026-07-21 instruction ("paper can move to the 25th at most") — Milestone
+15's review (07-24) and submission (07-25) are unchanged, with 2026-07-25
+confirmed as the hard outer cap for the whole paper track.
 
 Milestones 8-13 and 16 never had concrete dates in either the old or current
 draft (the old plan explicitly left this range TBD, calling it the single
@@ -174,12 +178,13 @@ commitments**, unlike the four dates above:
 | 13 — External Debug on Arty-A7 emulation | 2026-08-12 |
 | 16 — Coverage Tooling Enablement (Code) | 2026-08-15 |
 
-Milestones 17-19 (native debug, separate no-date track) and Milestone 7
-(CVA6 emulation, blocked on FPGA access) remain deliberately undated — see
-each milestone's own section.
+Milestones 17-19 (native debug, no longer part of the Aug-17 gate — see their
+own sections) were dated 2026-08-30 per Jahanzeb Khalid's 2026-07-21 "by
+month end" instruction. Milestone 7 (CVA6 emulation, blocked on FPGA access)
+remains deliberately undated.
 
 **This creates a real scheduling tension, flagged in Known Risks below**:
-Milestone 14 (07-22) explicitly depends on Milestone 12/13 results, which
+Milestone 14 (07-24) explicitly depends on Milestone 12/13 results, which
 under this estimate don't land until 08-07/08-12 — *after* the paper's own
 target date. See Known Risks for how that's reconciled. The old plan's
 **infinite-loop-test requirement did not carry forward** into this Milestone
@@ -357,13 +362,17 @@ built from zero).
 
 ### Milestone 14 — Paper final draft completion
 
-**Target: 2026-07-22** (reused from the superseded R1-R9 draft's paperwork-ready
-date — see the scheduling-tension note in Known Risks).
+**Target: 2026-07-24** (moved from 2026-07-22 per Jahanzeb Khalid's
+2026-07-21 confirmation — "paper can move to the 25th at most." Set to
+07-24, one day before Milestone 15's fixed 07-25 submission cap, so the
+existing 07-24 internal-review task still has a completed draft to review
+against; if 2026-07-25 itself was intended for the draft rather than 07-24,
+flag it and this gets adjusted).
 
 | Task | Tangible output | Target date |
 |---|---|---|
-| Incorporate Milestone 12/13 results, extending the paper's Table II | Updated draft | 2026-07-22 |
-| Update methodology/discussion sections if results change the narrative | Updated draft | 2026-07-22 |
+| Incorporate Milestone 12/13 results, extending the paper's Table II | Updated draft | 2026-07-24 |
+| Update methodology/discussion sections if results change the narrative | Updated draft | 2026-07-24 |
 
 ### Milestone 15 — Review of Final Draft for DVCon paper submission
 
@@ -396,38 +405,44 @@ date).
 
 ### Milestone 17 — SV-UVM Arch-Model for the RISC-V Debug Module, external-debug features only
 
-**No date — separate track.**
+**Target: 2026-08-30** (set by Jahanzeb Khalid on 2026-07-21 — "by month end").
+Still a separate track from the Aug-17 DM-only sign-off gate, not part of
+Milestone 20's completion criteria — see the note below the M19 table.
 
 | Task | Tangible output | Target date |
 |---|---|---|
-| Design the SV-UVM architectural model's class structure | Design note | No date |
-| Implement register/predictor logic in SystemVerilog, mirroring the Python model | New `sv_kit/` model classes | No date |
-| Integrate into the existing UVM env | `env.sv` wiring | No date |
-| Cross-check against the Python model | Agreement report | No date |
+| Design the SV-UVM architectural model's class structure | Design note | 2026-08-30 |
+| Implement register/predictor logic in SystemVerilog, mirroring the Python model | New `sv_kit/` model classes | 2026-08-30 |
+| Integrate into the existing UVM env | `env.sv` wiring | 2026-08-30 |
+| Cross-check against the Python model | Agreement report | 2026-08-30 |
 
 ### Milestone 18 — Native Debug support tests in ASM/C
 
-**No date — separate track.**
+**Target: 2026-08-30** (set 2026-07-21, "by month end"). Separate track,
+not gated by Milestone 20.
 
 | Task | Tangible output | Target date |
 |---|---|---|
-| Write firmware test programs per `NATIVE-OP1-7` (ebreak, trigger-based breakpoints, `icount` single-step) | ASM/C sources | No date |
-| Build the cross-compile + preload flow | Build scripts | No date |
-| Self-checking trap handlers (sentinel PASS/FAIL, per `VERIFICATION_STRATEGY.md`'s native-debugging firmware pattern) | Firmware + readback harness | No date |
+| Write firmware test programs per `NATIVE-OP1-7` (ebreak, trigger-based breakpoints, `icount` single-step) | ASM/C sources | 2026-08-30 |
+| Build the cross-compile + preload flow | Build scripts | 2026-08-30 |
+| Self-checking trap handlers (sentinel PASS/FAIL, per `VERIFICATION_STRATEGY.md`'s native-debugging firmware pattern) | Firmware + readback harness | 2026-08-30 |
 
 ### Milestone 19 — Native Debug support in the Model
 
-**No date — separate track.**
+**Target: 2026-08-30** (set 2026-07-21, "by month end"). Separate track,
+not gated by Milestone 20.
 
 | Task | Tangible output | Target date |
 |---|---|---|
-| Model `dcsr`/`dpc`/`dscratch0-1` | `model/` additions (`DCSR` testplan prefix) | No date |
-| Model Sdtrig registers, native (`action=0`) variants | `model/` additions (`TRIG` testplan prefix) | No date |
-| Coverage + assertions for native paths | Python + SV | No date |
+| Model `dcsr`/`dpc`/`dscratch0-1` | `model/` additions (`DCSR` testplan prefix) | 2026-08-30 |
+| Model Sdtrig registers, native (`action=0`) variants | `model/` additions (`TRIG` testplan prefix) | 2026-08-30 |
+| Coverage + assertions for native paths | Python + SV | 2026-08-30 |
 
 Milestones 17-19 together deliver the Sdext/Sdtrig work already scoped in
 the testplan (`DCSR`/`SSTEP`/`TRIG`, 40 TC-IDs) — deferred out of the Aug-17
-window per the 2026-07-20 scope confirmation, not dropped.
+window per the 2026-07-20 scope confirmation, not dropped, and now dated
+2026-08-30 as a separate downstream milestone rather than gating the
+DM-only sign-off.
 
 ### Milestone 20 — System-Level Verification Complete (DM-only) — target 2026-08-17
 
@@ -459,13 +474,13 @@ window per the 2026-07-20 scope confirmation, not dropped.
 | 11 — Stimulus generation | 2026-07-31 (est.) | Not started |
 | 12 — External-debug features, 100% functional coverage (sim) | 2026-08-07 (est.) | Not started — 4 of 10 rows already have stimulus |
 | 13 — External-debug features on emulation | 2026-08-12 (est.) | Not started |
-| 14 — Paper final draft | **2026-07-22** | Not started |
+| 14 — Paper final draft | **2026-07-24** | Not started |
 | 15 — Paper review for DVCon | **2026-07-25** | Not started |
 | 16 — Coverage Tooling Enablement (Code Coverage) | 2026-08-15 (est.) | Not started — sequenced after Milestone 15, local-Questa gap already diagnosed under Milestone 10 |
 | 20 — System-level verification complete (DM-only) | **2026-08-17** | Not started |
-| 17 — SV-UVM arch-model, external-debug only | No date | Not started |
-| 18 — Native debug tests (ASM/C) | No date | Not started |
-| 19 — Native debug model support | No date | Not started |
+| 17 — SV-UVM arch-model, external-debug only | **2026-08-30** | Not started |
+| 18 — Native debug tests (ASM/C) | **2026-08-30** | Not started |
+| 19 — Native debug model support | **2026-08-30** | Not started |
 
 ## Known Risks
 
@@ -477,19 +492,21 @@ window per the 2026-07-20 scope confirmation, not dropped.
   structurally larger). Treat 2026-07-24 through 2026-08-15 as a working
   plan to check progress against and revise, not a commitment communicated
   externally.
-- **Milestone 14/15's reused dates (2026-07-22/07-25) conflict with Milestone
+- **Milestone 14/15's dates (2026-07-24/07-25) conflict with Milestone
   12/13's estimated dates (2026-08-07/08-12).** Milestone 14's own task list
   says "incorporate Milestone 12/13 results" — but under the backward-planned
   estimate, M12/M13 don't land until *two to three weeks after* the paper's
   target date, and M12 alone includes Program Buffer "from zero" driver work,
-  already flagged as the highest-effort item in the whole plan. **Working
-  assumption, not yet confirmed with Jahanzeb Khalid:** the paper
-  draft/submission proceeds on 2026-07-22/07-25 using whatever M12/M13
+  already flagged as the highest-effort item in the whole plan. **Confirmed
+  by Jahanzeb Khalid (2026-07-21):** "paper can move to the 25th at most" —
+  i.e. 2026-07-25 is a hard outer cap on the paper track, it will not slip
+  further to align with Milestone 12/13's fuller completion. The paper
+  draft/submission proceeds on 2026-07-24/07-25 using whatever M12/M13
   results exist by then (the paper already has its own 8-feature case study
   drawn from Milestone 5, independent of M12's fuller scope) — full
   M12/M13/M16 completion continues in parallel toward the 2026-08-17 gate
-  regardless of the paper's submission date. If that's not the intent, either
-  the paper dates or the M12/13 estimates need to move.
+  regardless of the paper's submission date. This is now a confirmed
+  decision, not an open question.
 - **The old plan's infinite-loop-test requirement was dropped, not carried
   forward.** The superseded R1-R9 draft required an "infinite loop test" per
   feature area alongside interactive/non-interactive mode coverage; this
