@@ -97,196 +97,483 @@ exercise — a framework that doesn't find anything isn't worth building):
 | `DMSTATUS_RESET_VAL` uses bits 24/25 for allrunning/anyrunning; spec places them at 11/10 | This project's own VIP (`src/pydebug/sv_kit/dm_defines_pkg.sv:74`) — currently dead code, a latent trap |
 | 6 of 16 TC-IDs are legitimately N/A on CVA6 (`hasresethaltreq` and `hartreset` hardwired 0; v0.13 `dmstatus_t` has no `ndmresetpending` field at all) | Verified directly against `CVA6-fork/corev_apu/riscv-dbg/src/dm_csrs.sv` and `dm_pkg.sv`, not assumed |
 
-## The open decision: what is the final product?
+## Final product decision: Option B — internal verification-IP portfolio (decided 2026-07-20)
 
-This has to be decided before Milestone 7 (packaging), and probably should be
-revisited after Milestone 2 once more of the spec surface is covered and the
-shape of the framework is easier to judge from real output rather than from
-one slice. Presented here as a genuine decision, not resolved unilaterally:
+**Decided: B**, with a more specific business framing than the original
+option table's wording. This is **not** "10x-Engineers builds a scorecard/
+report generator to sell to customers." It's an **internal reusable
+verification-IP portfolio**: when a customer hires 10x-Engineers for a
+verification engagement, this Debug VIP (and the company's other VIPs for
+other IPs) is used as part of delivering that engagement, at no extra
+licensing cost to the customer — 10x-Engineers doesn't need to buy a
+third-party debug VIP from an external vendor, and the customer isn't paying
+to license this VIP as a standalone product. The "product" is the service
+engagement itself; this framework (and the sim/emulation debug-VIP category
+it belongs to) is internal tooling that makes engagements faster and more
+complete, the same role the company's other IP-specific VIPs already play.
 
-| Option | What ships | Who consumes it | Implication for the roadmap below |
-|---|---|---|---|
-| **A. Open self-certification suite** | The framework itself, public, runnable by anyone against their own DM RTL via the existing transport swap (mock/UVM-sim/OpenOCD-HW) | Chip/IP teams, directly | Milestones unchanged; Milestone 7 becomes "polish the CLI/report output for a third-party user," not just an internal proof |
-| **B. Certification/scoring service** | A report or scorecard 10x-Engineers generates *for* a customer's DUT, using this framework as internal tooling | Customers, via a report, not the tool | Framework can stay rougher at the edges; investment shifts toward the report generator and scoring rubric, less toward external-user CLI ergonomics |
-| **C. Licensable reference-model core** | The golden model + coverage/assertion library as standalone IP, with `pydebug` stimulus as one consumer among several (other UVM environments could integrate the model directly) | Other verification teams / EDA-adjacent integration | Changes Milestone 6+ priorities toward decoupling `src/pydebug/model/` from the rest of the package, stable public API, versioning discipline |
-| **D. Combination** | Open core (A) with a paid certification layer (B) built on the same engine (C) | Both of the above | Highest total effort; only makes sense once A's core is far enough along to demonstrate the pattern |
+**Implication for the roadmap**: the old Option-A framing (public self-
+certification suite, third-party CLI/report polish) does not apply — there
+is no external/self-serve user to polish for. Investment goes toward
+internal reusability instead: solid, reviewed, reusable model/coverage/
+assertion/stimulus machinery (Milestones 1-11 and 13-15, unaffected by this
+decision — renumbered 2026-07-21, see below) that this and future engagements
+can pick up directly — the same reuse pattern the model/checker layer is
+already built around across CVA6/Ibex, now extended to "across future
+customer engagements" rather than just "across DUTs."
 
-Nothing below depends on choosing now — Milestones 1–6 build the same
-underlying model/coverage/assertion/stimulus machinery regardless of which
-product this becomes. The decision mainly changes Milestone 7's shape and how
-much polish the CLI/reporting layer needs.
+The original four-option comparison, kept for rationale/context:
 
-## Full Plan to Project End — target 2026-08-17
+| Option | What ships | Who consumes it |
+|---|---|---|
+| A. Open self-certification suite | The framework itself, public, runnable by anyone against their own DM RTL | Chip/IP teams, directly |
+| **B. Internal verification-IP portfolio (chosen)** | This framework, used internally to deliver verification engagements | 10x-Engineers' own delivery teams, across customer engagements |
+| C. Licensable reference-model core | The golden model + coverage/assertion library as standalone IP | Other verification teams / EDA-adjacent integration |
+| D. Combination | Open core (A) with a paid layer (B) on the same engine (C) | Both of the above |
 
-**This target date and the paper-submission milestone were set by Jahanzeb
-Khalid / program management, not independently re-derived from timing data.**
-The one real velocity data point this project has (M0's model+coverage+
-assertions phase, ~25 min wall-clock for two parallel sub-agents, on the
-*smallest* cluster) does not extrapolate linearly across the remaining
-138 TC-IDs — Sdtrig alone is flagged below as plausibly larger than everything
-done so far combined. Where the plan below is aggressive relative to that
-known velocity, it's flagged in **Known Risks**, not silently assumed to fit.
+## Roadmap to Project End — DM-only / External-Debug scope, target 2026-08-17
 
-Staffing: solo (Jahanzeb Khalid) directing AI agents; no other human
-assignees confirmed yet — every release below lists Jahanzeb Khalid as
-assignee. Testplan reference: `pydebug/testplans/riscv_debug_testplan.md`
-(161 TC-IDs across 25 prefixes, all CAT2 rows populated as of 2026-07-17).
+**Superseded 2026-07-20.** The R1-R9 release breakdown drafted 2026-07-17 is
+replaced by the 17-item status/plan Jahanzeb Khalid wrote directly on
+2026-07-20, restated as Milestones 1-20 (alongside the pre-existing
+Milestone 0, plus Milestones 10/16 added the same day for coverage tooling
+— both since renumbered, see immediately below).
 
-### R1 — Paper validation push (2026-07-17 → 2026-07-22)
+**Reordered 2026-07-21** (Jahanzeb Khalid, directly in the GitHub UI): the
+SV-UVM Arch-Model milestone moved from its original position (17) to become
+the new **Milestone 12**, and the Code Coverage milestone moved from 16 to
+become the new **Milestone 19** — both deliberately interleaved into the
+main numeric sequence rather than left appended at the end. This cascaded:
+old 12→13, 13→14, 14→15, 15→16 (shifted up one each, to make room for
+SV-UVM at 12); old 18→17, 19→18 (shifted down one each, to make room for
+Code Coverage at 19). Milestone 20 is unaffected.
 
-**Assignee:** Jahanzeb Khalid. **Goal:** one basic-but-real test per feature
-area (not full TC-ID depth — that's R4-R7 below), each run through
-simulation → emulation, both interactive and non-interactive modes, plus an
-infinite loop test pass, feeding the paper's extended results table.
+Confirmed scope: **the 2026-08-17 target covers External-Debug/DM-only
+verification only** — Milestones 1-11, 13-16, and 19 (i.e. everything except
+12, 17, 18). Native Debug (Sdext/Sdtrig) and the SV-UVM architectural model —
+**Milestones 12, 17, and 18** — are a separate, later track, now dated
+2026-08-30 (see below) but still **not** part of Milestone 20's completion
+criteria, despite sitting numerically inside the 1-20 range. A real scope
+reduction from the prior draft, which had folded Sdext/Sdtrig's 63 TC-IDs
+into the same Aug-17 window.
 
-| Day | Feature areas (testplan prefix) | Tangible output | Status |
-|---|---|---|---|
-| Jul 17 | Infinite loop test mechanism (new `--loop` mode in `session.py`/`cli.py`, alongside existing `batch`/`interactive`) | Repeats a scenario's session indefinitely/to a large iteration count, reports first-failure-onward | Not started |
-| Jul 17 | `RC`/`RST`/`HOR`/`DMA`/`HS` (stimulus already exists) — run on emulation + infinite loop test | Emulation results for the 23 already-stimulated TC-IDs | Not started — `RC` already known-blocked on CVA6 sim (`dm_top.sv:191`), expect same on CVA6 emulation; Ibex is the clean path |
-| Jul 18 | `DTM`, `DMI`, discovery cluster (`DHS`/`DIS`/`VER`) — zero model exists today | Basic model + one TC-ID stimulus each, sim + emulation | Not started |
-| Jul 19 | `AC` (Abstract Commands), `QA` (Quick Access) | GPR path extends existing partial driver; CSR/Quick-Access new | Not started |
-| Jul 20 | `PB` (Program Buffer, **zero driver support today** — highest build-risk day), `AM` (Access Memory), `SBA` | New `api/riscv_dm.py` Program Buffer support; `SBA` reuses the paper's already-proven real-HW path | Not started |
-| Jul 21 | `HG`, `AUTH`, `DCSR`/`SSTEP`, `TRIG` | `HG` likely register-round-trip only (dmcs2, per the paper's Finding 3/4, not full causality); `AUTH` likely N/A on both DUTs (verify against RTL); `DCSR`/`SSTEP` reuse the paper's proven single-step/progbuf-breakpoint scenarios; `TRIG` realistically sim-only this cycle (paper: "partial, register-level... not attempted" on emulation) | Not started |
-| Jul 22 | Compile all results (sim + emulation + both modes + infinite loop test, per feature); emulation-fail → simulation-reproduce wherever a real-HW run diverges; extend the paper's Table II from 8 → 17 features | Updated paper draft, results appendix | Not started |
+Staffing: solo (Jahanzeb Khalid) directing AI agents.
 
-**R1 complete when:** every one of the 17 feature areas has at least one
-real, spec-traced pass/fail result recorded on simulation, with emulation
-results wherever the DUT/board combination supports it, and the paper draft
-reflects all of it.
+**Target dates (2026-07-20, estimates added 2026-07-21, paper date moved
+2026-07-21, milestones reordered 2026-07-21):** four dates were concretely
+discussed — 2026-07-22 (paper content ready), 2026-07-24 (paper review
+done), 2026-07-25 (paper submission), and 2026-08-17 (final DM-only
+sign-off), all originally set in the superseded R1-R9 draft. Reapplied onto
+the closest-matching milestones: **Milestone 15** (paper final draft, was
+14 before the reorder), **Milestone 16** (review + DVCon submission, was
+15), **Milestone 20** → 2026-08-17 (unchanged). Milestone 15 (paper draft)
+was then moved from 2026-07-22 to **2026-07-24** per Jahanzeb Khalid's
+2026-07-21 instruction ("paper can move to the 25th at most") — Milestone
+16's review (07-24) and submission (07-25) are unchanged, with 2026-07-25
+confirmed as the hard outer cap for the whole paper track.
 
-### R2 — Paper review (2026-07-22 → 2026-07-24)
+Milestones 8, 9, 10, 11, 13, 14, and 19 never had concrete dates in either
+the old or current draft (the old plan explicitly left this range TBD,
+calling it the single biggest schedule risk). Per Jahanzeb Khalid's
+confirmation on 2026-07-21 ("estimated dates are fine for now"), these now
+carry a **backward-planned estimate** from 2026-08-17, based on relative
+effort/blockers already noted elsewhere in this document (e.g. Milestone
+13's Program Buffer flagged as needing driver support from zero) —
+**explicitly estimates, not confirmed commitments**, unlike the four dates
+above:
 
-**Assignee:** Jahanzeb Khalid. Two days, per program management's own
-stated cadence ("22nd at most, then 2 days for review of the full paper").
-Tangible output: reviewed draft with comments resolved.
-
-### R3 — Paper submission (~2026-07-24 → 2026-07-25)
-
-**Assignee:** Jahanzeb Khalid. Tangible output: submitted paper. This is a
-named milestone in its own right, not folded into R2, per program
-management's explicit instruction ("full paper submission is one of the
-milestones").
-
-### R4 — DM Core Cluster + DTM/JTAG, full TC-ID depth
-
-Extends R1's basic tests to full depth for the clusters already partially
-proven. Covers testplan prefixes `RC`(7)/`RST`(6)/`HOR`(5)/`DMA`(2)/`HS`(9,
-including the hart-array-mask rows R1 doesn't reach) + `DTM`(7)/`DMI`(7) +
-discovery `DHS`(6)/`DIS`(4)/`VER`(2) = 55 TC-IDs.
-
-| Task | Tangible output |
+| Milestone | Estimated target |
 |---|---|
-| Fix the circular-import trap between `api/riscv_dm.py` and `model/registers.py` if not already resolved | Documented import ordering |
-| Testplan back-fill already done this session (Bins/Intentionally-not-tested/Uncertain) — carry to full stimulus | `sequences/*.py` for every TC-ID in scope |
-| Fix `jtag_monitor.sv` TDO sampling (blast radius on Ibex sim — needs explicit sign-off before touching) | Unblocks SV-side `dmstatus` coverage |
-| Fix `dm_defines_pkg.sv:74` reset-value constant | One-line correction, dead code today |
+| 8 — Component-by-Component Review | 2026-07-24 |
+| 9 — All DV flow reviewed and finalized | 2026-07-26 |
+| 10 — Coverage Tooling Enablement (Functional) | 2026-07-27 |
+| 11 — Stimulus Generation | 2026-07-31 |
+| 13 — External Debug verified on sim, 100% functional coverage | 2026-08-07 |
+| 14 — External Debug on Arty-A7 emulation | 2026-08-12 |
+| 19 — Coverage Tooling Enablement (Code) | 2026-08-15 |
 
-### R5 — Command Execution Cluster, full TC-ID depth
+Milestones 12, 17, and 18 (SV-UVM Arch-Model, Native Debug ASM/C, Native
+Debug Model — the separate, non-gating track) were dated 2026-08-30 per
+Jahanzeb Khalid's 2026-07-21 "by month end" instruction. Milestone 7 (CVA6
+emulation, blocked on FPGA access) remains deliberately undated.
 
-`AC`(13)/`QA`(4)/`AM`(7)/`PB`(6)/`SBA`(9)/`MID`(1) = 40 TC-IDs. Program
-Buffer has zero existing driver support — this is where that gets built out
-past R1's basic pass to the full `cmderr`/write-isolation/postexec depth.
+**This creates a real scheduling tension, flagged in Known Risks below**:
+Milestone 15 (07-24, paper) explicitly depends on Milestone 13/14 results,
+which under this estimate don't land until 08-07/08-12 — *after* the
+paper's own target date. See Known Risks for how that's reconciled. The old
+plan's **infinite-loop-test requirement did not carry forward** into this
+Milestone structure at all (checked: no mention anywhere in this file) —
+flagged here since it's a real dropped requirement, not a decision to drop
+it.
 
-### R6 — Multi-Hart & Access Control, full TC-ID depth
+### Milestone 1 — Testplan Development
 
-`HG`(9)/`AUTH`(6) = 15 TC-IDs. Optional features — R1 already established
-whether either DUT implements halt groups/external triggers/authentication
-beyond a register round-trip; this release is bounded by that finding, not
-by effort. Explicit capability gating per DUT, same N/A-detection discipline
-as the rest of this project.
+**Status: Done — not reviewed.**
 
-### R7 — Native Debug Mechanisms (Sdext / Sdtrig), full TC-ID depth
+| Task | Tangible output | Target date |
+|---|---|---|
+| Clause-parse the RISC-V Debug Spec v1.0-rc3 into a CAT1/CAT2/CAT3 traceability table | Feature Traceability Table — done | — |
+| Write TC-IDs for every CAT2 row | `pydebug/testplans/riscv_debug_testplan.md`, 161 TC-IDs across 25 prefixes — done | — |
+| Review and merge | PR #3 reviewed and merged — **not done** | TBD |
 
-`DCSR`(11)/`SSTEP`(6)/`TRIG`(23) = 40 TC-IDs. **The largest single release —
-Sdtrig alone has more WARL fields and match-mode combinations than the
-entire R4 cluster.** Apply the testplan skill's cross-extension interaction
-discipline (A/V/Zcmp/Zicbom/Zicboz/Zicbop/Zicfilp/Zawrs/Smdbltrp/Ssdbltrp) to
-whichever extensions the actual DUTs implement, per `TC-TRIG-023`'s existing
-scoping.
+### Milestone 2 — Verification Strategy Development
 
-### R8 — Cross-Cutting Hardening
+**Status: Done — not reviewed.**
 
-`COV`(3)/`SVA`(3)/`NEG`(2)/`REG`(3) = 11 TC-IDs, plus aggregate coverage
-rollup (`report()` across every area's `DebugCoverageModel`, not per-slice
-only) and a structured multi-DUT capability matrix (CVA6 vs. Ibex optional-
-feature support, as data, not prose).
+| Task | Tangible output | Target date |
+|---|---|---|
+| Define verification levels, component map, phased approach | `VERIFICATION_STRATEGY.md` — done | — |
+| Build Operation Catalogs (external DM, external Trigger Module, native Sdext/Sdtrig) | Same file, 3 catalog sections — done | — |
+| Decide a git home for the document | Currently lives outside any git repo — **not done** | TBD |
+| Review | **not done**, blocked on the git-home decision above | TBD |
 
-### R9 — Full Regression, Coverage Closure, VIP Sign-off (target 2026-08-17)
+### Milestone 3 — PyDebug framework initial structure
 
-| Task | Tangible output |
-|---|---|
-| Full regression (`make static`) green on CVA6 and Ibex | Recorded results, `testplans/results/` |
-| 100% functional coverage | Every `DebugCoverageModel` bin closed or in the Intentionally-Not-Tested/Uncertain buckets with a stated reason — **not** a silently-inflated percentage |
-| 100% RTL code coverage | **Flagged, not assumed achievable by direct stimulus alone** — see Known Risks below; some RTL lines may be genuinely unreachable via spec-legal DMI sequences (defensive/dead code), which conventionally needs an explicit waiver list, not a claimed 100% |
-| FPGA/emulation full-regression pass | Extends R1's per-feature emulation results to the full TC-ID set, wherever board access holds |
-| VIP sign-off | Final go/no-go, with residual open items (if any) named explicitly rather than hidden |
+**Status: Done — not reviewed.**
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Transport abstraction (mock/UVM/OpenOCD) | `api/transport.py`, `api/uvm_transport.py`, `api/openocd_transport.py` — done, predates this session (PR #1) | — |
+| DMI command layer | `api/riscv_dm.py` (`RISCVDebug`, `DMI`) — done, extended this session | — |
+| Session/CLI scaffolding | `api/session.py`, `cli.py` — done | — |
+| Review | **not done** | TBD |
+
+### Milestone 4 — Simulation Testbench structure (Agents, Model, interfaces, Tests, Sequences, TB)
+
+**Status: Complete — not reviewed.**
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Golden reference model | `model/registers.py`, `predictor.py`, `coverage.py`, `invariants.py`, `mock_transport.py` — done | — |
+| Transport-agnostic observer hook | `api/observer.py` — done | — |
+| SV coverage + protocol-tier assertions | `sv_kit/covergroups.sv`, `sv_kit/dmi_assertions.sv` — done | — |
+| Stimulus sequences + pytest for the run-control cluster | `sequences/{run_control,reset_ctrl,halt_on_reset,dm_activation,hart_selection}_sequence.py`, matching `tests/*.py` — done | — |
+| Regression tiering (smoke/static) | `regressions.json`, `Makefile`, `tests/test_regression_integrity.py` — done | — |
+| Review | **not done** | TBD |
+
+### Milestone 5 — Basic feature tests on CVA6 and Ibex-demo-system
+
+**Status: Complete — authenticity not reviewed.**
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| 8-feature stimulus-migration case study | Paper's Table II — done | — |
+| CVA6 UVM scoreboard clean run | Checked=42, Errors=0 — done, per paper | — |
+| Ibex UVM scoreboard clean run | Checked=38, Errors=0 — done, per paper | — |
+| Independently re-run/cross-check these numbers this session | **not done** — currently only cited from the paper draft, a real open item, not a formality | TBD |
+
+### Milestone 6 — Emulation smoke tests on Arty A7 with Ibex-demo-system
+
+**Status: Complete.**
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| OpenOCD transport + board config for Arty A7 | `openocd_arty_a7_100t.cfg`, `halt_hw.json` — done | — |
+| Halt/resume/GPR-read/SBA proven on real hardware | Paper's "Pass, real HW" rows — done | — |
+
+### Milestone 7 — Emulation smoke tests on CVA6
+
+**Status: Deferred — FPGA unavailability.**
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Genesys2 board bring-up | **Blocked** — FPGA currently unavailable | TBD |
+| OpenOCD config for Genesys2 | `openocd_genesys2_cva6.cfg`, `halt_genesys2.json` — already authored, per `EMULATION_PLAN.md` | — |
+| Resume once FPGA access is restored | Not scheduled — no date until access returns | TBD |
+
+### Milestone 8 — Component-by-Component Review
+
+Added 2026-07-20: reviewing PR #3 as one undifferentiated blob isn't real
+review. Each component gets its own task/issue, reviewed individually,
+before Milestone 9's merge/sign-off happens.
+
+**Estimated target: 2026-07-24** (backward-planned, not confirmed — see the
+Target dates note above).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Review Agents (JTAG VIP stack: driver, monitor, sequencer, agent) | `sv_kit/` reviewed, including the known `jtag_monitor.sv` TDO-sampling gap | 2026-07-24 (est.) |
+| Review Golden Reference Model | `model/{registers,predictor,coverage,invariants,mock_transport}.py` reviewed | 2026-07-24 (est.) |
+| Review Interfaces (observer hook + transport/DMI API layer) | `api/{observer,transport,riscv_dm}.py` reviewed | 2026-07-24 (est.) |
+| Review Stimulus Sequences | `sequences/*.py` reviewed | 2026-07-24 (est.) |
+| Review Tests + Regression Tiering | `tests/*.py`, `regressions.json` reviewed | 2026-07-24 (est.) |
+| Review Testbench wiring (env.sv, debug_pkg.sv, SV covergroups/assertions) | `sv_kit/{env,debug_pkg,covergroups,dmi_assertions}.sv` reviewed | 2026-07-24 (est.) |
+| Review Testplan document | `testplans/riscv_debug_testplan.md` reviewed — signs off Milestone 1 | 2026-07-24 (est.) |
+| Review Verification Strategy document | `VERIFICATION_STRATEGY.md` reviewed — signs off Milestone 2 | 2026-07-24 (est.) |
+
+### Milestone 9 — All DV flow reviewed and finalized
+
+Depends on Milestone 8's component reviews completing first.
+
+**Estimated target: 2026-07-26** (backward-planned, not confirmed).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Merge PR #3 (testplan, model, TB structure) | Merged PR, Milestones 1/3/4 signed off | — done |
+| Decide git home for `VERIFICATION_STRATEGY.md`, then review it | Milestone 2 signed off | 2026-07-26 (est.) |
+| Re-run/cross-check Milestone 5's CVA6/Ibex numbers | Milestone 5's "authenticity" concern closed | 2026-07-26 (est.) |
+| Formal sign-off recorded for Milestones 1-7 collectively | This section updated with sign-off dates | 2026-07-26 (est.) |
+
+### Milestone 10 — Coverage Tooling Enablement (Functional Coverage)
+
+Added 2026-07-20: neither coverage substrate's readiness had a dedicated
+milestone before now, despite Milestone 20 depending on it working. **Code
+coverage specifically is sequenced later (Milestone 19, after paper
+submission)** — functional coverage is the near-term need, since Milestone
+13's 100% functional-coverage claim feeds the paper.
+
+**Estimated target: 2026-07-27** (backward-planned, not confirmed — the
+Xcelium task is externally blocked on RAVI/Apollo access regardless of any
+date).
+
+| Task | Tangible output | Status | Target date |
+|---|---|---|---|
+| Diagnose local Questa's coverage support | Confirmed live: SV functional coverage (covergroups) works (`cg.get_coverage()` returns real percentages) — usable now. Code coverage (`+cover=`/`-coverage`/`vcover`) silently no-ops — zero errors, but no `.ucdb` produced even from a clean rebuild; that gap is Milestone 19's problem, not this one's. | **Done** | — |
+| Diagnose and confirm Xcelium functional coverage on the RAVI/Apollo server | Not attempted from this environment per instruction — `jk-ravi` (port 1020) times out from here, `jk-apollo-remote` (port 1015) is reachable but rejects every locally-available key, `jk-apollo` is a LAN-only address unreachable from this sandbox. To be diagnosed directly by Jahanzeb Khalid, or this environment's access fixed first. | Not started | 2026-07-27 (est., blocked on server access) |
+
+### Milestone 11 — Stimulus Generation from Testplan, Specification and Functional Coverpoints
+
+**Estimated target: 2026-07-31** (backward-planned, not confirmed).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Model the registers/fields for each Milestone-13 feature group not yet modeled (external trigger `dmcs2`, abstract commands, program buffer, multi-hart halt/resume mask) | `model/` additions | 2026-07-31 (est.) |
+| Build SV covergroups + coverpoints for the same | `sv_kit/covergroups.sv` additions | 2026-07-31 (est.) |
+| Build Python stimulus sequences + pytest for the same | New `sequences/*.py` + `tests/*.py` | 2026-07-31 (est.) |
+| Register new scenarios | `SCENARIO_REGISTRY` entries + sim configs | 2026-07-31 (est.) |
+
+### Milestone 12 — SV-UVM Arch-Model for the RISC-V Debug Module, external-debug features only
+
+**Moved here from its original position (17) on 2026-07-21** (Jahanzeb
+Khalid, directly in the GitHub UI). **Target: 2026-08-30** (set 2026-07-21,
+"by month end"). Still a separate, non-gating track from the Aug-17 DM-only
+sign-off — its numeric position moved, its scope did not.
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Design the SV-UVM architectural model's class structure | Design note | 2026-08-30 |
+| Implement register/predictor logic in SystemVerilog, mirroring the Python model | New `sv_kit/` model classes | 2026-08-30 |
+| Integrate into the existing UVM env | `env.sv` wiring | 2026-08-30 |
+| Cross-check against the Python model | Agreement report | 2026-08-30 |
+
+### Milestone 13 — External Debug features verified on simulation, 100% functional coverage
+
+Each feature group below is its own functional-coverpoint target, mapped to
+the testplan prefix that already covers it:
+
+**Estimated target: 2026-08-07** (backward-planned, not confirmed — the
+heaviest milestone in this range; Program Buffer alone needs driver support
+built from zero).
+
+| Feature group | Testplan prefix(es) | Task | Status | Target date |
+|---|---|---|---|---|
+| Halt — single | `RC` | Already built | Stimulus exists | — |
+| Halt — multiple | `HG`/`HS` array-mask rows | Build hart-array-mask stimulus | Not started | 2026-08-07 (est.) |
+| Resume — single | `RC` | Already built | Stimulus exists | — |
+| Resume — multiple | `HG`/`HS` array-mask rows | Build hart-array-mask stimulus | Not started | 2026-08-07 (est.) |
+| Active (`dmactive`) | `DMA` | Already built | Stimulus exists | — |
+| Reset | `RST`/`HOR` | Already built | Stimulus exists | — |
+| External trigger | `HG`/`EXT-TRIG` rows | Build register-level stimulus | Not started — **likely register-level only**, per the paper's own Finding 3/4 precedent (group halt/resume needed a bigger RTL change than either DUT's IP supports) | 2026-08-07 (est.) |
+| SBA | `SBA` | Build stimulus (real-HW path already proven in the paper) | Not started | 2026-08-07 (est.) |
+| Abstract command | `AC`/`QA`/`AM` | Build stimulus (GPR path partially exists in `riscv_dm.py`) | Not started | 2026-08-07 (est.) |
+| Program buffer execution | `PB` | Build driver support **from zero**, then stimulus | Not started — highest-effort item in this milestone | 2026-08-07 (est.) |
+| Close coverage | — | Every `DebugCoverageModel` bin above closed or excluded-with-reason | Not started | 2026-08-07 (est.) |
+
+### Milestone 14 — External Debug features run and pass on Emulation on Arty-A7 with Ibex-demo-system as SoC
+
+**Estimated target: 2026-08-12** (backward-planned, not confirmed).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Port each Milestone-13 scenario to `--transport openocd` | Config entries per scenario | 2026-08-12 (est.) |
+| Run against Arty A7 hardware | Recorded pass/fail per feature | 2026-08-12 (est.) |
+| Reproduce any emulation failure on simulation for root-cause | `testplans/results/` entries, emulation-fail→sim-reproduce workflow | 2026-08-12 (est.) |
+
+### Milestone 15 — Paper final draft completion
+
+**Target: 2026-07-24** (moved from 2026-07-22 per Jahanzeb Khalid's
+2026-07-21 confirmation — "paper can move to the 25th at most." Set to
+07-24, one day before Milestone 16's fixed 07-25 submission cap, so the
+existing 07-24 internal-review task still has a completed draft to review
+against; if 2026-07-25 itself was intended for the draft rather than 07-24,
+flag it and this gets adjusted).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Incorporate Milestone 11/13 results, extending the paper's Table II | Updated draft | 2026-07-24 |
+| Update methodology/discussion sections if results change the narrative | Updated draft | 2026-07-24 |
+
+### Milestone 16 — Review of Final Draft for DVCon paper submission
+
+**Target: 2026-07-25** (review 2026-07-24, submission 2026-07-25 — both
+reused from the superseded R1-R9 draft's R2/R3 dates).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Internal review pass | Comments resolved | 2026-07-24 |
+| Submit | Submission confirmation | 2026-07-25 |
+
+**Milestone 20 is the gate for Milestones 1-16** (see below) — reached when
+Milestones 8, 9, 10, 11, 13, 14, and 19 close, independent of Milestones 12,
+17, and 18.
+
+### Milestone 17 — Native Debug support tests in ASM/C
+
+**Moved here from its original position (18) on 2026-07-21.** **Target:
+2026-08-30** (set 2026-07-21, "by month end"). Separate, non-gating track.
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Write firmware test programs per `NATIVE-OP1-7` (ebreak, trigger-based breakpoints, `icount` single-step) | ASM/C sources | 2026-08-30 |
+| Build the cross-compile + preload flow | Build scripts | 2026-08-30 |
+| Self-checking trap handlers (sentinel PASS/FAIL, per `VERIFICATION_STRATEGY.md`'s native-debugging firmware pattern) | Firmware + readback harness | 2026-08-30 |
+
+### Milestone 18 — Native Debug support in the Model
+
+**Moved here from its original position (19) on 2026-07-21.** **Target:
+2026-08-30** (set 2026-07-21, "by month end"). Separate, non-gating track.
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Model `dcsr`/`dpc`/`dscratch0-1` | `model/` additions (`DCSR` testplan prefix) | 2026-08-30 |
+| Model Sdtrig registers, native (`action=0`) variants | `model/` additions (`TRIG` testplan prefix) | 2026-08-30 |
+| Coverage + assertions for native paths | Python + SV | 2026-08-30 |
+
+Milestones 12, 17, and 18 together deliver the SV-UVM architectural model
+and the Sdext/Sdtrig work already scoped in the testplan (`DCSR`/`SSTEP`/
+`TRIG`, 40 TC-IDs) — deferred out of the Aug-17 window per the 2026-07-20
+scope confirmation, not dropped, and now dated 2026-08-30 as a separate
+downstream track rather than gating the DM-only sign-off, despite sitting
+numerically inside the 1-20 range since the 2026-07-21 reorder.
+
+### Milestone 19 — Coverage Tooling Enablement (Code Coverage)
+
+**Moved here from its original position (16) on 2026-07-21.** **Sequenced
+after paper submission (Milestone 16)**, per instruction — code coverage
+isn't needed for the paper, only for Milestone 20's sign-off.
+
+**Estimated target: 2026-08-15** (backward-planned, not confirmed — the
+Xcelium task is externally blocked on RAVI/Apollo access regardless of any
+date).
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Resolve the local Questa code-coverage gap diagnosed in Milestone 10 | Either a working license/config fix, or a confirmed decision to rely on Xcelium instead | 2026-08-15 (est.) |
+| Diagnose and add Xcelium code-coverage support on the RAVI/Apollo server | Same access blockers as Milestone 10 apply — needs direct diagnosis by Jahanzeb Khalid or fixed environment access | 2026-08-15 (est., blocked on server access) |
+| Verify a real UCDB gets produced against the actual CVA6/Ibex sims (not just a trivial testbench) | Recorded proof, `testplans/results/` | 2026-08-15 (est.) |
+| Wire the working tool into Milestone 20's code-coverage task | `Makefile`/regression config updated | 2026-08-15 (est.) |
+
+### Milestone 20 — System-Level Verification Complete (DM-only) — target 2026-08-17
+
+**The Aug-17 gate.** Reached once Milestones 8, 9, 10, 11, 13, 14, and 19
+close.
+
+| Task | Tangible output | Target date |
+|---|---|---|
+| Full regression (`make static`) green on Ibex, and CVA6 wherever access allows | Recorded results, `testplans/results/` | 2026-08-17 |
+| 100% functional coverage (DM only) | Every `DebugCoverageModel` bin closed or excluded-with-reason — not a silently-inflated percentage | 2026-08-17 |
+| 100% RTL code coverage (DM only) | Depends on Milestone 19 closing first — flagged, not assumed achievable by stimulus alone even once tooling works; some lines may need an explicit waiver list (see Known Risks) | 2026-08-17 |
+| 0 regression failures | Confirmed across the full DM-only suite | 2026-08-17 |
+| Final sign-off | Go/no-go recorded, residual open items named explicitly | 2026-08-17 |
 
 ## Completion Tracker
 
-| Release | Feature areas / TC-IDs | ETA | Assignee | Status |
-|---|---|---|---|---|
-| M0 — Foundations | cross-cutting infra (model architecture, observer hook, regression tiers, agent pattern) | Done | Jahanzeb Khalid | **Done** |
-| R1 — Paper validation push | 1 basic test × 17 feature areas, sim+emulation+both modes+infinite loop test | 2026-07-22 | Jahanzeb Khalid | Not started |
-| R2 — Paper review | — | 2026-07-24 | Jahanzeb Khalid | Not started |
-| R3 — Paper submission | — | 2026-07-25 | Jahanzeb Khalid | Not started |
-| R4 — DM Core + DTM/JTAG, full depth | `RC`/`RST`/`HOR`/`DMA`/`HS`/`DTM`/`DMI`/`DHS`/`DIS`/`VER` (55 TC-IDs) | TBD — see Known Risks | Jahanzeb Khalid | Not started |
-| R5 — Command Execution, full depth | `AC`/`QA`/`AM`/`PB`/`SBA`/`MID` (40 TC-IDs) | TBD | Jahanzeb Khalid | Not started |
-| R6 — Multi-Hart/Access Control, full depth | `HG`/`AUTH` (15 TC-IDs) | TBD | Jahanzeb Khalid | Not started |
-| R7 — Native Debug Mechanisms, full depth | `DCSR`/`SSTEP`/`TRIG` (40 TC-IDs) — largest release | TBD | Jahanzeb Khalid | Not started |
-| R8 — Cross-Cutting Hardening | `COV`/`SVA`/`NEG`/`REG` (11 TC-IDs) | TBD | Jahanzeb Khalid | Not started |
-| R9 — Full Regression + Coverage + Sign-off | all 161 TC-IDs, 100% code+functional coverage | 2026-08-17 | Jahanzeb Khalid | Not started |
-
-**R4-R8's ETAs are marked TBD rather than filled with invented dates**: the
-window between R3 (2026-07-25) and R9's 2026-08-17 target is 23 days for
-138 TC-IDs' full model/coverage/assertion/stimulus depth plus 100%
-code+functional coverage closure — a scope this project's own one real
-timing data point cannot honestly back-fill into 5 sub-deadlines without
-guessing. Recommend fixing R4-R8's individual dates once R1 produces a
-second real timing data point (the "basic test per feature" pass gives an
-actual per-feature-area effort sample, not just the one from M0/M1).
+| Milestone | Target | Status |
+|---|---|---|
+| 0 — Foundations | Done | **Done** |
+| 1 — Testplan Development | — | Done, not reviewed |
+| 2 — Verification Strategy Development | — | Done, not reviewed (no git home yet) |
+| 3 — PyDebug framework initial structure | — | Done, not reviewed |
+| 4 — Simulation Testbench structure | — | Complete, not reviewed |
+| 5 — Basic feature tests, CVA6+Ibex | — | Complete, authenticity not reviewed |
+| 6 — Emulation smoke tests, Arty A7/Ibex | — | Complete |
+| 7 — Emulation smoke tests, CVA6 | — | Deferred (FPGA unavailable) |
+| 8 — Component-by-Component Review | 2026-07-24 (est.) | In progress — 8 review issues open |
+| 9 — DV flow reviewed and finalized | 2026-07-26 (est.) | Not started |
+| 10 — Coverage Tooling Enablement (Functional Coverage) | 2026-07-27 (est.) | In progress — local-Questa functional coverage confirmed working, Xcelium/RAVI-Apollo task open |
+| 11 — Stimulus generation | 2026-07-31 (est.) | Not started |
+| 12 — SV-UVM arch-model, external-debug only | **2026-08-30** | Not started |
+| 13 — External-debug features, 100% functional coverage (sim) | 2026-08-07 (est.) | Not started — 4 of 10 rows already have stimulus |
+| 14 — External-debug features on emulation | 2026-08-12 (est.) | Not started |
+| 15 — Paper final draft | **2026-07-24** | Not started |
+| 16 — Paper review for DVCon | **2026-07-25** | Not started |
+| 17 — Native debug tests (ASM/C) | **2026-08-30** | Not started |
+| 18 — Native debug model support | **2026-08-30** | Not started |
+| 19 — Coverage Tooling Enablement (Code Coverage) | 2026-08-15 (est.) | Not started — sequenced after Milestone 16, local-Questa gap already diagnosed under Milestone 10 |
+| 20 — System-level verification complete (DM-only) | **2026-08-17** | Not started |
 
 ## Known Risks
 
-- **The 2026-08-17 full-depth + 100%-coverage target is aggressive relative
-  to known velocity, and R7 (Sdtrig) is the specific point most likely to
-  blow through it.** Sdtrig alone has more WARL fields and match-mode
-  combinations than the entire R4 cluster combined, per the sizing flag
-  above. Fallback options, not yet decided: (a) sign off R9 with Sdtrig's
-  exhaustive depth carried as a named residual open item, (b) extend the
-  R7/R9 dates specifically while holding R1-R3's paper dates fixed, (c) scope
-  R9's coverage claim to "100% of the P0/P1 TC-IDs" rather than all 161.
-  Needs a decision checkpoint after R1 (2026-07-22), once a second real
-  timing sample exists.
+- **Milestones 8, 9, 10, 11, 13, 14, and 19's dates are backward-planned
+  estimates, not measured schedule commitments.** No real velocity data
+  exists for this range (the one completed slice's telemetry, cited in
+  Context above, covers only the coverage+assertions phase of the
+  architecturally simplest area — stimulus-phase timing was never measured,
+  and every remaining milestone is structurally larger). Treat 2026-07-24
+  through 2026-08-15 as a working plan to check progress against and
+  revise, not a commitment communicated externally.
+- **Milestone 15/16's dates (2026-07-24/07-25) conflict with Milestone
+  13/14's estimated dates (2026-08-07/08-12).** Milestone 15's own task
+  list says "incorporate Milestone 13/14 results" — but under the
+  backward-planned estimate, M13/M14 don't land until *two to three weeks
+  after* the paper's target date, and M13 alone includes Program Buffer
+  "from zero" driver work, already flagged as the highest-effort item in
+  the whole plan. **Confirmed by Jahanzeb Khalid (2026-07-21):** "paper can
+  move to the 25th at most" — i.e. 2026-07-25 is a hard outer cap on the
+  paper track, it will not slip further to align with Milestone 13/14's
+  fuller completion. The paper draft/submission proceeds on 2026-07-24/07-25
+  using whatever M13/M14 results exist by then (the paper already has its
+  own 8-feature case study drawn from Milestone 5, independent of M13's
+  fuller scope) — full M13/M14/M19 completion continues in parallel toward
+  the 2026-08-17 gate regardless of the paper's submission date. This is
+  now a confirmed decision, not an open question.
+- **The old plan's infinite-loop-test requirement was dropped, not carried
+  forward.** The superseded R1-R9 draft required an "infinite loop test" per
+  feature area alongside interactive/non-interactive mode coverage; this
+  Milestone structure has no equivalent task anywhere. Flagging since this was
+  found while reusing the old plan's dates, not because a decision was made to
+  drop it.
+- **CVA6 emulation deferral removes cross-platform proof from the Aug-17
+  target.** Milestone 20's DM-only scope now closes on Ibex/Arty-A7 alone if
+  CVA6/Genesys2 access doesn't return in time — the paper's own central
+  portability thesis would rest on one platform for this milestone, with
+  CVA6 named as a documented gap, not silently dropped.
+- **`VERIFICATION_STRATEGY.md` has no git home.** Needs a decision (move
+  into `pydebug/`? add a repo at the workspace root? explicitly leave
+  out of version control?) before item 2 can be meaningfully reviewed in a
+  PR the way items 1/3/4 now can be (PR #3).
+- **Item 5's "authenticity not reviewed" is a real open item, not a
+  formality** — the CVA6/Ibex numbers currently only come from the paper
+  draft, not from a fresh run this session. Worth re-running before citing
+  them again in the DVCon draft.
 - **100% RTL code coverage may not be achievable through spec-legal stimulus
-  alone.** Defensive/dead code paths in the DUT's own RTL can be
-  unreachable via any sequence a real debugger would legally issue. The
-  conventional resolution is a documented waiver list (same discipline this
-  project already applies to functional-coverage exclusions), not silently
-  claiming 100%. Flag any such lines explicitly in R9 rather than force
-  coverage through illegal/synthetic stimulus.
+  alone**, even scoped to DM-only. Defensive/dead code paths in the DUT's
+  own RTL can be unreachable via any sequence a real debugger would legally
+  issue. Resolution: a documented waiver list (same discipline this project
+  already applies to functional-coverage exclusions), not silently claiming
+  100%.
 - **Model/DUT divergence that is legal on both sides.** Already observed
   once: CVA6 computes `allrunning = ~halted & ~unavailable` so a hart held in
   reset reports `running=1`, while the Python predictor models "neither
-  halted nor running" — both conform to spec #3.2. Every later release will
-  hit more of these as optional-feature latitude increases (Sdtrig
-  especially). Fallback: document the divergence per-DUT rather than
-  "fixing" either side, exactly as done for this first instance.
+  halted nor running" — both conform to spec #3.2. Fallback: document the
+  divergence per-DUT rather than "fixing" either side.
 - **Verification-IP bugs, not just DUT bugs.** Two were found in this
   project's own SV kit during M0 (the TDO-sampling gap, the wrong
-  reset-value constant). Expect more as coverage/assertions reach into parts
-  of the kit that have never had a consumer before. Fallback: the same
-  "prove it fires against a forced violation, don't just assert it compiles"
-  discipline that caught the assertions agent's own 1-bit-cast bug.
+  reset-value constant). Expect more as coverage/assertions reach parts of
+  the kit that have never had a consumer before.
 - **Optional-feature variance across DUTs makes "100% coverage" DUT-relative,
-  not spec-absolute.** CVA6 already can't exercise 6 of 16 R4-cluster TC-IDs
-  because it doesn't implement `hasresethaltreq`/`hartreset`. Every future
-  release needs the same RTL-verified (not assumed) N/A-detection gate
-  before claiming completion. Fallback: the coverage model's existing
-  excluded-bins mechanism, extended with a reason category for "DUT does not
-  implement this optional feature."
-- **Board/emulation reliability.** Confirmed reachable as of 2026-07-17, but
-  `EMULATION_PLAN.md`'s own risk section already flagged intermittent SSH/
-  server connectivity to the boards during the emulation bring-up session.
-  Treat R1's Jul-20/21 emulation runs as at-risk if that recurs, with the
-  documented fallback of running on simulation only and noting emulation as
-  deferred for that specific feature.
+  not spec-absolute.** CVA6 already can't exercise 6 of 16 run-control-cluster
+  TC-IDs because it doesn't implement `hasresethaltreq`/`hartreset`. Every
+  feature group in Milestone 13 needs the same RTL-verified (not assumed)
+  N/A-detection gate before claiming completion.
+- **External trigger and Program Buffer are the two highest-effort items in
+  Milestone 13's list** — External trigger likely caps out at register-level
+  proof (per the paper's own precedent); Program Buffer has zero driver
+  support today and needs new `api/riscv_dm.py` code before any stimulus can
+  exist at all.
+- **RAVI/Apollo server access is unresolved from this environment.**
+  `jk-ravi` (port 1020) times out, `jk-apollo-remote` (port 1015) rejects
+  every locally-available SSH key, and `jk-apollo` is a LAN-only address —
+  none reachable from this sandbox. Milestones 10 and 19's Xcelium tasks
+  are blocked on this until either access is fixed here or Jahanzeb Khalid
+  diagnoses Xcelium availability directly.
