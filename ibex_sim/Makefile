@@ -17,17 +17,21 @@ SHELL := /bin/bash
 
 SIM_OUTPUT_DIR = ./sim_outputs
 
-PYDEBUG_C_DIR  := $(shell dirname $(firstword $(shell pydebug sources --c)))
-PYDEBUG_SV_DIR := $(shell dirname $(firstword $(shell pydebug sources --sv)))
+PYDEBUG_C_DIR  := $(shell pydebug sources --c-dir)
+PYDEBUG_SV_DIR := $(shell pydebug sources --sv-dir)
 
 SRC_C_SOC = $(PYDEBUG_C_DIR)/uvm_bridge.c $(PYDEBUG_C_DIR)/remote_bitbang.c $(PYDEBUG_C_DIR)/elfloader.c
 
+# Compile order matters: dm_defines_pkg -> jtag_if -> jtag_pkg (pulls in
+# model/types + agents/txn-driver-monitor-agent) -> debug_pkg (pulls in
+# sequences/scoreboard/fcov/model/env/py_bridge/rv_dbg_base_test) ->
+# jtag_bitbang -> our tb top.
 SRC_SV_KIT = \
-    $(PYDEBUG_SV_DIR)/dm_defines_pkg.sv \
-    $(PYDEBUG_SV_DIR)/jtag_if.sv \
-    $(PYDEBUG_SV_DIR)/jtag_pkg.sv \
-    $(PYDEBUG_SV_DIR)/debug_pkg.sv \
-    $(PYDEBUG_SV_DIR)/jtag_bitbang.sv \
+    $(PYDEBUG_SV_DIR)/model/dm_defines_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/jtag/jtag_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/jtag/jtag_pkg.sv \
+    $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/jtag/jtag_bitbang.sv \
     tb_top_ibex.sv
 
 IBEX_INCDIRS = +incdir+../ibex-demo-system/vendor/lowrisc_ip/ip/prim/rtl \

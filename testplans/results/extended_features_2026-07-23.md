@@ -8,7 +8,7 @@ scenarios are per-test-case files under `src/pydebug/sequences/`, composing
 primitives from `src/pydebug/api/riscv_dm.py`.
 
 This is also the first pass where a real SV register-value checker
-(`src/pydebug/sv_kit/dm_ref_model.sv` + `dm_checker.sv`) was live and wired
+(`src/pydebug/sv/model/dm_ref_model.sv` + `src/pydebug/sv/env/dm_checker.sv`) was live and wired
 into the UVM env (`env.sv`) for every run below, alongside the existing
 scoreboard/coverage subscribers — see `VERIFICATION_STRATEGY.md` for the
 checker's design. Per standing project policy: **no RTL was modified in

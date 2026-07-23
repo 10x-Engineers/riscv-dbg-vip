@@ -371,13 +371,13 @@ Both perspectives converge on the same registers (per `VERIFICATION_STRATEGY.md`
 
 ### Cross-cutting: Coverage Model — prefix `COV`
 
-Not a register area — these rows verify the verification infrastructure itself (`src/pydebug/model/coverage.py`'s `DebugCoverageModel`, `sv_kit/covergroups.sv`), the same substrate the **Bins** column above reports against.
+Not a register area — these rows verify the verification infrastructure itself (`src/pydebug/model/coverage.py`'s `DebugCoverageModel`, `sv/fcov/covergroups.sv`), the same substrate the **Bins** column above reports against.
 
 | TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Priority |
 |---|---|---|---|---|
 | TC-COV-001 | `assert_slice_complete()` passes per closed feature area | Run the full TC-ID suite for a feature area, call `assert_slice_complete()` | Passes, with any residual bins accounted for in that area's own Intentionally-Not-Tested/Uncertain buckets — no silent gap | P0 |
 | TC-COV-002 | Bins column honesty — measured vs. stated scope | Cross-check this document's **Bins** entries against `coverage.py` for areas with a live model (currently `RC`/`RST`/`HOR`/`DMA`/`HS`) | Numbers match exactly (measured, per the note at the top of Test Cases); for every other area added in this pass, the Bins column is explicitly the *intended* combinatorial scope, not yet a measured count, since no model exists for those registers yet — this is a stated, honest gap, not a silent one | P0 |
-| TC-COV-003 | SV covergroups cross-check the Python model | Run the same stimulus against live RTL with `sv_kit/covergroups.sv` bound, compare reported bin percentages against the Python model's bins for the same operations | Numbers agree (already demonstrated once for the `run_control` cluster on CVA6 — see `testplans/results/run_control_cluster_cva6_2026-07-17.md`); any divergence is a VIP bug (as `jtag_monitor.sv`'s TDO-sampling gap already was), not a DUT bug | P1 |
+| TC-COV-003 | SV covergroups cross-check the Python model | Run the same stimulus against live RTL with `sv/fcov/covergroups.sv` bound, compare reported bin percentages against the Python model's bins for the same operations | Numbers agree (already demonstrated once for the `run_control` cluster on CVA6 — see `testplans/results/run_control_cluster_cva6_2026-07-17.md`); any divergence is a VIP bug (as `jtag_monitor.sv`'s TDO-sampling gap already was), not a DUT bug | P1 |
 
 ### Cross-cutting: SVA Assertions — prefix `SVA`
 

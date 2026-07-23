@@ -98,7 +98,7 @@ with OpenOCDTransport(host="127.0.0.1", port=6666) as t:
      └──────────┬──────────┘        └──────────┬───────────────┘
                 │                              │
      ┌──────────▼──────────────────────────────▼───────────────┐
-     │      JTAG/DMI Agent (driver + monitor, sv_kit/)          │
+     │      JTAG/DMI Agent (driver + monitor, sv/agents/jtag/)  │
      └───────────────────────────┬───────────────────────────┘
                                  ▼
                           DUT Debug Module
@@ -115,7 +115,7 @@ silicon. Swapping platforms is a config change, not a code change.
 |---|---|
 | `api/` | `RISCVDebug`/`DMI` command layer, `DebugTransport`/`UVMTransport`/`OpenOCDTransport`, `DebugSession` |
 | `sequences/` | Pre-built scenarios (halt, memory scan, CSR access, single-step, ...) |
-| `sv_kit/` | Shared JTAG/DMI UVM VIP (agent, driver, monitor, scoreboard) + per-SoC `templates/` |
+| `sv/` | Shared UVM VIP: `model/` (register/predictor model), `agents/jtag/` (driver, monitor, sequencer), `sequences/`, `assertions/`, `fcov/` (covergroups), `env/` (env, checker, scoreboard, base test) + per-SoC `templates/` |
 | `c_bridge/` | DPI-C bridge sources compiled into the simulator's shared object |
 | `cli.py` | `pydebug` console-script entry point (`run`, `init`, `sources`) |
 | `bridge_utils.py` | Resolves shipped C/SV source paths for `pydebug sources` |

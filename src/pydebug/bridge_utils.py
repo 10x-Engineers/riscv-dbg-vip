@@ -25,7 +25,7 @@ def get_c_bridge_dir() -> Path:
 
 def get_sv_kit_dir() -> Path:
     """Return the directory containing SV integration kit files."""
-    return _package_dir() / "sv_kit"
+    return _package_dir() / "sv"
 
 
 def get_template_dir() -> Path:

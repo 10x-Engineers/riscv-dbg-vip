@@ -38,7 +38,7 @@ where = ["src"]
 pydebug = [
     "c_bridge/*.c",
     "c_bridge/*.h",
-    "sv_kit/**/*.sv",
-    "sv_kit/configs/*.json",
-    "sv_kit/configs/*.cfg",
+    "sv/**/*.sv",
+    "sv/configs/*.json",
+    "sv/configs/*.cfg",
 ]

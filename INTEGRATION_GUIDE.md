@@ -39,14 +39,16 @@ two worked examples referenced throughout.
    — this is what makes the tool a true third-party dependency instead of
    something glued into one project:
    ```makefile
-   PYDEBUG_C_DIR  := $(shell dirname $(firstword $(shell pydebug sources --c)))
-   PYDEBUG_SV_DIR := $(shell dirname $(firstword $(shell pydebug sources --sv)))
+   PYDEBUG_C_DIR  := $(shell pydebug sources --c-dir)
+   PYDEBUG_SV_DIR := $(shell pydebug sources --sv-dir)
    ```
-   Both commands return only the shared VIP/kit files — testbench templates
-   are intentionally excluded (`bridge_utils.py` filters `sv_kit/templates/`
-   out), so this is safe to compile verbatim alongside your own
-   `tb_top_<soc>.sv` without pulling in an unrelated SoC's top module. This
-   works from **any** Makefile in **any** project, on any machine where
+   `pydebug sources --sv` (no `-dir`) lists every shared VIP/kit `.sv` file
+   individually, recursively, across the kit's `model/`/`agents/`/
+   `sequences/`/`assertions/`/`fcov/`/`env/` subdirectories — testbench
+   templates are intentionally excluded (`bridge_utils.py` filters
+   `sv/templates/` out), so this is safe to compile verbatim alongside your
+   own `tb_top_<soc>.sv` without pulling in an unrelated SoC's top module.
+   This works from **any** Makefile in **any** project, on any machine where
    `pip install`'d `pydebug` is on `PATH` — see `cva6_sim/Makefile` and
    `ibex_sim/Makefile` for two complete, real examples.
 
@@ -254,7 +256,7 @@ Issues actually hit during real bring-up, and their fixes:
      it's ready) to your run script — leftover processes holding ports from
      a previous failed run is a common false-failure cause.
 - **`pydebug sources --sv` leaking testbench templates into a shared-kit
-  file list.** Fixed in `bridge_utils.py` (excludes `sv_kit/templates/`
+  file list.** Fixed in `bridge_utils.py` (excludes `sv/templates/`
   from the shared-kit glob) — if you're on an older package version,
   exclude that directory yourself in your Makefile's file list.
 - **A board's vendor example OpenOCD config defaults to the wrong part's
