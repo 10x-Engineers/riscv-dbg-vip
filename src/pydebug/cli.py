@@ -83,6 +83,30 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.hart_selection_sequence",
         "builder": "build_hart_selection_sequence",
     },
+    "gpr_write": {
+        "module": "pydebug.sequences.gpr_write_sequence",
+        "builder": "build_gpr_write_sequence",
+    },
+    "csr_access": {
+        "module": "pydebug.sequences.csr_access_sequence",
+        "builder": "build_csr_access_sequence",
+    },
+    "program_buffer": {
+        "module": "pydebug.sequences.program_buffer_sequence",
+        "builder": "build_program_buffer_sequence",
+    },
+    "single_step": {
+        "module": "pydebug.sequences.single_step_sequence",
+        "builder": "build_single_step_sequence",
+    },
+    "sw_breakpoint_progbuf": {
+        "module": "pydebug.sequences.sw_breakpoint_progbuf_sequence",
+        "builder": "build_sw_breakpoint_progbuf_sequence",
+    },
+    "external_trigger": {
+        "module": "pydebug.sequences.external_trigger_sequence",
+        "builder": "build_external_trigger_sequence",
+    },
 }
 
 

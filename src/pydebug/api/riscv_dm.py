@@ -37,6 +37,9 @@ class DMI:
     HARTINFO    = 0x12
     ABSTRACTCS  = 0x16
     COMMAND     = 0x17
+    PROGBUF0    = 0x20
+    PROGBUF15   = 0x2F
+    DMCS2       = 0x32  # spec v1.0 only -- no DMI 0x32 register exists pre-v1.0
     SBCS        = 0x38
     SBADDRESS0  = 0x39
     SBDATA0     = 0x3C
@@ -179,6 +182,48 @@ def version(dmstatus: int) -> int:
     return dmstatus & 0xF
 
 
+# ── dmcs2 field helpers (spec v1.0 #3.14.3 -- halt groups #404, resume groups
+# #506) ────────────────────────────────────────────────────────────────────────
+#
+# No DMI 0x32 register exists at all pre-v1.0 -- this is only reachable when
+# running against a v1.0-compliant DM. Bit positions confirmed against the
+# v1.0 riscv-dbg fork's own dm_pkg.sv `dmcs2_t` packed struct
+# (CVA6-fork/corev_apu/riscv-dbg/src/dm_pkg.sv) rather than re-derived from
+# the spec text alone: hgselect=bit0, hgwrite=bit1 (W1), group=bits[6:2],
+# dmexttrigger=bits[10:7], grouptype=bit11. On CVA6's current v1.0 fork every
+# field is tied to the "not implemented" value (halt/resume groups aren't
+# wired up on this target) -- TC-HG-001 exists specifically to observe and
+# report whatever a given DUT actually does here, not to assume either way.
+
+def dmcs2(
+    hgselect:     bool = False,
+    hgwrite:      bool = False,
+    group:        int  = 0,
+    dmexttrigger: int  = 0,
+    grouptype:    bool = False,
+) -> int:
+    """Encode a dmcs2 (DMI 0x32) word."""
+    v  = (1 if hgselect  else 0)
+    v |= (1 if hgwrite   else 0) << 1
+    v |= (group & 0x1F)          << 2
+    v |= (dmexttrigger & 0xF)    << 7
+    v |= (1 if grouptype else 0) << 11
+    return v
+
+
+def dmcs2_hgselect(word: int) -> bool:
+    return bool(word & 1)
+
+def dmcs2_group(word: int) -> int:
+    return (word >> 2) & 0x1F
+
+def dmcs2_dmexttrigger(word: int) -> int:
+    return (word >> 7) & 0xF
+
+def dmcs2_grouptype(word: int) -> bool:
+    return bool((word >> 11) & 1)
+
+
 # ── Core commands ─────────────────────────────────────────────────────────────
 
 class RISCVDebug:
@@ -220,6 +265,28 @@ class RISCVDebug:
         log.info("[DM] dmstatus=0x%08x  version=%d", status, v)
         if v == 0:
             raise DebugError("DM version=0 — Debug Module not present or not responding")
+
+    def deactivate(self) -> None:
+        """
+        Deassert dmactive — resets the Debug Module to its reset state.
+
+        Translates to: write dmcontrol with dmactive=0
+        Spec #3.14.2 dmactive: "This bit serves as a reset signal for the
+        Debug Module itself ... When this value is written, the module's
+        state, including authentication mechanism, takes its reset values
+        (the dmactive bit is the only bit which can be written to something
+        other than its reset value)." Any other bits written in the same
+        word are therefore without effect, so this writes dmactive=0 alone.
+        `sequences/dm_activation_sequence.py` (TC-DMA-001/002) already
+        exercises this exact write via the lower-level `write_dmcontrol(
+        dmactive=False)` escape hatch, deliberately, to name the field being
+        tested explicitly — this method is the named convenience primitive
+        for every other/future caller that just wants "deactivate," the same
+        way `activate()` sits alongside `write_dmcontrol(dmactive=True, ...)`.
+        """
+        log.info("[DM] deactivate: writing dmcontrol dmactive=0")
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=False))
+        self._hartsel = 0
 
     # ── Hart selection ────────────────────────────────────────────────────────
 
@@ -279,6 +346,27 @@ class RISCVDebug:
         )
         self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=False, hartsel=self._hartsel))
         log.info("[DM] resume: hart is running ✓")
+
+    def resume_no_wait(self) -> None:
+        """
+        Request resume without polling dmstatus.allrunning (spec #3.5).
+
+        Fixes a real bug found this session (GitHub issue #105): single-step
+        (`dcsr.step=1`) executes exactly one instruction and re-halts so
+        quickly that `allrunning` may never be observed asserted by a
+        DMI-speed poll — `resume()`'s wait-for-allrunning then times out
+        even though the step itself completed correctly. Ordinary resume
+        should keep using `resume()`, where `allrunning` is a reliable
+        observable; single-step callers should use this method instead and
+        poll for re-halt directly (see `single_step_sequence.py`), never for
+        `allrunning`.
+
+        Translates to: write dmcontrol resumereq=1, then resumereq=0 —
+        no poll in between.
+        """
+        log.info("[DM] resume_no_wait: requesting resume (no allrunning poll)")
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=True, hartsel=self._hartsel))
+        self.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=False, hartsel=self._hartsel))
 
     # ── Reset control (#3.2, #3.14.2) ────────────────────────────────────────
 
@@ -427,6 +515,108 @@ class RISCVDebug:
         cmd = (0 << 24) | (2 << 20) | (regno & 0xFFFF) | (1 << 17) | (1 << 16)  # write=1
         self.t.write(DMI.COMMAND, cmd)
         self._wait_abstractcs()
+
+    def read_abstractcs(self) -> int:
+        """
+        Raw abstractcs (DMI 0x16) word.
+
+        TC-AC-013: progbufsize/datacount/impebreak discovery — the gate every
+        Program Buffer row (TC-PB-*) and every multi-slot Access Register row
+        assumes has already run before relying on a specific slot count.
+        """
+        return self.t.read(DMI.ABSTRACTCS)
+
+    # ── Program Buffer (#3.8, optional) ──────────────────────────────────────
+
+    def write_progbuf(self, index: int, instruction: int) -> None:
+        """
+        Write one 32-bit instruction word into Program Buffer slot `index`
+        (TC-PB-001 write/read-back).
+
+        Translates to: write progbuf<index> (DMI 0x20+index). Implemented
+        slot count is abstractcs.progbufsize (read_abstractcs(), TC-AC-013) —
+        this method does not itself range-check `index` against it.
+        """
+        log.debug("[DM] write_progbuf[%d]: 0x%08x", index, instruction)
+        self.t.write(DMI.PROGBUF0 + index, instruction)
+
+    def read_progbuf(self, index: int) -> int:
+        """Read back Program Buffer slot `index` (TC-PB-001/TC-PB-002)."""
+        val = self.t.read(DMI.PROGBUF0 + index)
+        log.debug("[DM] read_progbuf[%d] -> 0x%08x", index, val)
+        return val
+
+    def execute_progbuf(self) -> None:
+        """
+        Trigger execution of the Program Buffer exactly once (TC-PB-003,
+        TC-AC-010).
+
+        Translates to: write command with cmdtype=0 (Access Register),
+        postexec=1, transfer=0. Spec #3.7.1.1 postexec: "Execute the program
+        in the Program Buffer exactly once after performing the transfer, if
+        any." No register transfer is requested here — only the postexec
+        side effect — so the hart must already be halted and the buffer
+        already loaded (write_progbuf()) before calling this.
+        """
+        log.info("[DM] execute_progbuf: triggering Program Buffer via postexec")
+        cmd = (0 << 24) | (1 << 18)  # cmdtype=0, postexec=1, transfer=0
+        self.t.write(DMI.COMMAND, cmd)
+        self._wait_abstractcs()
+
+    # ── Sdext Debug-Mode CSRs / single-step (#4.5, #4.8) ─────────────────────
+
+    #: dcsr CSR number, spec #4.8 (dpc is 0x7B1, already used by get_pc()).
+    DCSR_REGNO = 0x07B0
+
+    def read_dcsr(self) -> int:
+        """Read dcsr via abstract command (TC-DCSR-* baseline)."""
+        return self.read_gpr(self.DCSR_REGNO)
+
+    def write_dcsr(self, value: int) -> None:
+        """Write dcsr via abstract command."""
+        self.write_gpr(self.DCSR_REGNO, value)
+
+    def set_step(self, enable: bool = True) -> None:
+        """
+        Enable or disable hardware single-step (spec #4.5, dcsr.step, bit 2).
+
+        Reads the current dcsr and flips only bit 2, preserving every other
+        field (ebreak*/prv/etc.) rather than blindly overwriting the whole
+        register — same discipline as write_dmcontrol() preserving hartsel.
+        """
+        dcsr = self.read_dcsr()
+        if enable:
+            dcsr |= (1 << 2)
+        else:
+            dcsr &= ~(1 << 2)
+        self.write_dcsr(dcsr)
+
+    def get_dcsr_cause(self) -> int:
+        """
+        Read dcsr.cause (bits[8:6]) — why the hart last entered Debug Mode
+        (spec #4.8). Encodings: 1=ebreak, 2=trigger, 3=haltreq, 4=step,
+        5=resethaltreq, 6=group, 7=other. TC-DCSR-001/TC-SSTEP-001's check.
+        """
+        return (self.read_dcsr() >> 6) & 0x7
+
+    # ── Halt groups / external trigger (#3.6, optional, spec v1.0 only) ──────
+
+    def write_dmcs2(self, **fields) -> int:
+        """
+        Write an arbitrary dmcs2 field combination (DMI 0x32, spec #3.6/
+        #3.14.3). Returns the encoded word written, so a caller can compare
+        it directly against the read-back (TC-HG-001).
+
+        No DMI 0x32 register exists at all pre-v1.0 — only meaningful against
+        a v1.0-compliant DM.
+        """
+        word = dmcs2(**fields)
+        self.t.write(DMI.DMCS2, word)
+        return word
+
+    def read_dmcs2(self) -> int:
+        """Raw dmcs2 (DMI 0x32) read-back word (TC-HG-001)."""
+        return self.t.read(DMI.DMCS2)
 
     # ── Memory access via system bus ─────────────────────────────────────────
 

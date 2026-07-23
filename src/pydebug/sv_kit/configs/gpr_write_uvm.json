@@ -1,0 +1,13 @@
+{
+    "scenario":  "gpr_write",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {
+        "regno":   "0x1005",
+        "pattern": "0xa5a5a5a5"
+    },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout":     300.0
+    }
+}

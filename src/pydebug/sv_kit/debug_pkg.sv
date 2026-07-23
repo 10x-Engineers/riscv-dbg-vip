@@ -14,6 +14,10 @@ package debug_pkg;
   `include "scoreboard.sv"
   // Must precede env.sv: env instantiates debug_coverage.
   `include "covergroups.sv"
+  // Must precede dm_checker.sv: the checker instantiates dm_ref_model.
+  `include "dm_ref_model.sv"
+  // Must precede env.sv: env instantiates dm_checker.
+  `include "dm_checker.sv"
   `include "env.sv"
   `include "py_bridge.sv"
   `include "rv_dbg_base_test.sv"
