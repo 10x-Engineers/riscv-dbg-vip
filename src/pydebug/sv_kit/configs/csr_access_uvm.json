@@ -1,0 +1,13 @@
+{
+    "scenario":  "csr_access",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {
+        "pattern0": "0xc5c5c5c5",
+        "pattern1": "0x3a3a3a3a"
+    },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout":     300.0
+    }
+}
