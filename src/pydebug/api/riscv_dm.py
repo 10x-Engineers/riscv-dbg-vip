@@ -43,6 +43,7 @@ class DMI:
     SBCS        = 0x38
     SBADDRESS0  = 0x39
     SBDATA0     = 0x3C
+    HALTSUM0    = 0x40
 
 # ── dmcontrol field helpers ───────────────────────────────────────────────────
 #
@@ -487,6 +488,16 @@ class RISCVDebug:
     def read_dmcontrol(self) -> int:
         """Raw dmcontrol (DMI 0x10) read-back word — WARL/hartsel discovery."""
         return self.t.read(DMI.DMCONTROL)
+
+    def read_hartinfo(self) -> int:
+        """Raw hartinfo (DMI 0x12) word — nscratch/dataaccess/datasize/dataaddr
+        discovery for the selected hart (spec #3.14.3, TC-DIS-003)."""
+        return self.t.read(DMI.HARTINFO)
+
+    def read_haltsum0(self) -> int:
+        """Raw haltsum0 (DMI 0x40) word — bit i set iff hart i (low 32-hart
+        window) is halted (spec #3.14.9, TC-DHS-001)."""
+        return self.t.read(DMI.HALTSUM0)
 
     # ── GPR access (abstract commands) ───────────────────────────────────────
 

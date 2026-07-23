@@ -107,6 +107,22 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.external_trigger_sequence",
         "builder": "build_external_trigger_sequence",
     },
+    "sba": {
+        "module": "pydebug.sequences.sba_sequence",
+        "builder": "build_sba_sequence",
+    },
+    "report_halt_status": {
+        "module": "pydebug.sequences.report_halt_status_sequence",
+        "builder": "build_report_halt_status_sequence",
+    },
+    "discovery": {
+        "module": "pydebug.sequences.discovery_sequence",
+        "builder": "build_discovery_sequence",
+    },
+    "trigger": {
+        "module": "pydebug.sequences.trigger_sequence",
+        "builder": "build_trigger_sequence",
+    },
 }
 
 
