@@ -434,7 +434,11 @@ class dm_ref_model;
 
     word = '0;
     word[24]   = ndmreset;              // ndmresetpending
-    word[23]   = 1'b0;                  // stickyunavail (predictor.py always 0)
+    // stickyunavail (spec 1.0 #520): a global capability bit, not per-hart --
+    // declares whether allunavail/anyunavail behave sticky. Field doesn't
+    // exist pre-1.0 (reads 0); riscv-dbg's v1.0 fork (dut_version="1.0",
+    // version==4'd3) hardcodes it to 1 (riscv-dbg-vip#117).
+    word[23]   = (version == 4'd3);     // stickyunavail
     word[22]   = impebreak;
     word[19]   = havereset;             // allhavereset (single selected hart: all==any)
     word[18]   = havereset;             // anyhavereset

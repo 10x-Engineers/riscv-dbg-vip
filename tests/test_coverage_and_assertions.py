@@ -67,7 +67,7 @@ class _SnapshotBeforeTransport(ObservingTransport):
 def full_trace():
     """Runs all three passes described in the module docstring, returning
     (coverage_model, violations, per_pass_results)."""
-    cov = DebugCoverageModel(num_harts=2)
+    cov = DebugCoverageModel(num_harts=2, supports_stickyunavail=True)
     violations = []
     pass_session_results = []
 
@@ -132,11 +132,15 @@ def test_run_control_slice_coverage_closure(full_trace):
         f"stimulus: {unhit_with_tc}"
     )
 
-    # The number the coverage agent originally reported (16 TC-IDs -> 89/104,
+    # The number the coverage agent originally reported (16 TC-IDs -> 90/105,
     # 15 test-plan gaps) — pinned here so a future regression in either the
     # stimulus or the bin set is caught precisely, not just "coverage dropped."
-    assert report["summary"]["hit"] == 89, report["summary"]
-    assert report["summary"]["bins"] == 104, report["summary"]
+    # (90/105, not 89/104: riscv-dbg-vip#117 fixed dm_ref_model/predictor to
+    # predict dmstatus.stickyunavail=1 for v1.0 DUTs -- pass C's
+    # DMSTATUS_VERSION_1_0 config now legitimately hits that bin, moving it
+    # from excluded into the tracked (hit) set.)
+    assert report["summary"]["hit"] == 90, report["summary"]
+    assert report["summary"]["bins"] == 105, report["summary"]
     assert len(report["unhit"]) == 15, report["unhit"]
 
 

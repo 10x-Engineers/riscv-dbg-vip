@@ -24,6 +24,7 @@ from .registers import (
     DMCONTROL,
     DMSTATUS,
     DMSTATUS_VERSION_0_13,
+    DMSTATUS_VERSION_1_0,
     hartsel_of,
     register_at,
 )
@@ -395,7 +396,10 @@ class DMPredictor:
 
         return DMSTATUS.encode(
             ndmresetpending=int(self.ndmreset),
-            stickyunavail=0,
+            # Global capability bit, not per-hart (spec 1.0 #520); doesn't
+            # exist pre-1.0. riscv-dbg's v1.0 fork hardcodes it to 1
+            # (riscv-dbg-vip#117).
+            stickyunavail=int(self.version == DMSTATUS_VERSION_1_0),
             impebreak=int(self.impebreak),
             allhavereset=havereset["all"],
             anyhavereset=havereset["any"],
