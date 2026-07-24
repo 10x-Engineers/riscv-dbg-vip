@@ -18,7 +18,9 @@ Usage:
 from pydebug.api import RISCVDebug, DebugSession, StepResult
 from pydebug.api.riscv_dm import DMI
 
-#: A RAM address the tb preloads on both DUTs' system bus.
+#: Standard RISC-V DRAM base; valid RAM on CVA6's memory map. On
+#: ibex-demo-system this address is GPIO_START, not RAM (see issue #111) —
+#: Ibex configs must override `addr` to a real RAM address for this DUT.
 DEFAULT_SBA_ADDR = 0x80000000
 
 

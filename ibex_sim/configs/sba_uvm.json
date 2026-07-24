@@ -2,7 +2,9 @@
     "scenario":  "sba",
     "transport": "uvm",
     "mode":      "batch",
-    "params": {},
+    "params": {
+        "addr": "0x00110000"
+    },
     "uvm": {
         "socket_path": "/tmp/uvm_bridge.sock",
         "timeout":     300.0
