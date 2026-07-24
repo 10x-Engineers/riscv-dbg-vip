@@ -16,10 +16,10 @@ Three passes feed the same coverage model and violation list:
      and TC-RST-002/003's hartreset leg.
   B. CVA6-like (hasresethaltreq=False): exercises the TC-HOR-001 gate's "0"
      bin, which pass A (feature enabled) cannot reach.
-  C. A hypothetical v1.0-conformant DM (version=DMSTATUS_VERSION_1_0): exercises
-     dmstatus.version=v1_0, which neither project DUT (both v0.13) can produce
-     from stimulus alone -- see the finding in this suite's cover letter about
-     coverage.py's tc attribution for this bin.
+  C. The real declared CVA6 config (dut_configs/cva6.json, riscv-dbg-vip#117):
+     exercises dmstatus.version=v1_0 and its declared capability bits
+     (stickyunavail etc.) together -- Ibex stays v0.13, so this is still the
+     only pass that reaches the v1_0 bin.
 
 The one thing the earlier (stopped) instance of this task diagnosed and got
 right, preserved here: `invariants.check_all`'s `prev_state` argument must be a
@@ -35,9 +35,9 @@ import pytest
 from pydebug.api.observer import ObservingTransport
 from pydebug.api.riscv_dm import RISCVDebug
 from pydebug.model.coverage import DebugCoverageModel
+from pydebug.model.dut_config import load_dut_config
 from pydebug.model.invariants import check_all
 from pydebug.model.mock_transport import ModelBackedMockTransport
-from pydebug.model.registers import DMSTATUS_VERSION_1_0
 from pydebug.sequences.halt_on_reset_sequence import build_halt_on_reset_sequence
 from pydebug.sequences.reset_ctrl_sequence import build_reset_ctrl_sequence
 from pydebug.sequences.run_control_sequence import build_run_control_sequence
@@ -98,10 +98,15 @@ def full_trace():
         return [build_halt_on_reset_sequence(dm, mode="batch", num_harts=1).run()]
     run_pass(dict(num_harts=1, hasresethaltreq=False), pass_b)
 
-    # Pass C — a hypothetical v1.0-conformant DM, for dmstatus.version=v1_0.
+    # Pass C — the real declared CVA6 config (dut_configs/cva6.json), for
+    # dmstatus.version=v1_0 and its declared capability bits (stickyunavail
+    # etc.) together, rather than a hand-picked partial override that can
+    # silently miss a field -- exactly the gap riscv-dbg-vip#117 found
+    # (stickyunavail wasn't declared here, so its coverage bin was still
+    # wrongly excluded even after the model started predicting it).
     def pass_c(dm):
         return [build_run_control_sequence(dm, mode="batch").run()]
-    run_pass(dict(version=DMSTATUS_VERSION_1_0), pass_c)
+    run_pass(load_dut_config("cva6").predictor_kwargs(), pass_c)
 
     return cov, violations, pass_session_results
 
@@ -132,15 +137,19 @@ def test_run_control_slice_coverage_closure(full_trace):
         f"stimulus: {unhit_with_tc}"
     )
 
-    # The number the coverage agent originally reported (16 TC-IDs -> 90/105,
+    # The number the coverage agent originally reported (16 TC-IDs -> 89/104,
     # 15 test-plan gaps) — pinned here so a future regression in either the
     # stimulus or the bin set is caught precisely, not just "coverage dropped."
-    # (90/105, not 89/104: riscv-dbg-vip#117 fixed dm_ref_model/predictor to
-    # predict dmstatus.stickyunavail=1 for v1.0 DUTs -- pass C's
-    # DMSTATUS_VERSION_1_0 config now legitimately hits that bin, moving it
-    # from excluded into the tracked (hit) set.)
-    assert report["summary"]["hit"] == 90, report["summary"]
-    assert report["summary"]["bins"] == 105, report["summary"]
+    # riscv-dbg-vip#117 changed two things that net back to the same 89/104:
+    #  - dmstatus.stickyunavail=1 for v1.0 DUTs is now legitimately hit by
+    #    pass C's real CVA6 config (dut_configs/cva6.json), not excluded.
+    #  - dmstatus.version is confirmed NOT gated by dmactive on either real
+    #    DUT (dm_csrs.sv assigns it unconditionally), so version=0 pre-
+    #    activation was a model bug, not real behavior; "version.none" moved
+    #    from a (spuriously) hit bin to a properly excluded one, since no
+    #    real DUT stimulus can produce it.
+    assert report["summary"]["hit"] == 89, report["summary"]
+    assert report["summary"]["bins"] == 104, report["summary"]
     assert len(report["unhit"]) == 15, report["unhit"]
 
 

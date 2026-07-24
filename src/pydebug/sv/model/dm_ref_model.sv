@@ -60,6 +60,8 @@ class dm_ref_model;
   local bit          supports_hartreset;
   local bit          supports_hasel;
   local bit          resumeack_reset;
+  local bit          stickyunavail;
+  local bit          havereset_poweron;
 
   // ── DM-wide state ──────────────────────────────────────────────────────────
   hart_state_s harts[];
@@ -95,7 +97,16 @@ class dm_ref_model;
     bit          hasresethaltreq_  = 1'b1,
     bit          supports_hartreset_ = 1'b1,
     bit          supports_hasel_   = 1'b0,
-    bit          resumeack_reset_  = 1'b0
+    bit          resumeack_reset_  = 1'b0,
+    // stickyunavail (dmstatus bit 23) is reset="Preset" (spec dm_registers.xml):
+    // a declared, static implementation choice, same category as impebreak/
+    // hasresethaltreq above -- not derivable from version_ or anything else,
+    // must be told explicitly per target (riscv-dbg-vip#117).
+    bit          stickyunavail_    = 1'b0,
+    // havereset's reset value is spec-undefined (dm_registers.xml
+    // reset="-"); another declared, per-implementation choice, same
+    // category as stickyunavail_ above (riscv-dbg-vip#117).
+    bit          havereset_poweron_ = 1'b0
   );
     num_harts          = num_harts_;
     version            = version_;
@@ -105,6 +116,8 @@ class dm_ref_model;
     supports_hartreset = supports_hartreset_;
     supports_hasel     = supports_hasel_;
     resumeack_reset    = resumeack_reset_;
+    stickyunavail      = stickyunavail_;
+    havereset_poweron  = havereset_poweron_;
     reset_dm(1'b1);
   endfunction
 
@@ -136,7 +149,7 @@ class dm_ref_model;
       if (power_on || i >= prev.size()) begin
         harts[i].halted    = 1'b0;
         harts[i].running   = 1'b1;
-        harts[i].havereset = 1'b0;
+        harts[i].havereset = havereset_poweron;
       end else begin
         harts[i].halted    = prev[i].halted;
         harts[i].running   = prev[i].running;
@@ -434,11 +447,7 @@ class dm_ref_model;
 
     word = '0;
     word[24]   = ndmreset;              // ndmresetpending
-    // stickyunavail (spec 1.0 #520): a global capability bit, not per-hart --
-    // declares whether allunavail/anyunavail behave sticky. Field doesn't
-    // exist pre-1.0 (reads 0); riscv-dbg's v1.0 fork (dut_version="1.0",
-    // version==4'd3) hardcodes it to 1 (riscv-dbg-vip#117).
-    word[23]   = (version == 4'd3);     // stickyunavail
+    word[23]   = stickyunavail;         // #520, declared capability -- see constructor
     word[22]   = impebreak;
     word[19]   = havereset;             // allhavereset (single selected hart: all==any)
     word[18]   = havereset;             // anyhavereset
@@ -456,7 +465,11 @@ class dm_ref_model;
     word[6]    = 1'b0;                  // authbusy (predictor.py always 0)
     word[5]    = hasresethaltreq;
     word[4]    = 1'b0;                  // confstrptrvalid (predictor.py always 0)
-    word[3:0]  = dmactive ? version : 4'h0;
+    // version is NOT gated by dmactive on either real DUT: dm_csrs.sv
+    // assigns dmstatus.version unconditionally on both, confirmed by a
+    // pre-activation dmstatus read returning the true version, not 0
+    // (riscv-dbg-vip#117).
+    word[3:0]  = version;
     return word;
   endfunction
 

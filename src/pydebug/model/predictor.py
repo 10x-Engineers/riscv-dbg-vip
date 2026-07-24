@@ -24,7 +24,6 @@ from .registers import (
     DMCONTROL,
     DMSTATUS,
     DMSTATUS_VERSION_0_13,
-    DMSTATUS_VERSION_1_0,
     hartsel_of,
     register_at,
 )
@@ -93,6 +92,8 @@ class DMPredictor:
         supports_hartreset: bool = True,
         supports_hasel: bool = False,
         resumeack_reset: bool = False,
+        stickyunavail: bool = False,
+        havereset_poweron: bool = False,
     ):
         """
         Args:
@@ -117,6 +118,14 @@ class DMPredictor:
                 explicitly permits either 0 or 1 ("except for resume ack, which may
                 reset to either 0 or 1"), so this is implementation-defined and
                 must not be asserted on generically.
+            stickyunavail: dmstatus.stickyunavail (#3.14.1, reset="Preset") — a
+                declared capability bit, not derivable from version or anything
+                else: whether allunavail/anyunavail behave sticky. Must be told
+                explicitly per target (riscv-dbg-vip#117).
+            havereset_poweron: Whether a hart's havereset bit reads 1 immediately
+                after power-on, before any DMI activity (#3.2's reset value for
+                havereset is implementation-defined, "-"). Cleared the moment
+                anything acks it (e.g. activate()'s bundled ackhavereset=1).
         """
         self.num_harts = num_harts
         self.version = version
@@ -126,6 +135,8 @@ class DMPredictor:
         self.supports_hartreset = supports_hartreset
         self.supports_hasel = supports_hasel
         self.resumeack_reset = resumeack_reset
+        self.stickyunavail = stickyunavail
+        self.havereset_poweron = havereset_poweron
 
         self.harts: List[HartState] = []
         self.dmactive = False
@@ -168,7 +179,7 @@ class DMPredictor:
             if power_on:
                 h.halted = False
                 h.running = True
-                h.havereset = False
+                h.havereset = self.havereset_poweron
             else:
                 # Preserve hart-side signals across a DM reset (see docstring).
                 h.halted = prev[i].halted if i < len(prev) else False
@@ -396,10 +407,7 @@ class DMPredictor:
 
         return DMSTATUS.encode(
             ndmresetpending=int(self.ndmreset),
-            # Global capability bit, not per-hart (spec 1.0 #520); doesn't
-            # exist pre-1.0. riscv-dbg's v1.0 fork hardcodes it to 1
-            # (riscv-dbg-vip#117).
-            stickyunavail=int(self.version == DMSTATUS_VERSION_1_0),
+            stickyunavail=int(self.stickyunavail),
             impebreak=int(self.impebreak),
             allhavereset=havereset["all"],
             anyhavereset=havereset["any"],
@@ -417,7 +425,11 @@ class DMPredictor:
             authbusy=0,
             hasresethaltreq=int(self.hasresethaltreq),
             confstrptrvalid=0,
-            version=self.version if self.dmactive else 0,
+            # NOT gated by dmactive on either real DUT: dm_csrs.sv assigns
+            # dmstatus.version unconditionally on both, confirmed by a
+            # pre-activation dmstatus read returning the true version, not 0
+            # (riscv-dbg-vip#117).
+            version=self.version,
         )
 
     def _expect_dmcontrol(self) -> int:

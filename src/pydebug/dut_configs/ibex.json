@@ -1,0 +1,13 @@
+{
+    "dut": "ibex",
+    "riscv_dbg_source": "vendored PULP riscv-dbg, untouched (ibex-demo-system/vendor/pulp_riscv_dbg)",
+    "version": "0.13",
+    "authenticated": true,
+    "impebreak": false,
+    "hasresethaltreq": false,
+    "supports_hartreset": true,
+    "supports_hasel": false,
+    "resumeack_reset": false,
+    "stickyunavail": false,
+    "havereset_poweron": true
+}

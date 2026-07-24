@@ -1,0 +1,13 @@
+{
+    "dut": "cva6",
+    "riscv_dbg_source": "10x-Engineers/riscv-dbg@features/riscv-debug-update (CVA6-fork/corev_apu/riscv-dbg submodule pin)",
+    "version": "1.0",
+    "authenticated": true,
+    "impebreak": false,
+    "hasresethaltreq": false,
+    "supports_hartreset": true,
+    "supports_hasel": false,
+    "resumeack_reset": false,
+    "stickyunavail": true,
+    "havereset_poweron": true
+}

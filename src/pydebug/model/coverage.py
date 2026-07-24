@@ -432,13 +432,16 @@ class DebugCoverageModel:
 
         # dmstatus.version — an enumeration, not a bit (#3.14.1 version).
         g = "dmstatus.version"
-        self._add(
+        self._exclude(
             g,
             "none",
-            "#3.14.1 version",
-            "version=0: no DM present, or dmactive=0 so \"version might not return "
-            "correct data\" (#3.14.2 dmactive=0)",
-            "TC-RC-001",
+            "version=0 means either \"no DM present\" (unreachable -- this model "
+            "always represents an implemented DM) or dmactive=0, where #3.14.2 "
+            "PERMITS (\"might not return correct data\") but does not require "
+            "returning an incorrect version. Confirmed against both DUTs' RTL "
+            "(dm_csrs.sv): dmstatus.version is assigned unconditionally, not "
+            "gated by dmactive -- neither project DUT exercises this allowance "
+            "(riscv-dbg-vip#117).",
         )
         self._add(g, "v0_13", "#3.14.1 version", "version=2: DM conforms to 0.13", "TC-RC-001")
         self._add(g, "v1_0", "#3.14.1 version", "version=3: DM conforms to 1.0", "TC-RC-001")
