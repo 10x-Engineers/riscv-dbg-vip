@@ -5,7 +5,7 @@
     "authenticated": true,
     "impebreak": false,
     "hasresethaltreq": false,
-    "supports_hartreset": true,
+    "supports_hartreset": false,
     "supports_hasel": false,
     "resumeack_reset": false,
     "stickyunavail": false,

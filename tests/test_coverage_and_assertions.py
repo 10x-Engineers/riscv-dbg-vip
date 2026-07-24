@@ -148,8 +148,20 @@ def test_run_control_slice_coverage_closure(full_trace):
     #    activation was a model bug, not real behavior; "version.none" moved
     #    from a (spuriously) hit bin to a properly excluded one, since no
     #    real DUT stimulus can produce it.
-    assert report["summary"]["hit"] == 89, report["summary"]
-    assert report["summary"]["bins"] == 104, report["summary"]
+    # 88/103/15 (was 89/104/15): cross.hart_state_transition.halted_to_in_
+    # reset moved from a (wrongly) tc-owned unhit bin to a properly excluded
+    # one. It looked reachable via ndmreset while a hart is halted, but a
+    # real CVA6 UVM run proved otherwise: both DUTs' dm_mem.sv only resets
+    # halted_q on !rst_ni (the DM's own reset) -- ndmreset deliberately
+    # doesn't touch the DM's own registers, so an already-halted hart stays
+    # reported halted throughout an ndmreset cycle, unaffected by it. Its
+    # other candidate mechanism, hartreset (TC-RST-002), is WARL-tied to 0
+    # on both DUTs. Neither produces this transition on real hardware, so
+    # it is excluded (model/coverage.py), not forced with stimulus that
+    # doesn't actually work (riscv-dbg-vip, 2026-07-25) -- verified via the
+    # unhit_with_tc check above that every TC-ID-owned bin is covered.
+    assert report["summary"]["hit"] == 88, report["summary"]
+    assert report["summary"]["bins"] == 103, report["summary"]
     assert len(report["unhit"]) == 15, report["unhit"]
 
 

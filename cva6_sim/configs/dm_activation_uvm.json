@@ -1,0 +1,10 @@
+{
+    "scenario":  "dm_activation",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {},
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout":     300.0
+    }
+}

@@ -63,4 +63,33 @@ def build_external_trigger_sequence(
         )
     session.add_step("TC-HG-001: dmcs2 halt-group support discovery", tc_hg_001)
 
+    # ── TC-HG-001 (cont'd): remaining single-field discovery combinations ──
+    # TC-HG-001 itself only needs one hart -- the check above already covered
+    # hgselect=1/group=nonzero; this rounds out the other side of each field
+    # (hgselect=0 halt-group addressing, grouptype=1 ext-trigger addressing,
+    # group=0 ungrouped) the same discovery way, still single-hart, still no
+    # assertion beyond "the write/read round trip completed" per TC-HG-001's
+    # own wording -- not a new TC-ID, just the rest of the same discovery.
+    def tc_hg_001_sweep():
+        written_a = dm.write_dmcs2(hgselect=False, group=0)
+        readback_a = dm.read_dmcs2()
+        written_b = dm.write_dmcs2(grouptype=True)
+        readback_b = dm.read_dmcs2()
+        # Restore to TC-HG-001's own end state (hgselect=1, group=5) so later
+        # steps in this session see the same fixture they always have.
+        dm.write_dmcs2(hgselect=True, group=0x5)
+        return StepResult(
+            ok=True,
+            msg=f"TC-HG-001 (cont'd): wrote dmcs2=0x{written_a:08x} "
+                f"(hgselect=0, group=0), read back 0x{readback_a:08x}; "
+                f"wrote dmcs2=0x{written_b:08x} (grouptype=1), read back "
+                f"0x{readback_b:08x} -- same discovery-only reporting as "
+                f"TC-HG-001, rounding out the field combinations a debugger "
+                f"probing this register would actually try",
+        )
+    session.add_step(
+        "TC-HG-001 (cont'd): remaining dmcs2 field-combination discovery",
+        tc_hg_001_sweep,
+    )
+
     return session

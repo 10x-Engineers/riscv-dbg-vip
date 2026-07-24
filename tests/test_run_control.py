@@ -94,7 +94,8 @@ def test_tc_rc_006_halt_resume_response_latency(rc_results):
 @pytest.mark.feature("run_control")
 def test_tc_rc_007_resumereq_while_in_reset(rc_results):
     """TC-RC-007: resumereq written while the hart is held in ndmreset --
-    neither halted nor running while in reset (spec #3.2), so resumereq must
-    not spuriously produce a running/halted transition."""
+    #3.5 only sends a resume request to a HALTED hart, so a hart that was
+    never halted (in reset, per both DUTs' real ~halted & ~unavailable
+    running formula, #3.2) must not spuriously become halted or resume-ack."""
     for r in _steps_for(rc_results, "TC-RC-007"):
         assert r.ok, r.msg

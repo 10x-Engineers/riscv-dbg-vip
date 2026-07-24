@@ -225,12 +225,19 @@ def build_run_control_sequence(
     # ── TC-RC-007: resumereq while the hart is in reset ───────────────────
     def tc_rc_007():
         # Precondition: running (TC-RC-006 left it resumed). Hold the hart in
-        # reset via ndmreset — #3.2: while asserted a hart is neither halted
-        # nor running. resumereq's own rule (#3.5: "each selected hart's
-        # resume ack bit is cleared and each selected, HALTED hart is sent a
-        # resume request") only fires the second half for a halted hart, so a
-        # hart that is in reset (neither state) must not spuriously transition
-        # to running just because resumereq was written.
+        # reset via ndmreset. #3.2 leaves which of the four DM states
+        # (non-existent/unavailable/running/halted) a resetting hart reports
+        # as "implementation dependent" — both project DUTs' dm_csrs.sv
+        # compute allrunning/anyrunning combinationally as
+        # ~halted & ~unavailable, so a hart held in ndmreset (halted forced
+        # 0) reads running=1 throughout the window, not "neither" (confirmed
+        # against real RTL, riscv-dbg-vip#117 investigation, 2026-07-25 —
+        # this step used to assert running=False, which was itself the bug).
+        # What #3.5 actually constrains is resumereq's *effect*: "each
+        # selected, HALTED hart is sent a resume request" — a hart that was
+        # never halted (as here) must not spuriously become halted, and its
+        # resume-ack must not spuriously set, matching TC-RC-004's identical
+        # rule for "resumereq on a running hart."
         dm.ndmreset(True)
         # write_dmcontrol()'s unset fields default to 0/False (dmcontrol writes
         # are absolute, not incremental) — ndmreset must be passed explicitly
@@ -238,14 +245,15 @@ def build_run_control_sequence(
         # reset before resumereq's effect (or lack of one) can be observed.
         dm.write_dmcontrol(resumereq=True, ndmreset=True)
         word = dm.read_dmstatus()
-        in_reset_still = not anyhalted(word) and not anyrunning(word)
+        no_spurious_halt = not anyhalted(word) and not anyresumeack(word)
         dm.write_dmcontrol(resumereq=False, ndmreset=True)
         dm.ndmreset(False)
         return StepResult(
-            ok=in_reset_still,
+            ok=no_spurious_halt,
             msg=f"TC-RC-007: resumereq written while in ndmreset — "
-                f"anyhalted={anyhalted(word)} anyrunning={anyrunning(word)} "
-                f"(expected both False: reset, not resumereq, governs this window, #3.2)",
+                f"anyhalted={anyhalted(word)} anyresumeack={anyresumeack(word)} "
+                f"(expected both False: resumereq only affects a HALTED hart, "
+                f"#3.5; this hart was never halted while in reset, #3.2)",
         )
     session.add_step(
         "TC-RC-007: resumereq while the hart is in reset (spec #3.2)",

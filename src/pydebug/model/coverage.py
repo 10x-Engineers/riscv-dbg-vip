@@ -557,15 +557,20 @@ class DebugCoverageModel:
             g,
             "running_to_in_reset",
             "#3.2",
-            "reset asserted on a running hart (neither halted nor running)",
+            "reset asserted on a running hart",
             "TC-RST-001",
         )
-        self._add(
+        self._exclude(
             g,
             "halted_to_in_reset",
-            "#3.2",
-            "reset asserted on a halted hart",
-            "TC-RST-002",
+            "reset asserted on a halted hart (#3.2). Unreachable via any "
+            "stimulus on either project DUT: not via hartreset (WARL-tied "
+            "to 0, confirmed via TC-RST-002's own discovery check), and not "
+            "via ndmreset either -- both DUTs' dm_mem.sv only resets "
+            "halted_q on !rst_ni (the DM's own reset), and ndmreset "
+            "deliberately does not touch the DM's own registers, so a "
+            "hart already halted stays reported halted throughout an "
+            "ndmreset cycle, unaffected by it.",
         )
         self._add(
             g,
@@ -843,7 +848,7 @@ class DebugCoverageModel:
         self._havereset = bool(f["anyhavereset"])
 
         # ── Observed hart state, and the transition into it ───────────────────
-        state = self._state_from_dmstatus(f)
+        state = self._state_from_dmstatus(f, self._ndmreset)
         prev, prev_hartsel = self._state, self._state_hartsel
         self._state, self._state_hartsel = state, self._hartsel
 
@@ -863,7 +868,7 @@ class DebugCoverageModel:
             self._hit("cross.hart_state_transition", f"{prev}_to_{state}")
 
     @staticmethod
-    def _state_from_dmstatus(f: Dict[str, int]) -> str:
+    def _state_from_dmstatus(f: Dict[str, int], ndmreset: bool) -> str:
         """Infer the selected hart's state from one dmstatus word.
 
         Order matters. A nonexistent hart reports neither halted nor running and
@@ -871,6 +876,16 @@ class DebugCoverageModel:
         anynonexistent is the only thing that tells them apart, so it is checked
         first. Likewise unavailable (#3.2: "While the reset is on-going, harts are
         either in the running state ... or in the unavailable state").
+
+        A hart held in ndmreset reads anyrunning=1 on both project DUTs --
+        dm_csrs.sv computes allrunning/anyrunning combinationally as
+        ~halted & ~unavailable, with no separate "in reset" encoding, so it
+        is NOT distinguishable from a genuinely running hart via dmstatus
+        bits alone (confirmed against real RTL, riscv-dbg-vip investigation,
+        2026-07-25). ndmreset itself IS separately observable though (the
+        dmcontrol write that asserted it, tracked in self._ndmreset) --
+        consult that instead of trying to infer "in reset" from a read that
+        cannot actually carry it.
         """
         if f["anynonexistent"]:
             return ST_NONEXISTENT
@@ -878,6 +893,8 @@ class DebugCoverageModel:
             return ST_UNAVAIL
         if f["anyhalted"]:
             return ST_HALTED
+        if f["anyrunning"] and ndmreset:
+            return ST_IN_RESET
         if f["anyrunning"]:
             return ST_RUNNING
         return ST_IN_RESET

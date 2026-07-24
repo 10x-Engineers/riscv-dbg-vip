@@ -1143,10 +1143,22 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     // anynonexistent is the only thing that tells them apart, so it is checked
     // first. Likewise unavailable (#3.2: "While the reset is on-going, harts are
     // either in the running state ... or in the unavailable state").
+    //
+    // A hart held in ndmreset reads running=1 on both project DUTs --
+    // dm_csrs.sv computes allrunning/anyrunning combinationally as
+    // ~halted & ~unavailable, with no separate "in reset" encoding, so it is
+    // NOT distinguishable from a genuinely running hart via dmstatus bits
+    // alone (confirmed against real RTL, riscv-dbg-vip investigation,
+    // 2026-07-25). ndmreset itself IS separately observable, though: this
+    // subscriber already tracks it from the dmcontrol write that asserted
+    // it (the `ndmreset` member below), same as dm_ref_model.sv/predictor.py
+    // do for their own state tracking -- consult that instead of trying to
+    // infer "in reset" from a read that cannot actually carry it.
     function hart_state_e decode_hart_state(logic [31:0] r);
         if (r[DMS_ANYNONEXISTENT]) return ST_NONEXISTENT;
         if (r[DMS_ANYUNAVAIL])     return ST_UNAVAIL;
         if (r[DMS_ANYHALTED])      return ST_HALTED;
+        if (r[DMS_ANYRUNNING] && ndmreset) return ST_IN_RESET;
         if (r[DMS_ANYRUNNING])     return ST_RUNNING;
         return ST_IN_RESET;
     endfunction
