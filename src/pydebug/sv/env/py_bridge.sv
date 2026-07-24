@@ -28,6 +28,40 @@ class python_bridge extends uvm_component;
         super.new(name, parent);
     endfunction
 
+    // ── [DEBUG] register-name + key-field decode for issue debugging ───────
+    // Distinct from the [BRIDGE] READ/WRITE lines above (which only show the
+    // raw addr/data) — this exists so a log grep for "[DEBUG]" gives a
+    // human-readable transaction timeline to correlate against a waveform
+    // dump's $time, without having to mentally decode DMI addresses/fields.
+    function string decode_addr_name(logic [6:0] addr);
+        case (addr)
+            dm_defines_pkg::DM_ADDR_DMCONTROL:  return "dmcontrol";
+            dm_defines_pkg::DM_ADDR_DMSTATUS:   return "dmstatus";
+            dm_defines_pkg::DM_ADDR_HARTINFO:   return "hartinfo";
+            dm_defines_pkg::DM_ADDR_ABSTRACTCS: return "abstractcs";
+            dm_defines_pkg::DM_ADDR_COMMAND:    return "command";
+            dm_defines_pkg::DM_ADDR_DMCS2:      return "dmcs2";
+            dm_defines_pkg::DM_ADDR_SBCS:       return "sbcs";
+            dm_defines_pkg::DM_ADDR_HALTSUM0:   return "haltsum0";
+            default: begin
+                if (addr >= dm_defines_pkg::DM_ADDR_DATA0 && addr <= dm_defines_pkg::DM_ADDR_DATA11)
+                    return "data";
+                if (addr >= dm_defines_pkg::DM_ADDR_PROGBUF0 && addr <= dm_defines_pkg::DM_ADDR_PROGBUF15)
+                    return "progbuf";
+                return $sformatf("0x%02h", addr);
+            end
+        endcase
+    endfunction
+
+    function void debug_print(string dir, logic [6:0] addr, logic [31:0] data);
+        string reg_name = decode_addr_name(addr);
+        string extra = "";
+        if (reg_name == "abstractcs")
+            extra = $sformatf(" (busy=%0b cmderr=%0d)", data[12], data[10:8]);
+        `uvm_info("DEBUG", $sformatf("t=%0t %s %s (addr=0x%02h) data=0x%08h%s",
+            $time, dir, reg_name, addr, data, extra), UVM_LOW)
+    endfunction
+
     task serve(uvm_sequencer #(jtag_txn_c) sqr);
         int rc;
 
@@ -51,6 +85,7 @@ class python_bridge extends uvm_component;
                         `uvm_info("BRIDGE", $sformatf(
                             "READ  addr=0x%02h → data=0x%08h", addr, r_seq.rsp_data),
                             UVM_MEDIUM)
+                        debug_print("READ ", addr[6:0], r_seq.rsp_data);
                     end
                     2: begin  // DMI Write
                         jtag_dmi_write_seq w_seq;
@@ -62,6 +97,7 @@ class python_bridge extends uvm_component;
                         `uvm_info("BRIDGE", $sformatf(
                             "WRITE addr=0x%02h ← data=0x%08h", addr, data),
                             UVM_MEDIUM)
+                        debug_print("WRITE", addr[6:0], data);
                     end
                     3: begin  // TAP Reset
                         jtag_tap_reset_seq rst_seq;

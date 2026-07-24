@@ -121,6 +121,22 @@ module tb_top_soc;
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
     end
 
+    // ── Waveform dump (opt-in via +dump_waves) ─────────────────────────────
+    // Scoped to the Debug Module (dut.i_dm_top, which nests dm_csrs/dm_mem/
+    // dm_sba/dmi_jtag) plus the JTAG VIP interface, rather than the whole SoC
+    // — keeps the VCD small enough to script against for issue debugging.
+    initial begin
+        string wave_file;
+        if ($test$plusargs("dump_waves")) begin
+            wave_file = "sim_outputs/waves.vcd";
+            void'($value$plusargs("wave_file=%s", wave_file));
+            $dumpfile(wave_file);
+            $dumpvars(0, dut.i_dm_top);
+            $dumpvars(0, jtag_vif);
+            `uvm_info("TB_SOC", $sformatf("Waveform dump enabled: %s", wave_file), UVM_LOW)
+        end
+    end
+
     // ── Monitor bb_quit and signal via config_db ──────────────────────────
     initial begin
         if (jtag_use_openocd) begin
