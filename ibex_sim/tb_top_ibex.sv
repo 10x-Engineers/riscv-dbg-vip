@@ -133,16 +133,29 @@ module tb_top_ibex;
     end
 
     // ── Waveform dump (opt-in via +dump_waves) ─────────────────────────────
-    // Scoped to the Debug Module (dut.u_dm_top) plus the JTAG VIP interface —
-    // see cva6_sim/tb_top_cva6.sv's equivalent block for why the dump is
+    // Scoped to the Debug Module (dut.gen_dm_top.u_dm_top — it sits inside a
+    // generate-if block, not directly under dut) plus the JTAG VIP interface
+    // — see cva6_sim/tb_top_cva6.sv's equivalent block for why the dump is
     // scoped rather than whole-SoC.
+    //
+    // ibex_sim's soc_test runs fully optimized: vopt silently strips the
+    // internal DM signals this dumpvars call targets even though elaboration
+    // doesn't error, so a debug run here needs extra visibility. Prefer
+    // recompiling with `+acc` added to the vlog invocation (no vsim flag
+    // needed) over `-novopt` at vsim time — `-novopt` reliably trips
+    // Questa's own combinational-loop abort (vsim-3601, "Iteration limit
+    // 10000000 reached") within the first ~15-20us of any scenario on this
+    // design, before ever reaching the event under investigation, whereas
+    // `+acc` preserves almost all internal visibility without disabling
+    // optimization. (`+acc` still won't show pure pass-through nets with no
+    // intervening logic — that's a vopt optimization, not a dump bug.)
     initial begin
         string wave_file;
         if ($test$plusargs("dump_waves")) begin
             wave_file = "sim_outputs/waves.vcd";
             void'($value$plusargs("wave_file=%s", wave_file));
             $dumpfile(wave_file);
-            $dumpvars(0, dut.u_dm_top);
+            $dumpvars(0, dut.gen_dm_top.u_dm_top);
             $dumpvars(0, jtag_vif);
             `uvm_info("TB_IBEX", $sformatf("Waveform dump enabled: %s", wave_file), UVM_LOW)
         end
