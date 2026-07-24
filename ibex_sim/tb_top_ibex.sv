@@ -132,6 +132,22 @@ module tb_top_ibex;
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
     end
 
+    // ── Waveform dump (opt-in via +dump_waves) ─────────────────────────────
+    // Scoped to the Debug Module (dut.u_dm_top) plus the JTAG VIP interface —
+    // see cva6_sim/tb_top_cva6.sv's equivalent block for why the dump is
+    // scoped rather than whole-SoC.
+    initial begin
+        string wave_file;
+        if ($test$plusargs("dump_waves")) begin
+            wave_file = "sim_outputs/waves.vcd";
+            void'($value$plusargs("wave_file=%s", wave_file));
+            $dumpfile(wave_file);
+            $dumpvars(0, dut.u_dm_top);
+            $dumpvars(0, jtag_vif);
+            `uvm_info("TB_IBEX", $sformatf("Waveform dump enabled: %s", wave_file), UVM_LOW)
+        end
+    end
+
     // ── Monitor bb_quit and signal via config_db ─────────────────────────
     initial begin
         if (jtag_use_openocd) begin
