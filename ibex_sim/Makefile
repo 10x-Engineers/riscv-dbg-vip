@@ -53,6 +53,21 @@ ELF_PLUSARGS = $(if $(ELF),"+elf_file=$(abspath $(ELF))",)
 OPENOCD_SCENARIO ?= halt
 OPENOCD_IBEX_CFG ?= configs/openocd_bitbang_ibex.cfg
 
+# ── Functional-coverage UCDB collection ───────────────────────────────────────
+# Separate library (work_cov) so day-to-day debug runs (`soc_test`) keep using
+# the uninstrumented `work` library. Requires two things Questa doesn't do by
+# default: vlog must be compiled with +cover=<spec> (a runtime-only `-coverage`
+# on an uninstrumented library silently produces no UCDB — vsim-8634), and the
+# vsim -do script must set `onfinish stop` before `run -all`, because the UVM
+# `$finish` otherwise exits the batch process before the trailing
+# `coverage save` command ever runs.
+COV_LIB       = work_cov
+COV_DIR       = $(SIM_OUTPUT_DIR)/coverage
+RESULTS_DIR   = ../testplans/results
+UCDB_NAME     = $(basename $(notdir $(CFG_FILE)))
+# Every scenario config that drives real stimulus (excludes openocd/hw configs).
+COV_CONFIGS   = $(wildcard configs/*_uvm.json)
+
 uvm_bridge_soc.so: $(SRC_C_SOC)
 	gcc -shared -fPIC -std=c11 \
 	    -I"$(PYDEBUG_C_DIR)" \
@@ -107,8 +122,49 @@ soc_openocd: soc_compile
 	@echo "Starting OpenOCD + pydebug (scenario=$(OPENOCD_SCENARIO))..."
 	$(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config $(OPENOCD_IBEX_CFG) --log-level DEBUG
 
+soc_compile_cov: uvm_bridge_soc.so sw/$(notdir $(ELF))
+	vlib $(COV_LIB)
+	vlog $(QUESTA_FLAGS) +cover=sbceft $(IBEX_INCDIRS) \
+	    +define+PRIM_DEFAULT_IMPL=prim_pkg::ImplGeneric \
+	    +define+INC_ASSERT \
+	    +define+RVFI \
+	    -work $(COV_LIB) \
+	    -f flist_ibex.f \
+	    $(SRC_SV_KIT)
+
+# Run one scenario against the coverage-instrumented library, saving its own
+# UCDB named after the scenario config (re-running the same scenario refreshes
+# its UCDB rather than accumulating duplicates).
+soc_test_cov: soc_compile_cov
+	@mkdir -p $(COV_DIR)
+	$(VSIM_BATCH) -coverage -do "onfinish stop; run -all; coverage save $(COV_DIR)/$(UCDB_NAME).ucdb; quit -f" \
+	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc $(COV_LIB).tb_top_ibex \
+	     +UVM_TESTNAME=debug_test \
+	     +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	     $(ELF_PLUSARGS) \
+	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(COV_DIR)/$(UCDB_NAME).log
+
+# Run every *_uvm.json scenario config against the coverage library, each
+# producing its own UCDB under $(COV_DIR). Continues past a single scenario's
+# failure (-) so one broken/unimplemented scenario doesn't block the rest.
+coverage_regress: soc_compile_cov
+	@mkdir -p $(COV_DIR)
+	@for cfg in $(COV_CONFIGS); do \
+		echo "=== coverage run: $$cfg ==="; \
+		$(MAKE) --no-print-directory soc_test_cov CFG_FILE=$$cfg || \
+			echo "!!! scenario $$cfg failed, continuing !!!"; \
+	done
+
+# Merge every scenario's UCDB into one aggregate and report the true combined
+# functional-coverage percentage (bins hit in ANY run count as covered) —
+# this is the number no single scenario log can show on its own.
+coverage_merge:
+	@mkdir -p $(RESULTS_DIR)
+	vcover merge $(COV_DIR)/merged.ucdb $(filter-out $(COV_DIR)/merged.ucdb,$(wildcard $(COV_DIR)/*.ucdb))
+	vcover report -cvg -details $(COV_DIR)/merged.ucdb | tee $(RESULTS_DIR)/ibex_functional_coverage_merged.txt
+
 clean:
-	rm -rf work uvm_bridge_soc.so sim.log transcript vsim.wlf
+	rm -rf work $(COV_LIB) uvm_bridge_soc.so sim.log transcript vsim.wlf
 	rm -f sw/*.o sw/*.elf
 
-.PHONY: soc_compile soc_test soc_openocd clean
+.PHONY: soc_compile soc_test soc_openocd soc_compile_cov soc_test_cov coverage_regress coverage_merge clean

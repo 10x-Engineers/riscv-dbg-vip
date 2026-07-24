@@ -54,6 +54,18 @@ ELF_PLUSARGS = $(if $(ELF),+enable_boot "+elf_file=$(abspath $(ELF))",)
 OPENOCD_SCENARIO ?= halt
 OPENOCD_SOC_CFG  ?= configs/openocd_bitbang_soc.cfg
 
+# ── Functional-coverage UCDB collection ───────────────────────────────────────
+# See ../ibex_sim/Makefile's equivalent block for why both +cover=<spec> at
+# vlog time AND `onfinish stop` in the vsim -do script are required — a
+# runtime-only -coverage on an uninstrumented library silently produces no
+# UCDB (vsim-8634), and without `onfinish stop` the UVM $finish exits batch
+# mode before `coverage save` ever runs.
+COV_LIB       = work_cov
+COV_DIR       = $(SIM_OUTPUT_DIR)/coverage
+RESULTS_DIR   = ../testplans/results
+UCDB_NAME     = $(basename $(notdir $(CFG_FILE)))
+COV_CONFIGS   = $(wildcard configs/*_uvm.json)
+
 uvm_bridge_soc.so: $(SRC_C_SOC)
 	gcc -shared -fPIC -std=c11 \
 	    -I"$(PYDEBUG_C_DIR)" \
@@ -138,6 +150,103 @@ soc_compile: uvm_bridge_soc.so sw/$(notdir $(ELF))
 sw/$(notdir $(ELF)):
 	$(MAKE) -C sw
 
+soc_compile_cov: uvm_bridge_soc.so sw/$(notdir $(ELF))
+	vlib $(COV_LIB)
+	@export CVA6_REPO_DIR=$(CVA6_REPO_DIR); \
+	 export TARGET_CFG=cv64a6_imafdc_sv39; \
+	 export HPDCACHE_DIR=$(CVA6_REPO_DIR)/core/cache_subsystem/hpdcache; \
+	 python3 $(CVA6_REPO_DIR)/util/flist_flattener.py --print_incdir --print_newline $(CVA6_REPO_DIR)/core/Flist.cva6 > flist_soc.tmp
+	vlog $(QUESTA_FLAGS) +cover=sbceft +define+RISCV_VIP_MODE \
+	    +incdir+$(CVA6_REPO_DIR)/corev_apu/register_interface/include \
+	    +incdir+$(CVA6_REPO_DIR)/corev_apu/instr_tracing/ITI/include \
+	    +incdir+$(CVA6_REPO_DIR)/corev_apu/fpga/src/apb/include \
+	    +incdir+$(CVA6_REPO_DIR)/core/include/ \
+	    +incdir+$(CVA6_REPO_DIR)/vendor/pulp-platform/axi/include \
+	    -work $(COV_LIB) \
+	    -f flist_soc.tmp \
+	    $(CVA6_REPO_DIR)/core/include/config_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/instr_tracing/ITI/include/iti_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/fpga/src/apb/src/apb_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dm_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/ariane_soc_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/axi_intf.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/ariane_axi_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/ariane_axi_soc_pkg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/axi_mem_if/src/axi2mem.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/clint/*.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/debug_rom/debug_rom.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dm_csrs.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dm_mem.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dm_sba.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dm_top.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dmi_cdc.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dmi_jtag.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/riscv-dbg/src/dmi_jtag_tap.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/rv_plic/rtl/rv_plic_target.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/rv_plic/rtl/rv_plic_gateway.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/rv_plic/rtl/plic_regmap.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/rv_plic/rtl/plic_top.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/fpga/src/axi2apb/src/*.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/fpga/src/axi_slice/src/*.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/register_interface/src/apb_to_reg.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/register_interface/src/reg_intf.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/fpga/src/apb_timer/*.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/fpga/src/apb_uart/src/*.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/bootrom/bootrom.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/src/ariane.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi_riscv_atomics/src/*.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/rstgen_bypass.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/rstgen.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/addr_decode.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/stream_register.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_cut.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_join.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_delayer.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_to_axi_lite.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_id_prepend.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_atop_filter.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_err_slv.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_mux.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_demux.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/axi/src/axi_xbar.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/cdc_2phase.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/spill_register_flushable.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/spill_register.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/deprecated/fifo_v1.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/deprecated/fifo_v2.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/stream_delay.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/common_cells/src/lfsr_16bit.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/tech_cells_generic/src/deprecated/cluster_clk_cells.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/tech_cells_generic/src/deprecated/pulp_clk_cells.sv \
+	    $(CVA6_REPO_DIR)/vendor/pulp-platform/tech_cells_generic/src/rtl/tc_clk.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/common/uart.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/ariane_peripherals.sv \
+	    $(CVA6_REPO_DIR)/corev_apu/tb/ariane_testharness.sv \
+	    $(SRC_SV_KIT)
+	@rm -f flist_soc.tmp
+
+soc_test_cov: soc_compile_cov
+	@mkdir -p $(COV_DIR)
+	$(VSIM_BATCH) $(VSIM_SOC_FLAGS) -coverage -do "onfinish stop; run -all; coverage save $(COV_DIR)/$(UCDB_NAME).ucdb; quit -f" \
+	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc $(COV_LIB).tb_top_soc \
+	     +UVM_TESTNAME=debug_test \
+	     +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	     $(ELF_PLUSARGS) \
+	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(COV_DIR)/$(UCDB_NAME).log
+
+coverage_regress: soc_compile_cov
+	@mkdir -p $(COV_DIR)
+	@for cfg in $(COV_CONFIGS); do \
+		echo "=== coverage run: $$cfg ==="; \
+		$(MAKE) --no-print-directory soc_test_cov CFG_FILE=$$cfg || \
+			echo "!!! scenario $$cfg failed, continuing !!!"; \
+	done
+
+coverage_merge:
+	@mkdir -p $(RESULTS_DIR)
+	vcover merge $(COV_DIR)/merged.ucdb $(filter-out $(COV_DIR)/merged.ucdb,$(wildcard $(COV_DIR)/*.ucdb))
+	vcover report -cvg -details $(COV_DIR)/merged.ucdb | tee $(RESULTS_DIR)/cva6_functional_coverage_merged.txt
+
 soc_test: soc_compile
 	@mkdir -p $(SIM_OUTPUT_DIR); \
 	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/soc_test_*.log 2>/dev/null | wc -l); \
@@ -174,7 +283,7 @@ soc_openocd: soc_compile
 	$(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config $(OPENOCD_SOC_CFG) --log-level DEBUG
 
 clean:
-	rm -rf work uvm_bridge_soc.so flist_soc.tmp sim.log transcript vsim.wlf
+	rm -rf work $(COV_LIB) uvm_bridge_soc.so flist_soc.tmp sim.log transcript vsim.wlf
 	rm -f sw/*.o sw/*.elf
 
-.PHONY: soc_compile soc_test soc_openocd clean
+.PHONY: soc_compile soc_test soc_openocd soc_compile_cov soc_test_cov coverage_regress coverage_merge clean
