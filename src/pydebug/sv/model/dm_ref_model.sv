@@ -129,6 +129,10 @@ class dm_ref_model;
     foreach (harts[i]) begin
       harts[i] = '{default: 0};
       harts[i].resume_ack = resumeack_reset;
+      // predictor.py's HartState.available defaults True ("powered and
+      // clocked" -- #3.2); the struct-fill above zeroes it, so it must be
+      // set explicitly here to match, same as the other per-hart fields.
+      harts[i].available  = 1'b1;
       if (power_on || i >= prev.size()) begin
         harts[i].halted    = 1'b0;
         harts[i].running   = 1'b1;
@@ -308,31 +312,46 @@ class dm_ref_model;
   endfunction
 
   // ── Abstract command (spec #3.7.1.1; bit layout from riscv_dm.py
-  // read_gpr()/write_gpr(): cmd[17]=transfer, cmd[16]=write, cmd[15:0]=regno)
+  // read_gpr()/write_gpr()/execute_progbuf(): cmd[18]=postexec,
+  // cmd[17]=transfer, cmd[16]=write, cmd[15:0]=regno)
   local function void write_command(bit [31:0] value);
+    bit        postexec = value[18];
     bit        transfer = value[17];
     bit        wr       = value[16];
     bit [15:0] regno    = value[15:0];
 
-    if (!transfer) return; // no register transfer requested -- nothing to check
-
-    if (wr) begin
-      // GPR/CSR WRITE: commit the staged data0 value into the shadow regfile.
-      shadow_regs[regno] = staged_data0;
-    end else begin
-      // GPR/CSR READ: arm the expectation for the DATA0 read that follows.
-      if (regno == GPR_X0_REGNO) begin
-        // x0 is hardwired to 0 by the base ISA -- always safe to assert,
-        // independent of anything this traffic has written.
-        data0_pending_valid = 1'b1;
-        data0_pending_value = 32'h0;
-      end else if (shadow_regs.exists(regno)) begin
-        data0_pending_valid = 1'b1;
-        data0_pending_value = shadow_regs[regno];
+    if (transfer) begin
+      if (wr) begin
+        // GPR/CSR WRITE: commit the staged data0 value into the shadow regfile.
+        shadow_regs[regno] = staged_data0;
       end else begin
-        // Never written by this traffic -- no known-good value to check.
-        data0_pending_valid = 1'b0;
+        // GPR/CSR READ: arm the expectation for the DATA0 read that follows.
+        // Spec #3.7.1.1: transfer happens before postexec, so this stays
+        // correct for the read that immediately follows even when postexec
+        // is also set on this same command.
+        if (regno == GPR_X0_REGNO) begin
+          // x0 is hardwired to 0 by the base ISA -- always safe to assert,
+          // independent of anything this traffic has written.
+          data0_pending_valid = 1'b1;
+          data0_pending_value = 32'h0;
+        end else if (shadow_regs.exists(regno)) begin
+          data0_pending_valid = 1'b1;
+          data0_pending_value = shadow_regs[regno];
+        end else begin
+          // Never written by this traffic -- no known-good value to check.
+          data0_pending_valid = 1'b0;
+        end
       end
+    end
+
+    if (postexec) begin
+      // Program Buffer content is arbitrary code (#3.7.1.1); it may modify
+      // any GPR/CSR architecturally in ways this self-consistency shadow
+      // cannot simulate (would need a full ISA model -- out of scope, see
+      // file header). Drop every previously-shadowed value so a later read
+      // without an intervening write reports has_model()==0 rather than
+      // asserting a now-stale pre-execution value (#110).
+      shadow_regs.delete();
     end
   endfunction
 
