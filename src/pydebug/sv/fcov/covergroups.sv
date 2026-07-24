@@ -314,6 +314,15 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     bit          havereset       = 0;   // anyhavereset as of the last dmstatus read
     bit          havereset_valid = 0;
     bit          ndmreset        = 0;   // dmcontrol.ndmreset as last written
+    // DMI is pipelined one transaction deep (spec #6.1.5): a shift's captured
+    // dmi_rdata/dmi_status belong to the PREVIOUS request, never its own
+    // (jtag_dmi_read_seq.sv issues the read request as one transaction,
+    // dmi_addr=<reg>, then a SEPARATE dmi_addr=0/NOP transaction to actually
+    // capture the result -- same one-deep correlation dm_checker.sv's own
+    // pending_addr implements). Read-sampling covergroups below must defer to
+    // the NEXT transaction's rdata, not the request transaction's own.
+    bit          pending_read_valid = 0;
+    logic [6:0]  pending_read_addr;
     // Shadow of the per-hart halt-on-reset request bit, keyed by hartsel. Spec
     // #3.14.2 resethaltreq: "an optional internal bit of per-hart state that cannot
     // be read, but can be written with setresethaltreq and clrresethaltreq" — so
@@ -889,11 +898,35 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
 
         cg_dmi_access.sample(t.dmi_addr, t.dmi_op, t.dmi_status);
 
+        // ── Step 1: resolve the READ pending from the PREVIOUS transaction,
+        // using THIS transaction's captured dmi_rdata/dmi_status (see
+        // pending_read_valid's declaration for why). A BUSY status means the
+        // read is still outstanding -- leave it pending and retry on the next
+        // shift, exactly as jtag_dmi_read_seq.sv does from the driving side.
+        if (pending_read_valid && t.dmi_status != dm_defines_pkg::DMI_STAT_BUSY) begin
+            case (pending_read_addr)
+                ADDR_DMSTATUS:   sample_dmstatus_read(t.dmi_rdata);
+                ADDR_ABSTRACTCS: cg_abstractcs_read.sample(t.dmi_rdata);
+                ADDR_HARTINFO:   cg_hartinfo_read.sample(t.dmi_rdata);
+                ADDR_HALTSUM0:   cg_haltsum0_read.sample(t.dmi_rdata);
+                ADDR_SBCS:       cg_sbcs.sample(t.dmi_rdata, 1'b0);
+                default: ;
+            endcase
+            pending_read_valid = 1'b0;
+        end
+
+        // ── Step 2: process THIS transaction's own request. Writes are
+        // committed at issue time (dmi_wdata is set by the debugger, not
+        // deferred), so those still sample immediately, same as before; reads
+        // only ever latch pending_read_addr/valid here -- Step 1 above (on
+        // some LATER transaction) is what actually samples them.
         // ── Run-control slice (dmcontrol/dmstatus) ───────────────────────────
         if (t.dmi_addr == ADDR_DMCONTROL && is_write)
             sample_dmcontrol_write(t.dmi_wdata);
-        else if (t.dmi_addr == ADDR_DMSTATUS && is_read)
-            sample_dmstatus_read(t.dmi_rdata);
+        else if (t.dmi_addr == ADDR_DMSTATUS && is_read) begin
+            pending_read_addr  = ADDR_DMSTATUS;
+            pending_read_valid = 1'b1;
+        end
 
         // ── Abstract command (Access Register): direction + regno class, plus
         //    Program-Buffer execution (postexec) and Trigger-Module CSR access ──
@@ -908,10 +941,14 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
                     (cmd_regno == CSR_TDATA1) && t.dmi_wdata[CMD_WRITE],
                     last_data0_wr[TRIG_TYPE_LSB_RV32 +: 4]);
         end
-        else if (t.dmi_addr == ADDR_ABSTRACTCS && is_read)
-            cg_abstractcs_read.sample(t.dmi_rdata);
-        else if (t.dmi_addr == ADDR_HARTINFO && is_read)
-            cg_hartinfo_read.sample(t.dmi_rdata);
+        else if (t.dmi_addr == ADDR_ABSTRACTCS && is_read) begin
+            pending_read_addr  = ADDR_ABSTRACTCS;
+            pending_read_valid = 1'b1;
+        end
+        else if (t.dmi_addr == ADDR_HARTINFO && is_read) begin
+            pending_read_addr  = ADDR_HARTINFO;
+            pending_read_valid = 1'b1;
+        end
 
         // ── Abstract data-register operand/result ────────────────────────────
         else if (t.dmi_addr inside {[ADDR_DATA0 : ADDR_DATA11]} && (is_read || is_write)) begin
@@ -925,8 +962,12 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             cg_progbuf.sample(1'b1, 1'b0);                 // write event
 
         // ── System Bus Access ────────────────────────────────────────────────
-        else if (t.dmi_addr == ADDR_SBCS && (is_read || is_write))
-            cg_sbcs.sample(is_write ? t.dmi_wdata : t.dmi_rdata, is_write);
+        else if (t.dmi_addr == ADDR_SBCS && is_write)
+            cg_sbcs.sample(t.dmi_wdata, 1'b1);
+        else if (t.dmi_addr == ADDR_SBCS && is_read) begin
+            pending_read_addr  = ADDR_SBCS;
+            pending_read_valid = 1'b1;
+        end
         else if ((t.dmi_addr == ADDR_SBADDRESS0 || t.dmi_addr == ADDR_SBDATA0)
                  && (is_read || is_write))
             cg_sb_access.sample(t.dmi_addr, t.dmi_op);
@@ -936,8 +977,10 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             cg_dmcs2_write.sample(t.dmi_wdata);
 
         // ── Halt-status summary ──────────────────────────────────────────────
-        else if (t.dmi_addr == ADDR_HALTSUM0 && is_read)
-            cg_haltsum0_read.sample(t.dmi_rdata);
+        else if (t.dmi_addr == ADDR_HALTSUM0 && is_read) begin
+            pending_read_addr  = ADDR_HALTSUM0;
+            pending_read_valid = 1'b1;
+        end
 
         // Any other address/op is a feature not covered in this pass; ignored.
     endfunction
