@@ -31,11 +31,19 @@ X5_REGNO = 0x1005
 def build_program_buffer_sequence(
     dm: RISCVDebug,
     mode: str = "batch",
+    progbuf_readable: bool = True,
 ) -> DebugSession:
     """
     Build and return a DebugSession exercising the Program Buffer: discovery
     (abstractcs.progbufsize), write/read-back, write-isolation, and executing
     a short `addi x5,x5,1; ebreak` sequence via postexec.
+
+    progbuf_readable: whether this target's Program Buffer registers read
+        back what was written (true on Ibex's v0.13 riscv-dbg, the default)
+        or are write-only, always reading 0 (RISC-V Debug Spec 1.0 #731 --
+        true on CVA6-fork's v1.0 riscv-dbg, riscv-dbg-vip#121). There is no
+        DMI-discoverable capability bit for this; set per-target via the
+        scenario config's params, same as sba_sequence.py's addr override.
 
     Traces to: TC-AC-013, TC-PB-001, TC-PB-002, TC-PB-003
     """
@@ -70,13 +78,18 @@ def build_program_buffer_sequence(
         dm.write_progbuf(1, EBREAK)
         r0 = dm.read_progbuf(0)
         r1 = dm.read_progbuf(1)
-        ok = (r0 == ADDI_X5_X5_1) and (r1 == EBREAK)
-        return StepResult(
-            ok=ok,
-            msg=f"TC-PB-001: progbuf0=0x{r0:08x} (expect 0x{ADDI_X5_X5_1:08x}), "
-                f"progbuf1=0x{r1:08x} (expect 0x{EBREAK:08x})  "
-                f"{'OK' if ok else 'MISMATCH'}",
-        )
+        if progbuf_readable:
+            ok = (r0 == ADDI_X5_X5_1) and (r1 == EBREAK)
+            msg = (f"TC-PB-001: progbuf0=0x{r0:08x} (expect 0x{ADDI_X5_X5_1:08x}), "
+                   f"progbuf1=0x{r1:08x} (expect 0x{EBREAK:08x})  "
+                   f"{'OK' if ok else 'MISMATCH'}")
+        else:
+            # Spec 1.0 #731: progbuf is write-only, always reads 0.
+            ok = (r0 == 0) and (r1 == 0)
+            msg = (f"TC-PB-001: progbuf0=0x{r0:08x}, progbuf1=0x{r1:08x} "
+                   f"(expect 0x00000000/0x00000000 -- write-only target, spec 1.0 #731)  "
+                   f"{'OK' if ok else 'MISMATCH'}")
+        return StepResult(ok=ok, msg=msg)
     session.add_step("TC-PB-001: progbuf0/1 write/read-back", tc_pb_001)
 
     # ── TC-PB-002: write-isolation across progbuf slots ───────────────────
@@ -87,11 +100,13 @@ def build_program_buffer_sequence(
         dm.write_progbuf(0, 0xDEADBEEF)
         after = dm.read_progbuf(1)
         ok = before == after
+        readability_note = "" if progbuf_readable else \
+            " (write-only target, spec 1.0 #731 -- both always read 0, not a meaningful isolation check here)"
         return StepResult(
             ok=ok,
             msg=f"TC-PB-002: progbuf1 before/after writing progbuf0: "
                 f"0x{before:08x}/0x{after:08x}  "
-                f"{'OK -- unaffected' if ok else 'FAIL -- disturbed'}",
+                f"{'OK -- unaffected' if ok else 'FAIL -- disturbed'}{readability_note}",
         )
     session.add_step("TC-PB-002: progbuf1 unaffected by progbuf0 write", tc_pb_002)
 
