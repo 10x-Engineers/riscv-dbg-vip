@@ -121,6 +121,14 @@ module tb_top_soc;
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
     end
 
+    // ── Tell dm_checker's model this DUT is on the v1.0 fork (#104, #117) ──
+    // CVA6-fork's nested corev_apu/riscv-dbg is pinned to
+    // 10x-Engineers/riscv-dbg@features/riscv-debug-update; Ibex's tb_top
+    // sets nothing and gets dm_checker's "0.13" default.
+    initial begin
+        uvm_config_db #(string)::set(null, "*", "dut_version", "1.0");
+    end
+
     // ── Waveform dump (opt-in via +dump_waves) ─────────────────────────────
     // Scoped to the Debug Module (dut.i_dm_top, which nests dm_csrs/dm_mem/
     // dm_sba/dmi_jtag) plus the JTAG VIP interface, rather than the whole SoC

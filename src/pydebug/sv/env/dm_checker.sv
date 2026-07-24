@@ -42,15 +42,27 @@ class dm_checker extends uvm_component;
   endfunction
 
   function void build_phase(uvm_phase phase);
+    string dut_version;
     super.build_phase(phase);
     dmi_export = new("dmi_export", this);
     dmi_fifo   = new("dmi_fifo", this);
-    // Defaults: 1 hart, dmstatus.version=0.13, hasresethaltreq=0 -- matches
-    // both current DUTs (dm_defines_pkg.sv; neither Ibex nor CVA6's
-    // riscv-dbg implements set/clrresethaltreq, #109). Override via
-    // set_model() before run_phase for a v1.0 target or multi-hart
-    // configuration.
-    model = new(.hasresethaltreq_(1'b0));
+    // dut_version selects which spec version's dmstatus.version this
+    // checker predicts (#117): "0.13" (default, matches Ibex's untouched
+    // vendored riscv-dbg) or "1.0" (CVA6-fork's features/riscv-debug-update
+    // pin, #104). Set via uvm_config_db from the target's tb_top -- Ibex's
+    // tb_top sets nothing and gets the 0.13 default; CVA6's tb_top sets
+    // "1.0". hasresethaltreq=0 regardless -- neither current DUT's
+    // riscv-dbg implements set/clrresethaltreq (#109). Override via
+    // set_model() before run_phase for any further per-target divergence
+    // (e.g. multi-hart configuration) beyond what dut_version covers.
+    if (!uvm_config_db#(string)::get(this, "", "dut_version", dut_version))
+      dut_version = "0.13";
+    case (dut_version)
+      "1.0":   model = new(.version_(4'd3), .hasresethaltreq_(1'b0));
+      "0.13":  model = new(.version_(4'd2), .hasresethaltreq_(1'b0));
+      default: `uvm_fatal("DM_CHECKER", $sformatf(
+                   "Unknown dut_version=%s (expected \"0.13\" or \"1.0\")", dut_version))
+    endcase
   endfunction
 
   function void connect_phase(uvm_phase phase);
