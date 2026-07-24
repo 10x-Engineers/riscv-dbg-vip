@@ -253,6 +253,14 @@ class dm_ref_model;
       harts[sel].halted     = 1'b0;
       harts[sel].running    = 1'b1;
       harts[sel].resume_ack = 1'b1;
+      // Same reasoning as the postexec case in write_command (#110): once
+      // resumed, the hart runs arbitrary code (possibly just one
+      // instruction, for single-step) outside DM control before its next
+      // halt, which can modify any GPR/CSR. dcsr.cause specifically is
+      // spec-guaranteed fresh-written by hardware on every halt entry
+      // (#4.8) -- never preserved across a resume -- so a stale shadowed
+      // value must not survive a resume/re-halt cycle (#113).
+      shadow_regs.delete();
     end
   endfunction
 
