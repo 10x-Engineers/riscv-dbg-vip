@@ -25,6 +25,8 @@ cva6_sim/sim_outputs/
 ibex_sim/sim_outputs/
 cva6_sim/work/
 ibex_sim/work/
+cva6_sim/work_cov/
+ibex_sim/work_cov/
 *.so
 *.o
 transcript

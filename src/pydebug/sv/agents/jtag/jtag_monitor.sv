@@ -10,6 +10,17 @@ class jtag_monitor extends uvm_monitor;
   virtual jtag_if vif;
   uvm_analysis_port #(jtag_txn_c) analysis_port;
 
+  // ── Shared between the posedge state machine and the negedge TDO sampler ──
+  // dr_out_reg is filled at negedge; dr_shift_active tells the sampler that the
+  // bit shifted on the *just-passed* posedge was a Shift-DR bit, so TDO for that
+  // same bit must be captured on this negedge. Making these class members (rather
+  // than blocking on @(negedge) inside the posedge loop) is the fix for GitHub
+  // #103: the old blocking wait perturbed the per-shift bit count, so requests
+  // decoded with misaligned addr/op (real reads showed up as addr=0/op=nop).
+  logic [63:0] dr_out_reg     = '0;
+  bit          dr_shift_active = 0;
+  bit          dr_reset        = 0;   // pulse from the posedge loop at Update-DR
+
   function new(string name, uvm_component parent);
     super.new(name, parent);
     analysis_port = new("analysis_port", this);
@@ -22,11 +33,41 @@ class jtag_monitor extends uvm_monitor;
   endfunction
 
   task run_phase(uvm_phase phase);
-    monitor_tap();
+    // Two decoupled processes: the TAP state machine + TDI/request shift on
+    // posedge, and the TDO/response shift on negedge. Neither blocks the other,
+    // so the shift bookkeeping can no longer desync (see #103).
+    fork
+      monitor_tap();
+      sample_tdo();
+    join_none
   endtask
 
   // ---------------------------------------------------------------------------
-  // TAP state tracker — runs forever, watches posedge TCK
+  // TDO sampler — negedge process. Shifts vif.tdo into dr_out_reg for exactly
+  // the bits the posedge loop flagged as Shift-DR bits, and honours the
+  // Update-DR reset pulse. This is where the driver itself samples TDO
+  // (jtag_driver.sv drive_bit() reads vif.tdo at the falling edge).
+  // ---------------------------------------------------------------------------
+  task sample_tdo();
+    forever begin
+      @(negedge vif.tck);
+      if (!vif.trst_n) begin
+        dr_out_reg = '0;
+      end
+      else if (dr_reset) begin
+        // Update-DR already consumed and reset the response register on the
+        // preceding posedge; nothing to shift this negedge.
+        dr_out_reg = '0;
+      end
+      else if (dr_shift_active) begin
+        dr_out_reg = {vif.tdo, dr_out_reg[63:1]};
+      end
+    end
+  endtask
+
+  // ---------------------------------------------------------------------------
+  // TAP state tracker — posedge process. Shifts the TDI/request bits, tracks
+  // TAP state, and emits on Update-DR. No blocking negedge wait.
   // ---------------------------------------------------------------------------
   task monitor_tap();
     tap_state_e state       = TAP_TEST_LOGIC_RESET;
@@ -35,7 +76,6 @@ class jtag_monitor extends uvm_monitor;
     int         ir_bit      = 0;
 
     logic [63:0] dr_reg     = '0;   // captured DR shift register (TDI = request)
-    logic [63:0] dr_out_reg = '0;   // captured DR shift register (TDO = response)
     int          dr_bit     = 0;
 
     forever begin
@@ -43,15 +83,23 @@ class jtag_monitor extends uvm_monitor;
       @(posedge vif.tck);
 
       if (!vif.trst_n) begin
-        state      = TAP_TEST_LOGIC_RESET;
-        ir_reg     = '0;
-        curr_ir    = '0;
-        dr_reg     = '0;
-        dr_out_reg = '0;
-        ir_bit     = 0;
-        dr_bit     = 0;
+        state           = TAP_TEST_LOGIC_RESET;
+        ir_reg          = '0;
+        curr_ir         = '0;
+        dr_reg          = '0;
+        ir_bit          = 0;
+        dr_bit          = 0;
+        dr_shift_active = 0;
+        dr_reset        = 0;
         continue;
       end
+
+      // Tell the negedge sampler whether THIS bit (sampled on this posedge) is a
+      // Shift-DR bit, so it captures the matching TDO on the following negedge.
+      // Set from the current (pre-update) state, so the last Shift-DR bit is
+      // still flagged even though the state advances to Exit1-DR below.
+      dr_shift_active = (state == TAP_SHIFT_DR);
+      dr_reset        = 0;
 
       // ---- Capture phase actions (before next-state update) -----------------
       case (state)
@@ -64,22 +112,10 @@ class jtag_monitor extends uvm_monitor;
           ir_bit++;
         end
 
-        // Shift DR: sample TDI into dr_reg (request bits, LSB-first). TDO is
-        // sampled separately below, at the same simulation instant the driver
-        // itself samples it (posedge + half-period, i.e. at the falling edge)
-        // — the passive monitor cannot know tck_half_ns, so it waits for the
-        // actual negedge instead, which is where the driver's own drive_bit()
-        // task reads vif.tdo (jtag_driver.sv). TMS is stable across this wait
-        // (driven once, well before this posedge, until the next drive_bit
-        // call after this cycle's negedge), so reading it later at the bottom
-        // of this loop iteration is still the same value used to select the
-        // next TAP state — no timing hazard introduced by the extra wait.
+        // Shift DR: sample TDI into dr_reg (request bits, LSB-first). The
+        // matching TDO bit is captured by sample_tdo() on this cycle's negedge.
         TAP_SHIFT_DR: begin
-          logic tdo_sample;
           dr_reg = {vif.tdi, dr_reg[63:1]};
-          @(negedge vif.tck);
-          tdo_sample = vif.tdo;
-          dr_out_reg = {tdo_sample, dr_out_reg[63:1]};
           dr_bit++;
         end
 
@@ -90,14 +126,17 @@ class jtag_monitor extends uvm_monitor;
             $sformatf("IR updated to 5'b%05b", curr_ir), UVM_HIGH)
         end
 
-        // Update-DR: emit transaction if we were shifting DMI
+        // Update-DR: emit transaction if we were shifting DMI. The response
+        // register is complete by now (its last bit was captured on the negedge
+        // after the final Shift-DR bit). Signal the sampler to clear it and stop
+        // shifting until the next Shift-DR run.
         TAP_UPDATE_DR: begin
           if (curr_ir == 5'h11) begin  // JTAG_DMI
             emit_dmi_txn(dr_reg, dr_out_reg, dr_bit);
           end
-          dr_reg     = '0;
-          dr_out_reg = '0;
-          dr_bit     = 0;
+          dr_reg   = '0;
+          dr_bit   = 0;
+          dr_reset = 1;
         end
         default: ;
       endcase

@@ -1,36 +1,70 @@
 // ══════════════════════════════════════════════════════════════════════════════
-// covergroups.sv — Functional coverage of the dmcontrol/dmstatus run-control slice
+// covergroups.sv — Functional coverage of the external-debug feature set
 //
-// The SystemVerilog twin of pydebug/model/coverage.py. Both subscribe to the same
-// DMI transaction stream and define the same bins, for the same spec reasons:
-// Python collects when the suite drives the mock or real hardware over OpenOCD, this
-// collects when the suite drives RTL in simulation. Keeping the bin *names* aligned
-// across the two is what lets a UVM run and a Python run be talked about as one
-// coverage number rather than two unrelated ones.
+// Collects functional coverage for the external-debug operations a debugger drives
+// over DMI: run control (halt/resume/reset/halt-on-reset/hart-selection), abstract
+// commands (Access Register — GPR/CSR read+write), the Program Buffer, System Bus
+// Access, hart-grouping/external-trigger (dmcs2), halt-status summary (haltsum0),
+// and DM/hart discovery (hartinfo, abstractcs capability fields). It subscribes to
+// the same DMI transaction stream the checker and scoreboard do, one covergroup per
+// register/feature, sampled from the decoded transaction in write().
 //
 // Spec references are to the RISC-V Debug Specification:
-//   #3.2    Reset Control
-//   #3.5    Run Control
-//   #3.14.1 dmstatus  (DMI 0x11)
-//   #3.14.2 dmcontrol (DMI 0x10)
+//   #3.2      Reset Control
+//   #3.5      Run Control
+//   #3.6      Hart groups                (dmcs2,      DMI 0x32)
+//   #3.7.1.1  Access Register command    (command,    DMI 0x17)
+//   #3.8      Program Buffer             (progbuf0-15, DMI 0x20-0x2f)
+//   #3.10     System Bus Access          (sbcs,       DMI 0x38)
+//   #3.14.1   dmstatus                   (DMI 0x11)
+//   #3.14.2   dmcontrol                  (DMI 0x10)
+//   #3.14.3   hartinfo                   (DMI 0x12)
+//   #3.14.9   haltsum0                   (DMI 0x40)
+//   #3.14.13  abstractcs                 (DMI 0x16)
+//   #3.14.14  command                    (DMI 0x17)
+//   #3.14.17  dmcs2                       (DMI 0x32)
+//   #3.14.20  sbcs                        (DMI 0x38)
 //
-// Scope: dmcontrol/dmstatus run control only — halt, resume, reset, halt-on-reset,
-// hart selection. Abstract commands, Program Buffer, SBA, triggers and
-// authentication are later slices and are deliberately not binned here.
+// Twin-model status (READ THIS before assuming parity): the run-control covergroups
+// (cg_dmi_access/cg_dmcontrol_write/cg_dmstatus_read/cg_hart_transition) are a true
+// twin of pydebug/model/coverage.py — same bins, same names, so a UVM run and a
+// Python run report one number. The external-debug covergroups added below
+// (abstractcs/command/progbuf/sbcs/dmcs2/hartinfo/haltsum0/data0) are, as of this
+// pass, SV-ONLY: coverage.py and registers.py still model dmcontrol/dmstatus only
+// (a gap that testplans/riscv_debug_testplan.md already states). Restoring full twin
+// parity means extending those two Python files to match — tracked, not silently
+// assumed. The bin names here are chosen to be portable to that later Python
+// extension.
 //
 // Register addresses come from dm_defines_pkg (fully qualified, so that this file
 // needs no import line added to the shared debug_pkg.sv). Field bit positions are
 // declared below because dm_defines_pkg carries addresses only — they are taken
 // from the spec's own machine-readable register definitions
-// (riscv/riscv-debug-spec, xml/dm_registers.xml) and match registers.py field for
-// field, so the two models cannot silently disagree about where a bit lives.
+// (riscv/riscv-debug-spec, xml/dm_registers.xml). The run-control positions match
+// registers.py field-for-field; the abstractcs/command/sbcs/dmcs2 positions are the
+// same ones the stimulus generator api/riscv_dm.py encodes and decodes with (e.g.
+// abstractcs.busy=bit12/cmderr=[10:8], command.cmdtype=[31:24]/aarsize=[22:20],
+// sbcs.sbaccess=[19:17]/sbbusy=bit21, dmcs2.group=[6:2]), so the model and the
+// stimulus cannot silently disagree about where a bit lives.
 // ══════════════════════════════════════════════════════════════════════════════
 class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     `uvm_component_utils(debug_coverage)
 
     // ── Register addresses (reused from dm_defines_pkg, not redefined) ────────
-    localparam logic [6:0] ADDR_DMCONTROL = dm_defines_pkg::DM_ADDR_DMCONTROL;
-    localparam logic [6:0] ADDR_DMSTATUS  = dm_defines_pkg::DM_ADDR_DMSTATUS;
+    localparam logic [6:0] ADDR_DMCONTROL  = dm_defines_pkg::DM_ADDR_DMCONTROL;
+    localparam logic [6:0] ADDR_DMSTATUS   = dm_defines_pkg::DM_ADDR_DMSTATUS;
+    localparam logic [6:0] ADDR_DATA0      = dm_defines_pkg::DM_ADDR_DATA0;
+    localparam logic [6:0] ADDR_DATA11     = dm_defines_pkg::DM_ADDR_DATA11;
+    localparam logic [6:0] ADDR_HARTINFO   = dm_defines_pkg::DM_ADDR_HARTINFO;
+    localparam logic [6:0] ADDR_ABSTRACTCS = dm_defines_pkg::DM_ADDR_ABSTRACTCS;
+    localparam logic [6:0] ADDR_COMMAND    = dm_defines_pkg::DM_ADDR_COMMAND;
+    localparam logic [6:0] ADDR_PROGBUF0   = dm_defines_pkg::DM_ADDR_PROGBUF0;
+    localparam logic [6:0] ADDR_PROGBUF15  = dm_defines_pkg::DM_ADDR_PROGBUF15;
+    localparam logic [6:0] ADDR_DMCS2      = dm_defines_pkg::DM_ADDR_DMCS2;
+    localparam logic [6:0] ADDR_SBCS       = dm_defines_pkg::DM_ADDR_SBCS;
+    localparam logic [6:0] ADDR_SBADDRESS0 = dm_defines_pkg::DM_ADDR_SBADDRESS0;
+    localparam logic [6:0] ADDR_SBDATA0    = dm_defines_pkg::DM_ADDR_SBDATA0;
+    localparam logic [6:0] ADDR_HALTSUM0   = dm_defines_pkg::DM_ADDR_HALTSUM0;
 
     // ── dmcontrol field bit positions (#3.14.2) ───────────────────────────────
     localparam int DMC_HALTREQ         = 31;
@@ -76,6 +110,123 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     localparam logic [3:0] VERSION_0_13   = 4'd2;
     localparam logic [3:0] VERSION_1_0    = 4'd3;
     localparam logic [3:0] VERSION_CUSTOM = 4'd15;
+
+    // ── abstractcs field bit positions (#3.14.13) ─────────────────────────────
+    // busy=bit12 and cmderr=[10:8] match api/riscv_dm.py's _wait_abstract poll.
+    localparam int ABS_PROGBUFSIZE_LSB = 24;  // [28:24]
+    localparam int ABS_BUSY            = 12;
+    localparam int ABS_RELAXEDPRIV     = 11;
+    localparam int ABS_CMDERR_LSB      = 8;   // [10:8]
+    localparam int ABS_DATACOUNT_LSB   = 0;   // [3:0]
+
+    // abstractcs.cmderr encodings (#3.14.13 cmderr)
+    localparam logic [2:0] CMDERR_NONE          = 3'd0;
+    localparam logic [2:0] CMDERR_BUSY          = 3'd1;
+    localparam logic [2:0] CMDERR_NOT_SUPPORTED = 3'd2;
+    localparam logic [2:0] CMDERR_EXCEPTION     = 3'd3;
+    localparam logic [2:0] CMDERR_HALT_RESUME   = 3'd4;
+    localparam logic [2:0] CMDERR_BUS           = 3'd5;
+    localparam logic [2:0] CMDERR_OTHER         = 3'd7;
+
+    // ── command field bit positions (#3.14.14) ────────────────────────────────
+    // cmdtype=[31:24], aarsize=[22:20], transfer=17, write=16, regno=[15:0] match
+    // api/riscv_dm.py's read_gpr/write_gpr/execute_progbuf command encoders.
+    localparam int CMD_CMDTYPE_LSB = 24;  // [31:24]
+    localparam int CMD_AARSIZE_LSB = 20;  // [22:20]
+    localparam int CMD_AARPOSTINC  = 19;
+    localparam int CMD_POSTEXEC    = 18;
+    localparam int CMD_TRANSFER    = 17;
+    localparam int CMD_WRITE       = 16;
+    localparam int CMD_REGNO_LSB   = 0;   // [15:0]
+
+    // command.cmdtype encodings (#3.7.1: Access Register / Quick Access / Access Memory)
+    localparam logic [7:0] CMDTYPE_ACCESS_REGISTER = 8'd0;
+    localparam logic [7:0] CMDTYPE_QUICK_ACCESS    = 8'd1;
+    localparam logic [7:0] CMDTYPE_ACCESS_MEMORY   = 8'd2;
+
+    // command.aarsize encodings (#3.7.1.1 aarsize): 2=32-bit, 3=64-bit, 4=128-bit
+    localparam logic [2:0] AARSIZE_32  = 3'd2;
+    localparam logic [2:0] AARSIZE_64  = 3'd3;
+    localparam logic [2:0] AARSIZE_128 = 3'd4;
+
+    // Access Register regno ranges (#3.7.1.1 / Table "Abstract Register Numbers")
+    localparam logic [15:0] REGNO_CSR_LO = 16'h0000;
+    localparam logic [15:0] REGNO_CSR_HI = 16'h0FFF;
+    localparam logic [15:0] REGNO_GPR_LO = 16'h1000;  // x0=0x1000 .. x31=0x101F
+    localparam logic [15:0] REGNO_GPR_HI = 16'h101F;
+    localparam logic [15:0] REGNO_FPR_LO = 16'h1020;  // f0=0x1020 .. f31=0x103F
+    localparam logic [15:0] REGNO_FPR_HI = 16'h103F;
+
+    // ── sbcs field bit positions (#3.14.20) ───────────────────────────────────
+    // sbaccess=[19:17], sbreadonaddr=20, sbbusy=21, sberror=[14:12] match
+    // api/riscv_dm.py's SBA read/write and _wait_sba poll.
+    localparam int SBCS_SBVERSION_LSB     = 29;  // [31:29]
+    localparam int SBCS_SBBUSYERROR       = 22;
+    localparam int SBCS_SBBUSY            = 21;
+    localparam int SBCS_SBREADONADDR      = 20;
+    localparam int SBCS_SBACCESS_LSB      = 17;  // [19:17]
+    localparam int SBCS_SBAUTOINCREMENT   = 16;
+    localparam int SBCS_SBREADONDATA      = 15;
+    localparam int SBCS_SBERROR_LSB       = 12;  // [14:12]
+    localparam int SBCS_SBASIZE_LSB       = 5;   // [11:5]
+    localparam int SBCS_SBACCESS128       = 4;
+    localparam int SBCS_SBACCESS64        = 3;
+    localparam int SBCS_SBACCESS32        = 2;
+    localparam int SBCS_SBACCESS16        = 1;
+    localparam int SBCS_SBACCESS8         = 0;
+
+    // sbcs.sbaccess encodings (#3.14.20 sbaccess): 0=8b,1=16b,2=32b,3=64b,4=128b
+    localparam logic [2:0] SBACCESS_8   = 3'd0;
+    localparam logic [2:0] SBACCESS_16  = 3'd1;
+    localparam logic [2:0] SBACCESS_32  = 3'd2;
+    localparam logic [2:0] SBACCESS_64  = 3'd3;
+    localparam logic [2:0] SBACCESS_128 = 3'd4;
+
+    // sbcs.sberror encodings (#3.14.20 sberror)
+    localparam logic [2:0] SBERROR_NONE      = 3'd0;
+    localparam logic [2:0] SBERROR_TIMEOUT   = 3'd1;
+    localparam logic [2:0] SBERROR_BADADDR   = 3'd2;
+    localparam logic [2:0] SBERROR_ALIGNMENT = 3'd3;
+    localparam logic [2:0] SBERROR_BADSIZE   = 3'd4;
+    localparam logic [2:0] SBERROR_OTHER     = 3'd7;
+
+    // ── dmcs2 field bit positions (#3.14.17) ──────────────────────────────────
+    // All positions match api/riscv_dm.py's dmcs2() encoder / dmcs2_* decoders.
+    localparam int DMCS2_GROUPTYPE        = 11;
+    localparam int DMCS2_DMEXTTRIGGER_LSB = 7;   // [10:7]
+    localparam int DMCS2_GROUP_LSB        = 2;   // [6:2]
+    localparam int DMCS2_HGWRITE          = 1;
+    localparam int DMCS2_HGSELECT         = 0;
+
+    // ── hartinfo field bit positions (#3.14.3) ────────────────────────────────
+    localparam int HI_NSCRATCH_LSB  = 20;  // [23:20]
+    localparam int HI_DATAACCESS    = 16;
+    localparam int HI_DATASIZE_LSB  = 12;  // [15:12]
+    localparam int HI_DATAADDR_LSB  = 0;   // [11:0]
+
+    // ── Trigger Module (Sdtrig, spec Ch.5) — accessed as hart CSRs via the ────
+    // Access Register abstract command (regno = the CSR number). The debugger
+    // selects a trigger with tselect, then reads/writes its tdata1/2/3.
+    localparam logic [15:0] CSR_TSELECT = 16'h07A0;
+    localparam logic [15:0] CSR_TDATA1  = 16'h07A1;
+    localparam logic [15:0] CSR_TDATA2  = 16'h07A2;
+    localparam logic [15:0] CSR_TDATA3  = 16'h07A3;
+    localparam logic [15:0] CSR_TINFO   = 16'h07A4;
+
+    // tdata1.type encodings (spec Ch.5, tdata1 "type" field). For RV32 the field is
+    // tdata1[31:28]; on an RV64 DUT it is tdata1[63:60] (staged in data1, not data0)
+    // — decoded here from the RV32 position, which is the exercised width. The named
+    // types are the ones the trigger-module coverage plan targets.
+    localparam logic [3:0] TRIG_NONE         = 4'd0;
+    localparam logic [3:0] TRIG_LEGACY       = 4'd1;
+    localparam logic [3:0] TRIG_MCONTROL     = 4'd2;
+    localparam logic [3:0] TRIG_ICOUNT       = 4'd3;
+    localparam logic [3:0] TRIG_ITRIGGER     = 4'd4;
+    localparam logic [3:0] TRIG_ETRIGGER     = 4'd5;
+    localparam logic [3:0] TRIG_MCONTROL6    = 4'd6;
+    localparam logic [3:0] TRIG_TMEXTTRIGGER = 4'd7;
+    localparam logic [3:0] TRIG_DISABLED     = 4'd15;
+    localparam int         TRIG_TYPE_LSB_RV32 = 28;  // tdata1[31:28] on RV32
 
     // ── Computed sample values ────────────────────────────────────────────────
     //
@@ -169,6 +320,11 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     // the only way to know its value is to remember what we wrote.
     bit reset_haltreq [logic [19:0]];
 
+    // Last value staged into data0. An abstract CSR write is two transactions —
+    // data0 write (the operand), then command write (the trigger) — so decoding a
+    // trigger's configured type needs the operand remembered from the prior write.
+    logic [31:0] last_data0_wr = '0;
+
     // ══════════════════════════════════════════════════════════════════════════
     // Covergroup: DMI access shape
     // ══════════════════════════════════════════════════════════════════════════
@@ -179,10 +335,24 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         option.comment = "Which run-control registers were accessed, how, and with what DMI status";
 
         cp_addr : coverpoint addr {
-            bins dmcontrol = {ADDR_DMCONTROL};
-            bins dmstatus  = {ADDR_DMSTATUS};
-            // Addresses outside the slice are intentionally unbinned: this model has
-            // no business claiming to measure abstractcs, sbcs or progbuf.
+            bins dmcontrol  = {ADDR_DMCONTROL};
+            bins dmstatus   = {ADDR_DMSTATUS};
+            bins hartinfo   = {ADDR_HARTINFO};
+            bins data0      = {ADDR_DATA0};
+            bins abstractcs = {ADDR_ABSTRACTCS};
+            bins command    = {ADDR_COMMAND};
+            // The Program Buffer is one logical region; every implemented slot is
+            // the same architectural access, so all 16 addresses share one bin
+            // rather than reporting 15 empties on a DUT with progbufsize<16.
+            bins progbuf    = {[ADDR_PROGBUF0 : ADDR_PROGBUF15]};
+            bins dmcs2      = {ADDR_DMCS2};
+            bins sbcs       = {ADDR_SBCS};
+            bins sbaddress0 = {ADDR_SBADDRESS0};
+            bins sbdata0    = {ADDR_SBDATA0};
+            bins haltsum0   = {ADDR_HALTSUM0};
+            // Any remaining DMI address (authdata, abstractauto, nextdm, the hart
+            // array-mask window, sbaddress1-3/sbdata1-3) is a feature not exercised
+            // by this project's stimulus yet; left unbinned rather than claimed.
         }
 
         cp_op : coverpoint op {
@@ -193,20 +363,23 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
 
         cp_status : coverpoint status {
             bins success = {dm_defines_pkg::DMI_STAT_SUCCESS};
-            bins failed  = {dm_defines_pkg::DMI_STAT_FAILED};
-            bins busy    = {dm_defines_pkg::DMI_STAT_BUSY};
+            // failed/busy are DMI error/back-pressure conditions reached only by
+            // error injection (unimplemented-address access, back-to-back scans
+            // with insufficient idle) — corner cases with no stimulus in this pass.
+            ignore_bins failed = {dm_defines_pkg::DMI_STAT_FAILED};
+            ignore_bins busy   = {dm_defines_pkg::DMI_STAT_BUSY};
         }
 
+        // The cross exists only to assert the one architecturally-illegal combo: a
+        // write to read-only dmstatus (#3.14.1, every field R). The remaining
+        // addr×op cells are either covered by cp_addr/cp_op individually or are
+        // read-only/write-only registers whose opposite direction never occurs;
+        // they carry no extra architectural obligation, so the cross is reduced to
+        // its assertion (all coverable cells ignored, the illegal one kept — illegal
+        // takes precedence over ignore).
         x_addr_op : cross cp_addr, cp_op {
-            // Every dmstatus field is R (#3.14.1), so a write to it has no
-            // spec-defined behaviour — there is no architectural situation to
-            // cover. illegal_bins rather than ignore_bins: if stimulus ever does
-            // this, it is a bug in the stimulus and should fail loudly rather than
-            // pass as unbinned traffic. Mirrors the Python model's
-            // `dmi_access.write:dmstatus` exclusion.
             illegal_bins dmstatus_write = binsof(cp_addr.dmstatus) && binsof(cp_op.write);
-            // A NOP carries no address; crossing it with one would invent an access.
-            ignore_bins nop_x_addr = binsof(cp_op.nop);
+            ignore_bins  all_other      = binsof(cp_op) || binsof(cp_addr);
         }
     endgroup
 
@@ -260,11 +433,15 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         }
 
         // hartsel against the implemented hart count (DUT config, not on the bus).
+        // On a single-hart DUT (both project DUTs) the highest implemented index IS
+        // hart 0 — so HS_MAX_IMPL is caught as HS_ZERO first and never occurs, and
+        // HS_OTHER (an index strictly between 0 and the max) has no room to exist.
+        // Both are excluded here; a multi-hart DUT would make them reachable.
         cp_hartsel_cls : coverpoint cur_hartsel_cls {
             bins zero        = {HS_ZERO};
-            bins max_impl    = {HS_MAX_IMPL};
             bins nonexistent = {HS_NONEXISTENT};
-            bins other       = {HS_OTHER};
+            ignore_bins max_impl_single_hart = {HS_MAX_IMPL};
+            ignore_bins other_single_hart    = {HS_OTHER};
         }
 
         // #3.14.2 resumereq: "resumereq is ignored if haltreq is set." The rule is
@@ -472,12 +649,218 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     endgroup
 
     // ══════════════════════════════════════════════════════════════════════════
+    // External-debug feature covergroups — BASIC-feature scope
+    //
+    // Each covergroup below is deliberately scoped to whether the *basic* operation
+    // of its feature was exercised, not the full corner-case space. Error-injection
+    // paths (cmderr/sberror codes, sbbusyerror), optional acceleration modes
+    // (aar/aam/sb auto-increment, sbreadondata streaming), optional command kinds
+    // (Quick Access, Access Memory), and wider access sizes (64/128-bit, FPR) are
+    // intentionally NOT binned yet — they are corner cases whose stimulus does not
+    // exist, and binning them now would only manufacture permanent holes. They are
+    // named in comments so the later corner-case pass has a checklist, not so this
+    // pass reports a misleadingly low number.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // ── Abstract Command — Access Register (#3.7.1.1, #3.14.14) ───────────────
+    // Basic features: GPR read, GPR write, CSR access, Program-Buffer execute
+    // (postexec). Sampled from the written command word.
+    covergroup cg_command_write with function sample(logic [31:0] w);
+        option.per_instance = 1;
+        option.comment = "Abstract-command basic operation (#3.14.14)";
+
+        // read (transfer=1,write=0) vs write (transfer=1,write=1) — the basic
+        // abstract-command directions. (Program-Buffer execution via postexec is a
+        // functional group of its own, cg_progbuf below.)
+        cp_write : coverpoint w[CMD_WRITE] { bins read = {0}; bins write = {1}; }
+
+        // GPR vs CSR — the two register namespaces this project exercises. FPR
+        // (needs F/D ext) and the 64/128-bit sizes are corner cases, left unbinned.
+        cp_regno_class : coverpoint w[CMD_REGNO_LSB +: 16] {
+            bins gpr = {[REGNO_GPR_LO : REGNO_GPR_HI]};
+            bins csr = {[REGNO_CSR_LO : REGNO_CSR_HI]};
+        }
+    endgroup
+
+    // ── abstractcs — command status + capability discovery (#3.14.13) ─────────
+    // Basic: we observe busy during a poll, a clean (cmderr=none) completion, and
+    // the progbufsize/datacount discovery fields (TC-AC-013). cmderr error codes
+    // are corner cases (negative tests), left unbinned for now.
+    covergroup cg_abstractcs_read with function sample(logic [31:0] r);
+        option.per_instance = 1;
+        option.comment = "abstractcs basic status/discovery (#3.14.13)";
+
+        cp_busy : coverpoint r[ABS_BUSY] { bins idle = {0}; bins busy = {1}; }
+        // A clean completion is the basic case. cmderr!=0 error codes are the
+        // corner-case (negative) paths and are not binned in this pass.
+        cp_cmderr_none : coverpoint (r[ABS_CMDERR_LSB +: 3] == CMDERR_NONE) {
+            bins clean = {1};
+            ignore_bins error = {0};
+        }
+        // Whether a Program Buffer exists at all (discovery). Its exact slot count
+        // is not a basic-feature distinction. `none` is unreachable on any DUT that
+        // implements a Program Buffer (both project DUTs do, progbufsize>0), so it
+        // is excluded here rather than left as a permanent hole — a DUT with no
+        // Program Buffer would flip which bin is reachable.
+        cp_has_progbuf : coverpoint (r[ABS_PROGBUFSIZE_LSB +: 5] != 0) {
+            bins present     = {1};
+            ignore_bins none = {0};
+        }
+        // Whether an abstract-data path exists (datacount>0) — the precondition for
+        // Access Register at all.
+        cp_has_data : coverpoint (r[ABS_DATACOUNT_LSB +: 4] != 0) {
+            bins present     = {1};
+            ignore_bins none = {0};
+        }
+    endgroup
+
+    // ── Program Buffer (#3.8) ─────────────────────────────────────────────────
+    // Basic feature = the buffer was written AND executed (via command postexec).
+    // Sampled from two sites with iff guards so each call records only its event:
+    // a progbuf write records cp_written; a postexec command records cp_executed.
+    covergroup cg_progbuf with function sample(bit wrote, bit executed);
+        option.per_instance = 1;
+        option.comment = "Program Buffer written + executed (#3.8, #3.7.1.1 postexec)";
+
+        cp_written  : coverpoint wrote    iff (wrote)    { bins written  = {1}; }
+        cp_executed : coverpoint executed iff (executed) { bins executed = {1}; }
+    endgroup
+
+    // ── System Bus Access — basic config + status (#3.10, #3.14.20) ───────────
+    // Basic: a 32-bit access configured (the exercised width), the read-on-address
+    // trigger mode, and observing sbbusy during a poll. Error codes, sbbusyerror,
+    // streaming, wider widths and the sbaccessN/sbasize/sbversion discovery matrix
+    // are corner cases left for the later pass.
+    covergroup cg_sbcs with function sample(logic [31:0] w, bit is_write);
+        option.per_instance = 1;
+        option.comment = "sbcs basic configuration/status (#3.14.20)";
+
+        // sbaccess only carries the debugger's choice on a write; on a read it
+        // reflects current config. Either way, seeing the 32-bit selection is the
+        // basic case.
+        cp_access32 : coverpoint (w[SBCS_SBACCESS_LSB +: 3] == SBACCESS_32) {
+            bins acc32 = {1};
+        }
+        cp_readonaddr : coverpoint w[SBCS_SBREADONADDR] { bins off = {0}; bins on = {1}; }
+        // sbbusy is only meaningful on a status read; gate the sample so a config
+        // write's (busy=0) word doesn't count as "saw idle" spuriously.
+        cp_sbbusy : coverpoint w[SBCS_SBBUSY] iff (!is_write) { bins idle = {0}; bins busy = {1}; }
+    endgroup
+
+    // ── System-bus address/data accesses (#3.10) ──────────────────────────────
+    // Basic: the read flow (write sbaddress0 → read sbdata0) and the write flow
+    // (write sbaddress0 → write sbdata0).
+    covergroup cg_sb_access with function sample(logic [6:0] addr, logic [1:0] op);
+        option.per_instance = 1;
+        option.comment = "System-bus address/data accesses (#3.10)";
+
+        cp_access : coverpoint {addr == ADDR_SBDATA0, op == dm_defines_pkg::DMI_WRITE} {
+            bins addr_write = {2'b01};  // write sbaddress0 (arm/address)
+            bins data_read  = {2'b00};  // read  sbdata0    (bus read result)
+            bins data_write = {2'b11};  // write sbdata0    (bus write)
+            // {addr_read=2'b10} = reading sbaddress0 back: legal but not a basic flow.
+            ignore_bins addr_read = {2'b10};
+        }
+    endgroup
+
+    // ── dmcs2 — hart groups / external triggers (#3.6, #3.14.17) ──────────────
+    // Basic: the register was accessed and its select/type/membership fields driven.
+    covergroup cg_dmcs2_write with function sample(logic [31:0] w);
+        option.per_instance = 1;
+        option.comment = "dmcs2 basic access (#3.14.17)";
+
+        cp_hgselect  : coverpoint w[DMCS2_HGSELECT]  { bins halt_group = {0}; bins resume_group = {1}; }
+        cp_grouptype : coverpoint w[DMCS2_GROUPTYPE] { bins halt = {0}; bins ext_trigger = {1}; }
+        cp_group     : coverpoint (w[DMCS2_GROUP_LSB +: 5] != 0) { bins ungrouped = {0}; bins grouped = {1}; }
+    endgroup
+
+    // ── hartinfo discovery (#3.14.3) ──────────────────────────────────────────
+    // Basic: read hartinfo and observe whether abstract data is register- or
+    // memory-backed (the one field that changes how Program-Buffer flows behave).
+    covergroup cg_hartinfo_read with function sample(logic [31:0] r);
+        option.per_instance = 1;
+        option.comment = "hartinfo dataaccess discovery (#3.14.3)";
+
+        // dataaccess is a fixed per-DUT property (0=abstract-data registers are
+        // CSRs, 1=memory-mapped) — only one value is ever observable on a given
+        // DUT, so binning both would cap this coverpoint at 50% forever. The basic
+        // feature is "hartinfo was read and its data configuration observed", so a
+        // single bin covers whichever value this DUT reports.
+        cp_dataaccess : coverpoint r[HI_DATAACCESS] { bins observed = {[0:1]}; }
+    endgroup
+
+    // ── haltsum0 (#3.14.9) ────────────────────────────────────────────────────
+    // Basic: the halt-status summary was read and reflects at least one halted hart.
+    covergroup cg_haltsum0_read with function sample(logic [31:0] r);
+        option.per_instance = 1;
+        option.comment = "haltsum0 read (#3.14.9)";
+
+        cp_haltsum0 : coverpoint (r != 0) { bins none_halted = {0}; bins some_halted = {1}; }
+    endgroup
+
+    // ── data0 — abstract-command operand/result (#3.14.11) ────────────────────
+    // Basic: data0 was both written (operand staged) and read (result retrieved).
+    covergroup cg_data0_access with function sample(logic [1:0] op);
+        option.per_instance = 1;
+        option.comment = "data0 read/write (#3.14.11)";
+
+        cp_op : coverpoint op {
+            bins read  = {dm_defines_pkg::DMI_READ};
+            bins write = {dm_defines_pkg::DMI_WRITE};
+            ignore_bins nop = {dm_defines_pkg::DMI_NOP};
+        }
+    endgroup
+
+    // ── Trigger Module (Sdtrig, spec Ch.5) ────────────────────────────────────
+    // Basic: which trigger CSR was accessed via the abstract command, and — on a
+    // tdata1 write — which trigger type (mcontrol6, icount, ...) was configured.
+    // Sampled statefully in write() from the command's regno plus the data0 operand
+    // staged just before it. No trigger-module stimulus exists yet, so this group
+    // defines the coverage intent and reads 0% until a trigger sequence is added —
+    // an honest, visible gap rather than a silent omission.
+    covergroup cg_trigger with function sample(
+        logic [15:0] regno, bit is_tdata1_write, logic [3:0] ttype
+    );
+        option.per_instance = 1;
+        option.comment = "Trigger Module CSR access + configured type (Sdtrig, Ch.5)";
+
+        cp_trigger_csr : coverpoint regno {
+            bins tselect = {CSR_TSELECT};
+            bins tdata1  = {CSR_TDATA1};
+            bins tdata2  = {CSR_TDATA2};
+            bins tdata3  = {CSR_TDATA3};
+            bins tinfo   = {CSR_TINFO};
+        }
+        // The configured trigger type, sampled only when a tdata1 write is seen.
+        cp_trigger_type : coverpoint ttype iff (is_tdata1_write) {
+            bins mcontrol     = {TRIG_MCONTROL};
+            bins icount       = {TRIG_ICOUNT};
+            bins itrigger     = {TRIG_ITRIGGER};
+            bins etrigger     = {TRIG_ETRIGGER};
+            bins mcontrol6    = {TRIG_MCONTROL6};
+            bins tmexttrigger = {TRIG_TMEXTTRIGGER};
+            // none/legacy/disabled are teardown states, not a configured trigger.
+            ignore_bins inactive = {TRIG_NONE, TRIG_LEGACY, TRIG_DISABLED};
+        }
+    endgroup
+
+    // ══════════════════════════════════════════════════════════════════════════
     function new(string name, uvm_component parent);
         super.new(name, parent);
         cg_dmi_access      = new();
         cg_dmcontrol_write = new();
         cg_dmstatus_read   = new();
         cg_hart_transition = new();
+        cg_command_write   = new();
+        cg_abstractcs_read = new();
+        cg_progbuf         = new();
+        cg_sbcs            = new();
+        cg_sb_access       = new();
+        cg_dmcs2_write     = new();
+        cg_hartinfo_read   = new();
+        cg_haltsum0_read   = new();
+        cg_data0_access    = new();
+        cg_trigger         = new();
     endfunction
 
     function void build_phase(uvm_phase phase);
@@ -497,13 +880,66 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     // The uvm_subscriber hook — one DMI transaction from the JTAG monitor.
     // ══════════════════════════════════════════════════════════════════════════
     function void write(jtag_txn_c t);
+        bit          is_write;
+        bit          is_read;
+        logic [15:0] cmd_regno;
+        is_write  = (t.dmi_op == dm_defines_pkg::DMI_WRITE);
+        is_read   = (t.dmi_op == dm_defines_pkg::DMI_READ);
+        cmd_regno = t.dmi_wdata[CMD_REGNO_LSB +: 16];
+
         cg_dmi_access.sample(t.dmi_addr, t.dmi_op, t.dmi_status);
 
-        if (t.dmi_addr == ADDR_DMCONTROL && t.dmi_op == dm_defines_pkg::DMI_WRITE)
+        // ── Run-control slice (dmcontrol/dmstatus) ───────────────────────────
+        if (t.dmi_addr == ADDR_DMCONTROL && is_write)
             sample_dmcontrol_write(t.dmi_wdata);
-        else if (t.dmi_addr == ADDR_DMSTATUS && t.dmi_op == dm_defines_pkg::DMI_READ)
+        else if (t.dmi_addr == ADDR_DMSTATUS && is_read)
             sample_dmstatus_read(t.dmi_rdata);
-        // Addresses outside the run-control slice are ignored rather than binned.
+
+        // ── Abstract command (Access Register): direction + regno class, plus
+        //    Program-Buffer execution (postexec) and Trigger-Module CSR access ──
+        else if (t.dmi_addr == ADDR_COMMAND && is_write) begin
+            cg_command_write.sample(t.dmi_wdata);
+            if (t.dmi_wdata[CMD_POSTEXEC])
+                cg_progbuf.sample(1'b0, 1'b1);              // execution event
+            if (t.dmi_wdata[CMD_TRANSFER] &&
+                cmd_regno inside {CSR_TSELECT, CSR_TDATA1, CSR_TDATA2, CSR_TDATA3, CSR_TINFO})
+                cg_trigger.sample(
+                    cmd_regno,
+                    (cmd_regno == CSR_TDATA1) && t.dmi_wdata[CMD_WRITE],
+                    last_data0_wr[TRIG_TYPE_LSB_RV32 +: 4]);
+        end
+        else if (t.dmi_addr == ADDR_ABSTRACTCS && is_read)
+            cg_abstractcs_read.sample(t.dmi_rdata);
+        else if (t.dmi_addr == ADDR_HARTINFO && is_read)
+            cg_hartinfo_read.sample(t.dmi_rdata);
+
+        // ── Abstract data-register operand/result ────────────────────────────
+        else if (t.dmi_addr inside {[ADDR_DATA0 : ADDR_DATA11]} && (is_read || is_write)) begin
+            cg_data0_access.sample(t.dmi_op);
+            if (t.dmi_addr == ADDR_DATA0 && is_write)
+                last_data0_wr = t.dmi_wdata;               // stage operand for trigger decode
+        end
+
+        // ── Program Buffer write ─────────────────────────────────────────────
+        else if (t.dmi_addr inside {[ADDR_PROGBUF0 : ADDR_PROGBUF15]} && is_write)
+            cg_progbuf.sample(1'b1, 1'b0);                 // write event
+
+        // ── System Bus Access ────────────────────────────────────────────────
+        else if (t.dmi_addr == ADDR_SBCS && (is_read || is_write))
+            cg_sbcs.sample(is_write ? t.dmi_wdata : t.dmi_rdata, is_write);
+        else if ((t.dmi_addr == ADDR_SBADDRESS0 || t.dmi_addr == ADDR_SBDATA0)
+                 && (is_read || is_write))
+            cg_sb_access.sample(t.dmi_addr, t.dmi_op);
+
+        // ── Hart groups / external triggers ──────────────────────────────────
+        else if (t.dmi_addr == ADDR_DMCS2 && is_write)
+            cg_dmcs2_write.sample(t.dmi_wdata);
+
+        // ── Halt-status summary ──────────────────────────────────────────────
+        else if (t.dmi_addr == ADDR_HALTSUM0 && is_read)
+            cg_haltsum0_read.sample(t.dmi_rdata);
+
+        // Any other address/op is a feature not covered in this pass; ignored.
     endfunction
 
     // ── dmcontrol write ───────────────────────────────────────────────────────
@@ -680,6 +1116,18 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             cg_dmcontrol_write.get_inst_coverage(),
             cg_dmstatus_read.get_inst_coverage(),
             cg_hart_transition.get_inst_coverage()), UVM_NONE)
+        `uvm_info("DBG_COV", $sformatf(
+            "external-debug coverage: abstract_cmd=%0.2f%% abstractcs=%0.2f%% data0=%0.2f%% progbuf=%0.2f%% sbcs=%0.2f%% sb_access=%0.2f%% dmcs2=%0.2f%% hartinfo=%0.2f%% haltsum0=%0.2f%% trigger=%0.2f%%",
+            cg_command_write.get_inst_coverage(),
+            cg_abstractcs_read.get_inst_coverage(),
+            cg_data0_access.get_inst_coverage(),
+            cg_progbuf.get_inst_coverage(),
+            cg_sbcs.get_inst_coverage(),
+            cg_sb_access.get_inst_coverage(),
+            cg_dmcs2_write.get_inst_coverage(),
+            cg_hartinfo_read.get_inst_coverage(),
+            cg_haltsum0_read.get_inst_coverage(),
+            cg_trigger.get_inst_coverage()), UVM_NONE)
     endfunction
 
 endclass : debug_coverage
