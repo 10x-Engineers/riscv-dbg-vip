@@ -45,10 +45,12 @@ class dm_checker extends uvm_component;
     super.build_phase(phase);
     dmi_export = new("dmi_export", this);
     dmi_fifo   = new("dmi_fifo", this);
-    // Defaults: 1 hart, dmstatus.version=0.13 -- matches both current DUTs
-    // (dm_defines_pkg.sv). Override via set_model() before run_phase for a
-    // v1.0 target or multi-hart configuration.
-    model = new();
+    // Defaults: 1 hart, dmstatus.version=0.13, hasresethaltreq=0 -- matches
+    // both current DUTs (dm_defines_pkg.sv; neither Ibex nor CVA6's
+    // riscv-dbg implements set/clrresethaltreq, #109). Override via
+    // set_model() before run_phase for a v1.0 target or multi-hart
+    // configuration.
+    model = new(.hasresethaltreq_(1'b0));
   endfunction
 
   function void connect_phase(uvm_phase phase);
