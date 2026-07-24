@@ -330,7 +330,11 @@ def cmd_sources(args):
         get_c_bridge_files, get_sv_kit_files,
     )
 
-    if args.c:
+    if args.c_dir:
+        print(get_c_bridge_dir())
+    elif args.sv_dir:
+        print(get_sv_kit_dir())
+    elif args.c:
         for f in get_c_bridge_files():
             print(f)
     elif args.sv:
@@ -415,6 +419,8 @@ def main():
     sources_parser = subparsers.add_parser("sources", help="Show shipped source file paths")
     sources_parser.add_argument("--c", action="store_true", help="Show C bridge sources only")
     sources_parser.add_argument("--sv", action="store_true", help="Show SV kit sources only")
+    sources_parser.add_argument("--c-dir", action="store_true", help="Show only the C bridge directory")
+    sources_parser.add_argument("--sv-dir", action="store_true", help="Show only the SV kit root directory")
 
     # ── init ──
     init_parser = subparsers.add_parser("init", help="Copy integration templates to a directory")

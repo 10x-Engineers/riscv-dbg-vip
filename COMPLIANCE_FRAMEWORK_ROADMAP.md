@@ -64,11 +64,11 @@ undersells where the project actually is.
   (104 architectural bins for the run-control slice, each un-hit bin
   traceable to a spec clause and a proposed TC-ID, each excluded bin carrying
   a spec-cited reason so exclusions can't silently inflate a percentage) and
-  `src/pydebug/sv_kit/covergroups.sv` (bound into the UVM env via a
+  `src/pydebug/sv/fcov/covergroups.sv` (bound into the UVM env via a
   `uvm_subscriber` on the existing monitor's analysis port).
 - **Architectural assertions**, both substrates: `src/pydebug/model/
   invariants.py` (19 invariants, a "never raises" contract, each backed to
-  specific TC-IDs) and two SVA tiers — `src/pydebug/sv_kit/dmi_assertions.sv`
+  specific TC-IDs) and two SVA tiers — `src/pydebug/sv/assertions/dmi_assertions.sv`
   (protocol tier, reusable, bound to `jtag_if`) and `integration_with_cva6/
   cva6_sim/dm_csrs_assertions.sv` (register tier, DUT-specific, bound to
   CVA6's `dm_csrs` internals at `dut...i_dm_top.i_dm_csrs`).
@@ -93,8 +93,8 @@ exercise — a framework that doesn't find anything isn't worth building):
 |---|---|
 | `dmcontrol.haltreq`/`resumereq` read back non-zero; spec requires WARZ/W1 fields to read 0 | CVA6 `riscv-dbg` v0.13, found by the register-tier SVA |
 | DM presents `haltreq` and `resumereq` to the same hart simultaneously; spec #3.14.2 requires `resumereq` be ignored when `haltreq` is set | CVA6 `riscv-dbg` v0.13 — the exact case TC-RC-005 exists to catch |
-| `jtag_monitor.sv` never samples TDO, so `dmi_rdata`/`dmi_status` are permanently zero | This project's own VIP (`src/pydebug/sv_kit/jtag_monitor.sv`) — blocks SV-side `dmstatus` coverage collection until fixed |
-| `DMSTATUS_RESET_VAL` uses bits 24/25 for allrunning/anyrunning; spec places them at 11/10 | This project's own VIP (`src/pydebug/sv_kit/dm_defines_pkg.sv:74`) — currently dead code, a latent trap |
+| `jtag_monitor.sv` never samples TDO, so `dmi_rdata`/`dmi_status` are permanently zero | This project's own VIP (`src/pydebug/sv/agents/jtag/jtag_monitor.sv`) — blocks SV-side `dmstatus` coverage collection until fixed |
+| `DMSTATUS_RESET_VAL` uses bits 24/25 for allrunning/anyrunning; spec places them at 11/10 | This project's own VIP (`src/pydebug/sv/model/dm_defines_pkg.sv:74`) — currently dead code, a latent trap |
 | 6 of 16 TC-IDs are legitimately N/A on CVA6 (`hasresethaltreq` and `hartreset` hardwired 0; v0.13 `dmstatus_t` has no `ndmresetpending` field at all) | Verified directly against `CVA6-fork/corev_apu/riscv-dbg/src/dm_csrs.sv` and `dm_pkg.sv`, not assumed |
 
 ## Final product decision: Option B — internal verification-IP portfolio (decided 2026-07-20)
@@ -246,7 +246,7 @@ it.
 |---|---|---|
 | Golden reference model | `model/registers.py`, `predictor.py`, `coverage.py`, `invariants.py`, `mock_transport.py` — done | — |
 | Transport-agnostic observer hook | `api/observer.py` — done | — |
-| SV coverage + protocol-tier assertions | `sv_kit/covergroups.sv`, `sv_kit/dmi_assertions.sv` — done | — |
+| SV coverage + protocol-tier assertions | `sv/fcov/covergroups.sv`, `sv/assertions/dmi_assertions.sv` — done | — |
 | Stimulus sequences + pytest for the run-control cluster | `sequences/{run_control,reset_ctrl,halt_on_reset,dm_activation,hart_selection}_sequence.py`, matching `tests/*.py` — done | — |
 | Regression tiering (smoke/static) | `regressions.json`, `Makefile`, `tests/test_regression_integrity.py` — done | — |
 | Review | **not done** | TBD |
@@ -292,12 +292,12 @@ Target dates note above).
 
 | Task | Tangible output | Target date |
 |---|---|---|
-| Review Agents (JTAG VIP stack: driver, monitor, sequencer, agent) | `sv_kit/` reviewed, including the known `jtag_monitor.sv` TDO-sampling gap | 2026-07-24 (est.) |
+| Review Agents (JTAG VIP stack: driver, monitor, sequencer, agent) | `sv/agents/jtag/` reviewed, including the known `jtag_monitor.sv` TDO-sampling gap | 2026-07-24 (est.) |
 | Review Golden Reference Model | `model/{registers,predictor,coverage,invariants,mock_transport}.py` reviewed | 2026-07-24 (est.) |
 | Review Interfaces (observer hook + transport/DMI API layer) | `api/{observer,transport,riscv_dm}.py` reviewed | 2026-07-24 (est.) |
 | Review Stimulus Sequences | `sequences/*.py` reviewed | 2026-07-24 (est.) |
 | Review Tests + Regression Tiering | `tests/*.py`, `regressions.json` reviewed | 2026-07-24 (est.) |
-| Review Testbench wiring (env.sv, debug_pkg.sv, SV covergroups/assertions) | `sv_kit/{env,debug_pkg,covergroups,dmi_assertions}.sv` reviewed | 2026-07-24 (est.) |
+| Review Testbench wiring (env.sv, debug_pkg.sv, SV covergroups/assertions) | `sv/env/{env,debug_pkg}.sv`, `sv/fcov/covergroups.sv`, `sv/assertions/dmi_assertions.sv` reviewed | 2026-07-24 (est.) |
 | Review Testplan document | `testplans/riscv_debug_testplan.md` reviewed — signs off Milestone 1 | 2026-07-24 (est.) |
 | Review Verification Strategy document | `VERIFICATION_STRATEGY.md` reviewed — signs off Milestone 2 | 2026-07-24 (est.) |
 
@@ -338,7 +338,7 @@ date).
 | Task | Tangible output | Target date |
 |---|---|---|
 | Model the registers/fields for each Milestone-13 feature group not yet modeled (external trigger `dmcs2`, abstract commands, program buffer, multi-hart halt/resume mask) | `model/` additions | 2026-07-31 (est.) |
-| Build SV covergroups + coverpoints for the same | `sv_kit/covergroups.sv` additions | 2026-07-31 (est.) |
+| Build SV covergroups + coverpoints for the same | `sv/fcov/covergroups.sv` additions | 2026-07-31 (est.) |
 | Build Python stimulus sequences + pytest for the same | New `sequences/*.py` + `tests/*.py` | 2026-07-31 (est.) |
 | Register new scenarios | `SCENARIO_REGISTRY` entries + sim configs | 2026-07-31 (est.) |
 
@@ -352,7 +352,7 @@ sign-off — its numeric position moved, its scope did not.
 | Task | Tangible output | Target date |
 |---|---|---|
 | Design the SV-UVM architectural model's class structure | Design note | 2026-08-30 |
-| Implement register/predictor logic in SystemVerilog, mirroring the Python model | New `sv_kit/` model classes | 2026-08-30 |
+| Implement register/predictor logic in SystemVerilog, mirroring the Python model | New `sv/model/` model classes | 2026-08-30 |
 | Integrate into the existing UVM env | `env.sv` wiring | 2026-08-30 |
 | Cross-check against the Python model | Agreement report | 2026-08-30 |
 

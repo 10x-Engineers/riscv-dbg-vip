@@ -17,10 +17,10 @@ setup(
         "pydebug": [
             "c_bridge/*.c",
             "c_bridge/*.h",
-            "sv_kit/*.sv",
-            "sv_kit/templates/*.sv",
-            "sv_kit/configs/*.json",
-            "sv_kit/configs/*.cfg",
+            "sv/**/*.sv",
+            "sv/templates/*.sv",
+            "sv/configs/*.json",
+            "sv/configs/*.cfg",
         ]
     },
     include_package_data=True,

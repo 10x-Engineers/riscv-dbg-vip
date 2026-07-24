@@ -9,7 +9,7 @@ package jtag_pkg;
   `include "uvm_macros.svh"
 
   // Order matters: types first, then classes that use them
-  `include "types.sv"         // tap_state_e, tap_next_state()
+  `include "../../model/types.sv"  // tap_state_e, tap_next_state()
   `include "jtag_txn.sv"
   `include "jtag_driver.sv"
   `include "jtag_monitor.sv"

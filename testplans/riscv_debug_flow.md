@@ -113,7 +113,7 @@ flowchart TB
     BRIDGE --> UVMTEST["UVM Test\n(rv_dbg_base_test)"]
     OCDSRV --> BOARD["Target board\n(Arty A7 / Genesys2)"]
 
-    UVMTEST --> AGENT["JTAG/DMI Agent\n(driver/monitor/sequencer,\ntestbench-agnostic, sv_kit/)"]
+    UVMTEST --> AGENT["JTAG/DMI Agent\n(driver/monitor/sequencer,\ntestbench-agnostic, sv/agents/jtag/)"]
     BOARD --> AGENT
 
     AGENT --> DMI["DMI bus"]
