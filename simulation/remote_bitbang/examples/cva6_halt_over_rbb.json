@@ -1,0 +1,16 @@
+{
+    "_comment": "Example RBB scenario config for CVA6. Run: 1) launch the RBB-mode sim (make -C ../../../cva6_sim soc_openocd) 2) pydebug run --config cva6_halt_over_rbb.json, from a cwd where 'openocd_bitbang_soc.cfg' resolves -- e.g. ../../../cva6_sim.",
+    "scenario":  "halt",
+    "transport": "openocd",
+    "mode":      "batch",
+    "params": {
+        "mem_addr":     "0x80000000",
+        "resume_after": true
+    },
+    "openocd": {
+        "host": "127.0.0.1",
+        "port": 6666,
+        "config": "configs/openocd_bitbang_soc.cfg",
+        "startup_wait": 60.0
+    }
+}
