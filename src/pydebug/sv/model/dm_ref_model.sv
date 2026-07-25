@@ -51,6 +51,11 @@ class dm_ref_model;
     bit nonexistent;
   } hart_state_s;
 
+  // dmstatus.version encoding (spec #3.14.1) -- matches covergroups.sv's
+  // VERSION_0_13/VERSION_1_0 localparams, duplicated here since this class
+  // has no visibility into that module's scope.
+  localparam bit [3:0] VERSION_1_0 = 4'd3;
+
   // ── Configuration (constructor args mirror predictor.py's DMPredictor) ────
   local int unsigned num_harts;
   local bit [3:0]    version;             // dmstatus.version encoding
@@ -295,6 +300,14 @@ class dm_ref_model;
         // ndmreset_o ("if (ndmreset_o) havereset_d_aligned = '1") --
         // immediately on assertion, not deferred to release_from_reset.
         harts[i].havereset = 1'b1;
+        // #3.5: "These 4 [DM-tracked] bits reset to 0, except for resume
+        // ack, which may reset to either 0 or 1" -- explicitly declared
+        // implementation-defined, per-DUT, same category as
+        // havereset_poweron_ (riscv-dbg-vip#117). Applies to every reset
+        // event this bit is exposed to, not just power-on -- resumeack_
+        // reset_ is the single declared parameter that governs it
+        // everywhere, mirroring reset_dm()'s use of the same field.
+        harts[i].resume_ack = resumeack_reset;
       end
     end else if (!asserted && ndmreset) begin
       ndmreset = 1'b0;
@@ -311,6 +324,11 @@ class dm_ref_model;
       harts[sel].hart_reset  = 1'b1;
       harts[sel].halted      = 1'b0;
       harts[sel].running     = 1'b0;
+      // Same declared, implementation-defined reset value as ndmreset's
+      // identical resume_ack handling above (#3.5) -- not currently
+      // exercised on either DUT (hartreset is WARL-tied 0 on both), kept
+      // for correctness/consistency should a future DUT implement it.
+      harts[sel].resume_ack  = resumeack_reset;
     end else if (!asserted && hartreset_level) begin
       hartreset_level       = 1'b0;
       harts[sel].hart_reset = 1'b0;
@@ -459,7 +477,12 @@ class dm_ref_model;
     end
 
     word = '0;
-    word[24]   = ndmreset;              // ndmresetpending
+    // ndmresetpending (bit 24) is a v1.0 addition (#3.14.1); a v0.13 DUT's
+    // dm_pkg dmstatus_t has no such field routed at all and reads it tied 0
+    // regardless of the real ndmreset level -- confirmed against real Ibex
+    // RTL (vendored, unmodified v0.13 riscv-dbg), 2026-07-25. Mirrors the
+    // identical fix in predictor.py.
+    word[24]   = (version >= VERSION_1_0) ? ndmreset : 1'b0; // ndmresetpending
     word[23]   = stickyunavail;         // #520, declared capability -- see constructor
     word[22]   = impebreak;
     word[19]   = havereset;             // allhavereset (single selected hart: all==any)

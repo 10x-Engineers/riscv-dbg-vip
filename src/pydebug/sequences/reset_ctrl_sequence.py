@@ -59,6 +59,7 @@ from pydebug.api.riscv_dm import (
     allhavereset, anyhavereset, ndmresetpending,
     dmcontrol_hartreset,
 )
+from pydebug.model.registers import DMSTATUS_VERSION_1_0
 
 POLL_INTERVAL_S = 0.001
 POLL_TIMEOUT_S = 2.0
@@ -105,19 +106,29 @@ def build_reset_ctrl_sequence(
         mutex_ok = not (anyhalted(word) and anyrunning(word))
         note = ""
         p = _predictor(dm)
-        if p is not None:
+        if p is not None and p.version >= DMSTATUS_VERSION_1_0:
+            # ndmresetpending (#3.14.1) is a v1.0 addition -- the predictor
+            # itself now only claims to predict it for a v1.0-configured DUT
+            # (a v0.13 dm_pkg dmstatus_t has no such field routed at all and
+            # reads it tied 0, confirmed against real Ibex RTL, 2026-07-25).
+            # Checking against the model rather than the DUT read-back still
+            # matters even at v1.0: some forks' own dm_pkg.sv predates the
+            # field despite the DUT otherwise reporting version=v1_0.
             predicted = p.expect(DMI.DMSTATUS)
             model_pending = ndmresetpending(predicted)
             dut_pending = ndmresetpending(word)
             if dut_pending != model_pending:
                 note += (
                     f" [divergence: DUT ndmresetpending={int(dut_pending)} vs "
-                    f"model={int(model_pending)} — some v0.13 dm_pkg DUTs (e.g. "
-                    f"CVA6 dm_pkg.sv dmstatus_t) have no ndmresetpending field at "
-                    f"all; checked against the model instead, per #3.14.1]"
+                    f"model={int(model_pending)} — some v1.0-reporting dm_pkg "
+                    f"forks still lack a routed ndmresetpending field; checked "
+                    f"against the model instead, per #3.14.1]"
                 )
             ok = mutex_ok and model_pending
         else:
+            # No predictor, or a v0.13-configured one: ndmresetpending isn't
+            # meaningfully predictable either way, so only the universal
+            # mutex invariant is checked here.
             ok = mutex_ok
         return StepResult(ok=ok, msg=f"TC-RST-001: ndmreset asserted, dmstatus={word:#010x}{note}")
     session.add_step(

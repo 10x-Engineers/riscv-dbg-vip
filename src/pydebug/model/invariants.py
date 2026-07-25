@@ -78,6 +78,7 @@ from .registers import (
     DMCONTROL_MUTEX_BITS,
     DMSTATUS,
     DMSTATUS_ALL_ANY_PAIRS,
+    DMSTATUS_VERSION_1_0,
     DMSTATUS_VERSION_NONE,
 )
 
@@ -263,7 +264,17 @@ def _check_dmstatus_word(out: List[Violation], word: int, predictor, source: str
     # ndmreset deasserted) is legal — the reset may still be draining, and #3.2 warns
     # "the reset itself may also take an arbitrarily long time" — so only the
     # implication ndmreset -> ndmresetpending is asserted.
-    if predictor.ndmreset and not f["ndmresetpending"]:
+    #
+    # ndmresetpending is itself a v1.0 addition — a v0.13 DUT's dm_pkg dmstatus_t
+    # has no such field routed at all and reads it tied 0 regardless of the real
+    # ndmreset level (confirmed against real Ibex RTL, 2026-07-25); asserting
+    # this implication against a v0.13-configured predictor would be checking
+    # an architectural property the DUT was never required to have.
+    if (
+        predictor.version >= DMSTATUS_VERSION_1_0
+        and predictor.ndmreset
+        and not f["ndmresetpending"]
+    ):
         out.append(
             Violation(
                 rule="INV-NDMRESETPENDING",

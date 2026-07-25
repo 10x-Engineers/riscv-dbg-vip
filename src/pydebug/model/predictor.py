@@ -24,6 +24,7 @@ from .registers import (
     DMCONTROL,
     DMSTATUS,
     DMSTATUS_VERSION_0_13,
+    DMSTATUS_VERSION_1_0,
     hartsel_of,
     register_at,
 )
@@ -340,6 +341,15 @@ class DMPredictor:
                 # ndmreset_o ("if (ndmreset_o) havereset_d_aligned = '1") --
                 # immediately on assertion, not deferred to release.
                 h.havereset = True
+                # #3.5: "These 4 [DM-tracked] bits reset to 0, except for
+                # resume ack, which may reset to either 0 or 1" -- explicitly
+                # declared implementation-defined, per-DUT, same category as
+                # havereset_poweron (riscv-dbg-vip#117). Applies to every
+                # reset event this bit is exposed to, not just power-on --
+                # self.resumeack_reset is the single declared parameter that
+                # governs it everywhere, mirroring the constructor's own use
+                # of the same field.
+                h.resume_ack = self.resumeack_reset
         elif not asserted and self.ndmreset:
             self.ndmreset = False
             for h in self.harts:
@@ -353,6 +363,12 @@ class DMPredictor:
                 h.hart_reset = True
                 h.halted = False
                 h.running = False
+                # Same declared, implementation-defined reset value as
+                # _apply_ndmreset's identical resume_ack handling above
+                # (#3.5) -- not currently exercised on either DUT (hartreset
+                # is WARL-tied 0 on both), kept for correctness/consistency
+                # should a future DUT implement it.
+                h.resume_ack = self.resumeack_reset
         elif not asserted and self._hartreset_level:
             self._hartreset_level = False
             for h in self._selected():
@@ -421,7 +437,15 @@ class DMPredictor:
         unavail = all_any(lambda h: h.unavail)
 
         return DMSTATUS.encode(
-            ndmresetpending=int(self.ndmreset),
+            # ndmresetpending (dmstatus bit 24) is a v1.0 addition (#3.14.1);
+            # a v0.13 DUT's dm_pkg dmstatus_t has no such field routed at all
+            # and reads it tied 0, regardless of self.ndmreset -- confirmed
+            # against real Ibex RTL (vendored, unmodified v0.13 riscv-dbg),
+            # 2026-07-25. Previously unconditional here, which the mock-only
+            # pytest suite could never catch (ModelBackedMockTransport's
+            # "RTL" and "expected" are the same predictor instance) -- only
+            # surfaced via a real v0.13 DUT UVM comparison.
+            ndmresetpending=int(self.ndmreset) if self.version >= DMSTATUS_VERSION_1_0 else 0,
             stickyunavail=int(self.stickyunavail),
             impebreak=int(self.impebreak),
             allhavereset=havereset["all"],
