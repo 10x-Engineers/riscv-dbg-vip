@@ -42,27 +42,33 @@ class dm_checker extends uvm_component;
   endfunction
 
   function void build_phase(uvm_phase phase);
-    string dut_version;
+    string dut_config_path;
+    dut_config_reader cfg;
     super.build_phase(phase);
     dmi_export = new("dmi_export", this);
     dmi_fifo   = new("dmi_fifo", this);
-    // dut_version selects which spec version's dmstatus.version this
-    // checker predicts (#117): "0.13" (default, matches Ibex's untouched
-    // vendored riscv-dbg) or "1.0" (CVA6-fork's features/riscv-debug-update
-    // pin, #104). Set via uvm_config_db from the target's tb_top -- Ibex's
-    // tb_top sets nothing and gets the 0.13 default; CVA6's tb_top sets
-    // "1.0". hasresethaltreq=0 regardless -- neither current DUT's
-    // riscv-dbg implements set/clrresethaltreq (#109). Override via
+    // dut_config_path points at dut_configs/<name>.json (#117) -- the single
+    // declared source of every implementation-defined/Preset field this
+    // model needs (version, stickyunavail, hasresethaltreq, ...), shared
+    // with the Python side's model/dut_config.py. Set via uvm_config_db from
+    // the target's tb_top; Ibex's tb_top sets nothing and gets the 0.13
+    // default (matches its untouched vendored riscv-dbg). Override via
     // set_model() before run_phase for any further per-target divergence
-    // (e.g. multi-hart configuration) beyond what dut_version covers.
-    if (!uvm_config_db#(string)::get(this, "", "dut_version", dut_version))
-      dut_version = "0.13";
-    case (dut_version)
-      "1.0":   model = new(.version_(4'd3), .hasresethaltreq_(1'b0));
-      "0.13":  model = new(.version_(4'd2), .hasresethaltreq_(1'b0));
-      default: `uvm_fatal("DM_CHECKER", $sformatf(
-                   "Unknown dut_version=%s (expected \"0.13\" or \"1.0\")", dut_version))
-    endcase
+    // (e.g. multi-hart configuration) beyond what the config file covers.
+    if (!uvm_config_db#(string)::get(this, "", "dut_config_path", dut_config_path))
+      dut_config_path = "../src/pydebug/dut_configs/ibex.json";
+    cfg = new(dut_config_path);
+    model = new(
+      .version_            (cfg.get_version()),
+      .authenticated_      (cfg.get_bool("authenticated")),
+      .impebreak_          (cfg.get_bool("impebreak")),
+      .hasresethaltreq_    (cfg.get_bool("hasresethaltreq")),
+      .supports_hartreset_ (cfg.get_bool("supports_hartreset")),
+      .supports_hasel_     (cfg.get_bool("supports_hasel")),
+      .resumeack_reset_    (cfg.get_bool("resumeack_reset")),
+      .stickyunavail_      (cfg.get_bool("stickyunavail")),
+      .havereset_poweron_  (cfg.get_bool("havereset_poweron"))
+    );
   endfunction
 
   function void connect_phase(uvm_phase phase);

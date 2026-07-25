@@ -8,21 +8,41 @@ Implements the Reset Control CAT2 feature (Ch.3 op 5, spec #3.2), driven through
 Traces to: TC-RST-001, TC-RST-002, TC-RST-003, TC-RST-004, TC-RST-005,
 TC-RST-006
 
-Two DUT-specific gaps are handled honestly rather than papered over:
+A DUT-specific gap is handled honestly rather than papered over:
 
   * TC-RST-002 (`hartreset`) is discovery, per spec #3.14.2's own instruction:
     "If this feature is not implemented, the bit always stays 0." The sequence
     writes 1 and reads back; if it did not stick, the rest of that step reports
-    N/A rather than a failure (CVA6's dm_csrs.sv:511 ties hartreset to 0).
+    N/A rather than a failure -- confirmed WARL-tied to 0 on **both** project
+    DUTs (`dm_csrs.sv`'s `dmcontrol_d.hartreset = 1'b0` is unconditional on
+    each, not CVA6-specific), so it always reports N/A currently. This also
+    means `dut_configs/*.json`'s `supports_hartreset` must stay `false` for
+    both -- the golden model needs to agree hartreset is a no-op, or its own
+    `dmcontrol` prediction diverges from real RTL on this bit.
 
   * TC-RST-001's `ndmresetpending` clause is checked against the golden model
     (`DMPredictor`), not the DUT read-back, when a predictor is attached: some
     v0.13 `dm_pkg` implementations (CVA6's `dm_pkg.sv` `dmstatus_t`) have no
     such field at all, so a DUT read-back of that bit is not meaningful there.
-    Separately, CVA6's `dm_csrs.sv:256` computes `allrunning = ~halted &
-    ~unavailable`, so a hart held in ndmreset reports running=1 where the model
-    reports neither halted nor running — both are legal under #3.2, and the
-    step reports the divergence instead of failing on it.
+
+Not a gap, but worth noting: both DUTs' `dm_csrs.sv` compute
+`allrunning = ~halted & ~unavailable` combinationally, so a hart held in
+ndmreset reads `running=1` throughout the reset window, not "neither" --
+confirmed against real RTL and now the golden model's own prediction too
+(spec #3.2 leaves "which states a hart that is reset goes through" explicitly
+implementation dependent).
+
+A second, real DUT-specific gap, found the hard way (a real CVA6 UVM
+timeout, 2026-07-25): `cross.hart_state_transition.halted_to_in_reset`
+cannot currently be produced via *any* stimulus on either DUT. Not via
+`hartreset` (WARL-tied to 0, above). Not via `ndmreset` either: both DUTs'
+`dm_mem.sv` only resets `halted_q` on `!rst_ni` (the DM's own reset) --
+`ndmreset` deliberately does not touch the DM's own registers (that's the
+whole point: the debugger stays in control while the target resets), so a
+hart that was already halted stays reported as halted throughout an
+`ndmreset` cycle, completely unaffected by it. This bin is excluded in
+`model/coverage.py` with this citation rather than forced with stimulus
+that doesn't actually produce the transition.
 
 Usage:
     from pydebug.sequences.reset_ctrl_sequence import build_reset_ctrl_sequence
@@ -30,12 +50,19 @@ Usage:
     session.run()
 """
 
+import time
+
 from pydebug.api import RISCVDebug, DebugSession, StepResult, DMI
 from pydebug.api.riscv_dm import (
+    DebugError,
     allhalted, anyhalted, allrunning, anyrunning,
     allhavereset, anyhavereset, ndmresetpending,
     dmcontrol_hartreset,
 )
+
+POLL_INTERVAL_S = 0.001
+POLL_TIMEOUT_S = 2.0
+
 
 
 def _predictor(dm: RISCVDebug):
@@ -92,12 +119,6 @@ def build_reset_ctrl_sequence(
             ok = mutex_ok and model_pending
         else:
             ok = mutex_ok
-        if anyrunning(word) and not anyhalted(word):
-            note += (
-                " [CVA6 dm_csrs.sv:256 computes allrunning=~halted&~unavailable, "
-                "so a hart held in ndmreset reports running=1 rather than the "
-                "model's 'neither halted nor running' — both legal under #3.2]"
-            )
         return StepResult(ok=ok, msg=f"TC-RST-001: ndmreset asserted, dmstatus={word:#010x}{note}")
     session.add_step(
         "TC-RST-001: assert dmcontrol.ndmreset=1 (spec #3.2)", tc_rst_001_assert,
@@ -116,6 +137,85 @@ def build_reset_ctrl_sequence(
         )
     session.add_step(
         "TC-RST-001: deassert dmcontrol.ndmreset=0", tc_rst_001_deassert,
+    )
+
+    # ── TC-RST-001 (cont'd): haltreq asserted while a hart is in ndmreset ──
+    # cross.hart_state_transition.in_reset_to_halted needs a hart to come out
+    # of reset already-requested-halted (#3.5: "the hart will immediately
+    # enter debug mode on the next deassertion of its reset"). TC-HOR-002 is
+    # the *documented* owner of this transition, but it can never actually
+    # produce it on either project DUT: dmcontrol.setresethaltreq is
+    # WARL-tied to 0 (dm_csrs.sv, both DUTs -- same family as hartreset,
+    # confirmed 2026-07-25), and the model's own reset_haltreq shadow is
+    # correctly gated off to match (hasresethaltreq=false in both
+    # dut_configs/*.json). haltreq (plain, universally-supported, unlike
+    # resethaltreq) reaches the exact same code path though -- both
+    # dm_ref_model.sv's release_from_reset() and (confirmed) real RTL check
+    # "was a halt requested, by whatever means" on release, not specifically
+    # resethaltreq -- so asserting ordinary haltreq *while* ndmreset is
+    # already asserted, then releasing, exercises the identical spec clause
+    # through a mechanism both DUTs actually implement.
+    def tc_rst_001_haltreq_during_reset():
+        dm.ndmreset(True)
+        # write_dmcontrol()'s unset fields default to 0/False -- ndmreset
+        # must be passed explicitly here or this write deasserts it early.
+        dm.write_dmcontrol(haltreq=True, ndmreset=True)
+        still_in_reset = not anyhalted(dm.read_dmstatus())
+        # NOT dm.ndmreset(False): that helper is a raw absolute dmcontrol
+        # write with no haltreq param, so it defaults haltreq back to 0 --
+        # silently withdrawing the very halt request this step is trying to
+        # test, at the exact edge (reset release) where the spec requires it
+        # to still be observed. A real CVA6 UVM MODEL_MISMATCH first looked
+        # like an RTL bug (hart stayed running forever) until a waveform
+        # trace (dut.i_dm_top.debug_req_o) showed haltreq_o dropping to 0 in
+        # the same delta cycle as ndmreset_o's deassertion -- traced to this
+        # exact stimulus bug, not RTL (dm_csrs.sv's haltreq_o mux and
+        # dm_top.sv's wiring have no reset-dependent gating at all; the DM
+        # was behaving correctly the whole time), 2026-07-25.
+        dm.write_dmcontrol(haltreq=True, ndmreset=False)
+        # The halt handshake (hart exits reset, fetches, observes haltreq,
+        # enters Debug Mode) takes real clock cycles, unlike the untimed
+        # Python mock where the transition is instantaneous -- poll like
+        # dm.halt() does, rather than trusting a single read.
+        #
+        # A single transient MODEL_MISMATCH on the first poll iteration is
+        # expected and accepted here, not a bug to engineer away: a CVA6 UVM
+        # waveform trace confirmed the real handshake takes ~4.6us of sim
+        # time (fetch resume -> observe debug_req -> execute debug-ROM entry
+        # -> write halted_q) that dm_ref_model.sv/predictor.py idealize as
+        # instantaneous. Two mitigations were tried and rejected: a real
+        # time.sleep() before the first read does nothing (this environment's
+        # sim only advances with actual DMI/JTAG transactions, confirmed --
+        # 0.01s of real sleep moved the mismatch's timestamp by 420ns); a
+        # spacer dmcontrol read consumes real sim time but surfaces a
+        # separate, unrelated, pre-existing model gap (expect_dmcontrol()
+        # hardcodes haltreq/resumereq readback to 0, while real CVA6 persists
+        # the last-written value -- out of scope for this step, not filed
+        # here). This mirrors TC-RC-006's established precedent (testplan's
+        # Uncertain bucket): the untimed model cannot express real handshake
+        # latency, and that gap is documented, not silently forced closed
+        # (2026-07-25).
+        deadline = time.monotonic() + POLL_TIMEOUT_S
+        halted_on_release = dm.is_halted()
+        while not halted_on_release and time.monotonic() < deadline:
+            time.sleep(POLL_INTERVAL_S)
+            halted_on_release = dm.is_halted()
+        # Deliberately not resuming: TC-RST-002 (next) halts the hart itself
+        # as its own first action regardless of the state left here (same
+        # reasoning as the removed trailing dm.resume() bug from the first
+        # attempt at this step, 2026-07-25 -- haltreq is now persistently
+        # set and resuming would just hang).
+        return StepResult(
+            ok=still_in_reset and halted_on_release,
+            msg=f"TC-RST-001 (cont'd): haltreq written while ndmreset "
+                f"asserted — still not halted mid-reset={still_in_reset}, "
+                f"halted on release={halted_on_release} (spec #3.5: a "
+                f"pending halt request takes effect the moment reset "
+                f"deasserts)",
+        )
+    session.add_step(
+        "TC-RST-001 (cont'd): haltreq asserted while a hart is in ndmreset (spec #3.5)",
+        tc_rst_001_haltreq_during_reset,
     )
 
     # ── TC-RST-002: hartreset selected-hart reset (discovery) ────────────
@@ -215,11 +315,25 @@ def build_reset_ctrl_sequence(
         # undefined." Attempt one anyway (abstract GPR read touches COMMAND/
         # DATA0/ABSTRACTCS) via the existing higher-level helper — never a bare
         # transport call from inside a sequence — and confirm the DM survives:
-        # no exception, and dmcontrol/dmstatus remain readable and sane
-        # afterward. The *value* read is explicitly not asserted on (UNSPECIFIED).
+        # a *response* (even an error response), not a hang/no-response, and
+        # dmcontrol/dmstatus remain readable and sane afterward. The specific
+        # read-back value (or which cmderr, if any) is explicitly not asserted
+        # on (UNSPECIFIED).
+        #
+        # DebugError from _wait_abstractcs specifically (message contains
+        # "cmderr=") means the DM *did* respond -- it processed the abstract
+        # command and reported a definite error code (e.g. cmderr=4
+        # halt/resume, since the hart is in reset, not halted -- confirmed via
+        # a real CVA6 run, 2026-07-24/25) -- that is affirmative evidence of
+        # survival, not the DM being dead. Only a genuine non-response
+        # (DebugError timeout, or any other exception) counts as "did not
+        # survive" here.
         survived = True
         try:
             dm.read_gpr(0x1000)  # x0 — content is irrelevant, only survival matters
+        except DebugError as e:
+            if "cmderr=" not in str(e):
+                survived = False  # timeout or other non-response -- a real hang
         except Exception:
             survived = False
         dm.ndmreset(False)
@@ -260,6 +374,59 @@ def build_reset_ctrl_sequence(
     session.add_step(
         "TC-RST-006: ackhavereset is a no-op when havereset is already clear (spec #3.14.2)",
         tc_rst_006,
+    )
+
+    # ── TC-DHS-006 (write-only half): ackunavail discovery probe ──────────
+    # Full TC-DHS-006 (conditional-clear semantics: ackunavail clears only
+    # currently-available harts) needs the hart-availability transition
+    # mechanism modeled first (testplan's own noted gap -- no sequence
+    # drives a hart through an actual unavailable->available transition
+    # yet). This is just the write itself: a legitimate thing for a
+    # debugger to probe regardless, and the thing dmcontrol.ackunavail's
+    # own coverage bin is actually asking about (was it ever written),
+    # not the full conditional-clear behavior.
+    def tc_dhs_006_probe():
+        dm.ackunavail()
+        readback = dm.read_dmcontrol()
+        alive = bool(readback & 1)  # dmactive still 1 -- DM state not corrupted
+        return StepResult(
+            ok=alive,
+            msg=f"TC-DHS-006 (write-only half): wrote dmcontrol.ackunavail=1 "
+                f"— DM alive afterward (dmactive={alive}). Full conditional-"
+                f"clear semantics (#3.14.2: clears only currently-available "
+                f"harts) not checked here -- needs hart-availability "
+                f"transition modeling, a later slice.",
+        )
+    session.add_step(
+        "TC-DHS-006 (write-only half): ackunavail discovery probe (spec #3.14.2)",
+        tc_dhs_006_probe,
+    )
+
+    # ── TC-KA-001: setkeepalive/clrkeepalive discovery probe ──────────────
+    # Confirmed present in the exact spec version this project targets
+    # (v1.0.0-rc3, riscv/riscv-debug-spec tag -- resolves the testplan's own
+    # previously-unresolved "was keepalive added after rc3?" question,
+    # 2026-07-25). Optional (like resethaltreq), and this project's
+    # golden model does not track a `keepalive` hart-state field (no
+    # dmstatus bit reports it either -- #3.14.2 keepalive itself "cannot be
+    # read", same family as resethaltreq), so this is discovery-only: the
+    # write happened, the DM survived it, no functional claim beyond that.
+    def tc_ka_001():
+        dm.write_dmcontrol(setkeepalive=True)
+        after_set = dm.read_dmcontrol()
+        dm.write_dmcontrol(clrkeepalive=True)
+        after_clr = dm.read_dmcontrol()
+        alive = bool(after_clr & 1)  # dmactive still 1
+        return StepResult(
+            ok=alive,
+            msg=f"TC-KA-001: wrote setkeepalive=1 (readback=0x{after_set:08x}), "
+                f"then clrkeepalive=1 (readback=0x{after_clr:08x}) — DM alive "
+                f"throughout (dmactive={alive}). keepalive cannot be read back "
+                f"(#3.14.2), so this is discovery-only, same as resethaltreq.",
+        )
+    session.add_step(
+        "TC-KA-001: setkeepalive/clrkeepalive discovery probe (spec #3.14.2)",
+        tc_ka_001,
     )
 
     return session

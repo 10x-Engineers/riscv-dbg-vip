@@ -82,13 +82,29 @@ def build_halt_on_reset_sequence(
 
     # ── TC-HOR-002: setresethaltreq causes halt-on-reset ──────────────────
     def tc_hor_002():
-        if not state["has_resethaltreq"]:
-            return _na("TC-HOR-002")
+        # The write itself (dmcontrol.setresethaltreq=1) always happens,
+        # gate or no gate: it's a legitimate thing for a debugger to probe
+        # even on a DUT that doesn't implement it (confirms the WARL
+        # tie-down doesn't break anything), and it's what
+        # cross.ndmreset_x_reset_haltreq's assert/deassert_rhr1 bins are
+        # actually covering -- the write+edge combination, not a specific
+        # DUT behavior (see coverage.py). Only the *functional* assertion
+        # below (did the hart actually halt) is gated -- that part
+        # genuinely cannot be checked when the DUT doesn't implement it.
         dm.set_reset_haltreq()
         dm.ndmreset(True)
         dm.read_dmstatus()  # observe the in-reset window before releasing
         dm.ndmreset(False)
         word = dm.read_dmstatus()
+        if not state["has_resethaltreq"]:
+            return StepResult(
+                ok=True,
+                msg="TC-HOR-002: wrote setresethaltreq=1 then cycled ndmreset "
+                    "— dmstatus.hasresethaltreq=0 on this DUT, so the "
+                    "functional check (did the hart actually halt) is N/A "
+                    "(gated by TC-HOR-001, spec #3.5 Optional); the write "
+                    "itself still happened, exercising the protocol path",
+            )
         ok = anyhalted(word) and allhalted(word)
         p = _predictor(dm)
         if p is not None:
@@ -106,12 +122,20 @@ def build_halt_on_reset_sequence(
 
     # ── TC-HOR-003: clrresethaltreq clears the request ────────────────────
     def tc_hor_003():
-        if not state["has_resethaltreq"]:
-            return _na("TC-HOR-003")
+        # Same "always write, gate only the functional check" reasoning as
+        # TC-HOR-002 above.
         dm.clr_reset_haltreq()
         dm.ndmreset(True)
         dm.ndmreset(False)
         word = dm.read_dmstatus()
+        if not state["has_resethaltreq"]:
+            return StepResult(
+                ok=True,
+                msg="TC-HOR-003: wrote clrresethaltreq=1 then cycled ndmreset "
+                    "— dmstatus.hasresethaltreq=0 on this DUT, so the "
+                    "functional check is N/A (gated by TC-HOR-001, spec "
+                    "#3.5 Optional); the write itself still happened",
+            )
         ok = not anyhalted(word)
         return StepResult(
             ok=ok,

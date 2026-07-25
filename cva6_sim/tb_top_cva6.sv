@@ -121,12 +121,14 @@ module tb_top_soc;
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
     end
 
-    // ── Tell dm_checker's model this DUT is on the v1.0 fork (#104, #117) ──
+    // ── Tell dm_checker which declared DUT config to load (#104, #117) ─────
     // CVA6-fork's nested corev_apu/riscv-dbg is pinned to
     // 10x-Engineers/riscv-dbg@features/riscv-debug-update; Ibex's tb_top
-    // sets nothing and gets dm_checker's "0.13" default.
+    // sets nothing and gets dm_checker's ibex.json default. Path is relative
+    // to cva6_sim/ (vsim's CWD when this runs).
     initial begin
-        uvm_config_db #(string)::set(null, "*", "dut_version", "1.0");
+        uvm_config_db #(string)::set(null, "*", "dut_config_path",
+            "../src/pydebug/dut_configs/cva6.json");
     end
 
     // ── Waveform dump (opt-in via +dump_waves) ─────────────────────────────
@@ -141,6 +143,8 @@ module tb_top_soc;
             $dumpfile(wave_file);
             $dumpvars(0, dut.i_dm_top);
             $dumpvars(0, jtag_vif);
+            $dumpvars(0, dut.i_ariane.i_cva6.csr_regfile_i);
+            $dumpvars(0, dut.i_ariane.i_cva6.commit_stage_i);
             `uvm_info("TB_SOC", $sformatf("Waveform dump enabled: %s", wave_file), UVM_LOW)
         end
     end

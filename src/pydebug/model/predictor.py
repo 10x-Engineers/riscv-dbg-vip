@@ -92,6 +92,8 @@ class DMPredictor:
         supports_hartreset: bool = True,
         supports_hasel: bool = False,
         resumeack_reset: bool = False,
+        stickyunavail: bool = False,
+        havereset_poweron: bool = False,
     ):
         """
         Args:
@@ -116,6 +118,14 @@ class DMPredictor:
                 explicitly permits either 0 or 1 ("except for resume ack, which may
                 reset to either 0 or 1"), so this is implementation-defined and
                 must not be asserted on generically.
+            stickyunavail: dmstatus.stickyunavail (#3.14.1, reset="Preset") — a
+                declared capability bit, not derivable from version or anything
+                else: whether allunavail/anyunavail behave sticky. Must be told
+                explicitly per target (riscv-dbg-vip#117).
+            havereset_poweron: Whether a hart's havereset bit reads 1 immediately
+                after power-on, before any DMI activity (#3.2's reset value for
+                havereset is implementation-defined, "-"). Cleared the moment
+                anything acks it (e.g. activate()'s bundled ackhavereset=1).
         """
         self.num_harts = num_harts
         self.version = version
@@ -125,6 +135,8 @@ class DMPredictor:
         self.supports_hartreset = supports_hartreset
         self.supports_hasel = supports_hasel
         self.resumeack_reset = resumeack_reset
+        self.stickyunavail = stickyunavail
+        self.havereset_poweron = havereset_poweron
 
         self.harts: List[HartState] = []
         self.dmactive = False
@@ -167,7 +179,7 @@ class DMPredictor:
             if power_on:
                 h.halted = False
                 h.running = True
-                h.havereset = False
+                h.havereset = self.havereset_poweron
             else:
                 # Preserve hart-side signals across a DM reset (see docstring).
                 h.halted = prev[i].halted if i < len(prev) else False
@@ -315,7 +327,19 @@ class DMPredictor:
             self.ndmreset = True
             for h in self.harts:
                 h.halted = False
-                h.running = False  # in reset: neither halted nor running
+                # Spec #3.2: "Which states a hart that is reset goes through
+                # is implementation dependent." Both current DUTs' dm_csrs.sv
+                # compute allrunning/anyrunning combinationally as
+                # ~halted & ~unavailable -- with halted forced False above,
+                # a hart not independently marked unavailable reads
+                # running=True throughout the reset window, not "neither"
+                # (confirmed on real RTL, not guessed; see
+                # dv_model_derive_from_spec).
+                h.running = not (h.unavail_sticky or not h.available)
+                # Both DUTs' dm_csrs.sv set havereset_d combinationally on
+                # ndmreset_o ("if (ndmreset_o) havereset_d_aligned = '1") --
+                # immediately on assertion, not deferred to release.
+                h.havereset = True
         elif not asserted and self.ndmreset:
             self.ndmreset = False
             for h in self.harts:
@@ -356,11 +380,14 @@ class DMPredictor:
             h.running = True
 
     def _settle_reset_state(self) -> None:
-        """Harts held in reset report neither halted nor running."""
+        """Harts held in reset report halted=False -- and, per both DUTs'
+        real ~halted & ~unavailable combinational formula (see
+        _apply_ndmreset), running=True unless independently unavailable,
+        not "neither"."""
         for h in self.harts:
             if self.ndmreset or (h.hart_reset and not h.nonexistent):
                 h.halted = False
-                h.running = False
+                h.running = not (h.unavail_sticky or not h.available)
 
     # ── Read prediction ───────────────────────────────────────────────────────
 
@@ -395,7 +422,7 @@ class DMPredictor:
 
         return DMSTATUS.encode(
             ndmresetpending=int(self.ndmreset),
-            stickyunavail=0,
+            stickyunavail=int(self.stickyunavail),
             impebreak=int(self.impebreak),
             allhavereset=havereset["all"],
             anyhavereset=havereset["any"],
@@ -413,7 +440,11 @@ class DMPredictor:
             authbusy=0,
             hasresethaltreq=int(self.hasresethaltreq),
             confstrptrvalid=0,
-            version=self.version if self.dmactive else 0,
+            # NOT gated by dmactive on either real DUT: dm_csrs.sv assigns
+            # dmstatus.version unconditionally on both, confirmed by a
+            # pre-activation dmstatus read returning the true version, not 0
+            # (riscv-dbg-vip#117).
+            version=self.version,
         )
 
     def _expect_dmcontrol(self) -> int:

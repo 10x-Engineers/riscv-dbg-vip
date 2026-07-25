@@ -90,13 +90,17 @@ def build_trigger_sequence(
         # Disable the trigger first so writing tdata2 cannot spuriously fire.
         _try(lambda: dm.write_gpr(CSR_TDATA1, 0))
         before1 = _try(lambda: dm.read_gpr(CSR_TDATA1))
+        before3 = _try(lambda: dm.read_gpr(CSR_TDATA3))
         _try(lambda: dm.write_gpr(CSR_TDATA2, 0xDEADBEEF))
         after1 = _try(lambda: dm.read_gpr(CSR_TDATA1))
-        ok = before1 == after1
+        after3 = _try(lambda: dm.read_gpr(CSR_TDATA3))
+        ok = before1 == after1 and before3 == after3
         return StepResult(
             ok=ok,
             msg=f"TC-TRIG-004: tdata1 before=0x{before1:08x} after tdata2 write "
-                f"=0x{after1:08x}  {'isolated OK' if ok else 'DISTURBED'}",
+                f"=0x{after1:08x}; tdata3 before=0x{before3:08x} after="
+                f"0x{after3:08x}  {'isolated OK' if ok else 'DISTURBED'} "
+                f"(testplan TC-TRIG-004 scope: tdata1 AND tdata3 isolation)",
         )
     session.add_step("TC-TRIG-004: tdata write-isolation", tc_trig_004)
 

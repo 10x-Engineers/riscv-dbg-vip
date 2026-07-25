@@ -16,6 +16,8 @@ package debug_pkg;
   `include "../fcov/covergroups.sv"
   // Must precede dm_checker.sv: the checker instantiates dm_ref_model.
   `include "../model/dm_ref_model.sv"
+  // Must precede dm_checker.sv: the checker uses it to load dut_configs/*.json.
+  `include "../model/dut_config_reader.sv"
   // Must precede env.sv: env instantiates dm_checker.
   `include "dm_checker.sv"
   `include "env.sv"

@@ -69,6 +69,8 @@ def dmcontrol(
     clrresethaltreq: bool = False,
     ackunavail:      bool = False,
     hasel:           bool = False,
+    setkeepalive:    bool = False,
+    clrkeepalive:    bool = False,
 ) -> int:
     """
     Encode a dmcontrol (DMI 0x10) word, spec #3.14.2.
@@ -84,8 +86,11 @@ def dmcontrol(
     v |= (1 if ndmreset        else 0) << 1
     v |= (1 if clrresethaltreq else 0) << 2
     v |= (1 if setresethaltreq else 0) << 3
-    # bits 4:5 are set/clrkeepalive — not yet exercised by any TC-ID, so left
-    # unencoded here rather than half-implemented; see testplan coverage notes.
+    # bits 4:5, spec #3.14.2 -- confirmed present in the exact spec version
+    # this project targets (v1.0.0-rc3, riscv/riscv-debug-spec tag), same
+    # "optional" status as set/clrresethaltreq at bits 2:3.
+    v |= (1 if clrkeepalive    else 0) << 4
+    v |= (1 if setkeepalive    else 0) << 5
     v |= ((hartsel >> 10) & 0x3FF)     << 6    # hartselhi, bits[15:6]
     v |= (hartsel & 0x3FF)             << 16   # hartsello, bits[25:16]
     v |= (1 if hasel           else 0) << 26

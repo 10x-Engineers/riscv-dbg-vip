@@ -132,6 +132,15 @@ module tb_top_ibex;
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
     end
 
+    // ── Tell dm_checker which declared DUT config to load (#117) ───────────
+    // Ibex's vendored riscv-dbg is untouched PULP v0.13. Path is relative to
+    // ibex_sim/ (vsim's CWD when this runs); explicit here even though it
+    // matches dm_checker's own default, so the mapping isn't implicit.
+    initial begin
+        uvm_config_db #(string)::set(null, "*", "dut_config_path",
+            "../src/pydebug/dut_configs/ibex.json");
+    end
+
     // ── Waveform dump (opt-in via +dump_waves) ─────────────────────────────
     // Scoped to the Debug Module (dut.gen_dm_top.u_dm_top — it sits inside a
     // generate-if block, not directly under dut) plus the JTAG VIP interface
