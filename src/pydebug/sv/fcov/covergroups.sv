@@ -306,6 +306,16 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     ndmreset_ctx_e    cur_ndmreset_ctx;
     int unsigned      cur_mutex_count;
 
+    // ── DUT configuration, read from dut_configs/<name>.json in build_phase
+    // (dut_config_reader.sv, same mechanism/same file dm_checker.sv already
+    // uses to construct dm_ref_model) -- generatable from config, not
+    // hardcoded per-DUT assumptions. Populated BEFORE the covergroups below
+    // are constructed, since a coverpoint bin's value set is evaluated once
+    // at covergroup construction, not re-evaluated per sample.
+    bit [3:0] dut_version           = VERSION_0_13;
+    bit       dut_hasresethaltreq   = 1'b0;
+    bit       dut_stickyunavail     = 1'b0;
+
     // ── Inferred state, rebuilt from the bus exactly as a debugger would ──────
     int unsigned num_harts       = 1;   // DUT config, from the config_db
     logic [19:0] hartsel         = '0;  // as last written (#3.14.2: resets to 0)
@@ -526,7 +536,31 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         option.per_instance = 1;
         option.comment = "Decoded dmstatus read data (#3.14.1)";
 
-        cp_ndmresetpending : coverpoint r[DMS_NDMRESETPENDING] { bins zero = {0}; bins one = {1}; }
+        // ndmresetpending (#3.14.1) is a v1.0 addition; a v0.13 DUT's dm_pkg
+        // dmstatus_t has no such field routed at all and reads it tied 0
+        // unconditionally (confirmed against real Ibex RTL, 2026-07-25).
+        // Unlike cp_version/cp_stickyunavail/cp_hasresethaltreq above, this
+        // one can't be made config-driven with a runtime dut_version check:
+        // those fields each have exactly one real, static, per-DUT value,
+        // but ndmresetpending on a v1.0 DUT is a genuine live signal with
+        // BOTH 0 and 1 independently meaningful -- there's no single
+        // "declared value" to swap in, and a runtime value-set trick (e.g.
+        // an unreachable sentinel like 1'bz for the "wrong" DUT) does not
+        // work either: Questa still counts a `bins` entry toward the total
+        // even when its value can provably never be sampled -- only the
+        // `ignore_bins` *keyword* removes a bin from the denominator, and
+        // that keyword is fixed at elaboration, not switchable at runtime.
+        // This needs real compile-time conditional compilation instead:
+        // DUT_VERSION_1_0 is defined via +define+ only for the CVA6 vlog
+        // invocations (cva6_sim/Makefile), left undefined for Ibex's.
+        cp_ndmresetpending : coverpoint r[DMS_NDMRESETPENDING] {
+            bins zero = {1'b0};
+`ifdef DUT_VERSION_1_0
+            bins one = {1'b1};
+`else
+            ignore_bins one_pre_1_0 = {1'b1};
+`endif
+        }
         cp_allhavereset    : coverpoint r[DMS_ALLHAVERESET]    { bins zero = {0}; bins one = {1}; }
         cp_anyhavereset    : coverpoint r[DMS_ANYHAVERESET]    { bins zero = {0}; bins one = {1}; }
         cp_allresumeack    : coverpoint r[DMS_ALLRESUMEACK]    { bins zero = {0}; bins one = {1}; }
@@ -551,14 +585,18 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cp_anyrunning      : coverpoint r[DMS_ANYRUNNING]      { bins zero = {0}; bins one = {1}; }
         cp_allhalted       : coverpoint r[DMS_ALLHALTED]       { bins zero = {0}; bins one = {1}; }
         cp_anyhalted       : coverpoint r[DMS_ANYHALTED]       { bins zero = {0}; bins one = {1}; }
-        // #3.14.2 hasresethaltreq=1: both DUTs' dm_csrs.sv hardcode
-        // `dmstatus.hasresethaltreq = 1'b0` unconditionally (not a real
-        // capability wire) -- confirmed against RTL, 2026-07-25. Reachable
-        // only on a future DUT integration that actually implements the
-        // optional halt-on-reset mechanism.
+        // #3.14.2 hasresethaltreq: an optional, declared DUT capability
+        // (dut_configs/<name>.json "hasresethaltreq", read into
+        // dut_hasresethaltreq in build_phase) -- both current DUTs declare
+        // it false (dm_csrs.sv hardcodes `dmstatus.hasresethaltreq = 1'b0`
+        // unconditionally), so the "true" value is presently always
+        // ignore_bins in practice, but this is now generated from the same
+        // config dm_ref_model.sv uses, not a hardcoded cross-DUT assumption
+        // (2026-07-25) -- a future DUT declaring it true flips which value
+        // is real without touching this file.
         cp_hasresethaltreq : coverpoint r[DMS_HASRESETHALTREQ] {
-            bins zero = {0};
-            ignore_bins hardcoded_0_both_duts = {1};
+            bins declared          = {dut_hasresethaltreq};
+            ignore_bins undeclared = {!dut_hasresethaltreq};
         }
 
         // ── Fields whose other value belongs to a slice we are not covering ────
@@ -592,11 +630,17 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             bins zero = {0};
             ignore_bins discovery_slice = {1};
         }
-        // #3.14.1 stickyunavail is Preset. Where the DM reports 0, unavail is not
-        // sticky and clears without ackunavail, and no stimulus can raise this bit.
+        // #3.14.1 stickyunavail is Preset -- a declared, per-DUT static value
+        // (dut_configs/<name>.json "stickyunavail", read into
+        // dut_stickyunavail in build_phase), not a runtime-settable bit: no
+        // stimulus can ever change which single value a given DUT reports.
+        // Previously hardcoded to always-expect-0/ignore-1, which was
+        // silently backwards for a DUT declaring stickyunavail=true (CVA6:
+        // permanently 1, making "0" the actually-unreachable value on that
+        // DUT) -- generated from config now, 2026-07-25.
         cp_stickyunavail : coverpoint r[DMS_STICKYUNAVAIL] {
-            bins zero = {0};
-            ignore_bins preset_high = {1};
+            bins declared          = {dut_stickyunavail};
+            ignore_bins undeclared = {!dut_stickyunavail};
         }
 
         cp_version : coverpoint r[3:0] {
@@ -608,8 +652,18 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             // (2026-07-25; mirrors the identical fix already applied on the
             // Python model side, model/coverage.py).
             ignore_bins none = {VERSION_NONE};
-            bins v0_13 = {VERSION_0_13};
-            bins v1_0  = {VERSION_1_0};
+            // A DUT reports exactly one spec version, declared in
+            // dut_configs/<name>.json and read into dut_version in
+            // build_phase (same mechanism as dm_ref_model.sv's own
+            // version_ constructor arg) -- v0_13/v1_0 are therefore
+            // mutually exclusive per DUT, not two bins every DUT is
+            // expected to hit. Generated from config, 2026-07-25: CVA6's
+            // own report no longer carries a permanently-red v0_13 bin it
+            // structurally can never reach, and vice versa for Ibex.
+            bins declared = {dut_version};
+            ignore_bins undeclared = {
+                (dut_version == VERSION_0_13) ? VERSION_1_0 : VERSION_0_13
+            };
             // version=1 (0.11) predates the dmcontrol/dmstatus field layout this
             // model decodes, so binning it here would be incoherent.
             ignore_bins v0_11 = {VERSION_0_11};
@@ -932,7 +986,32 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
 
     // ══════════════════════════════════════════════════════════════════════════
     function new(string name, uvm_component parent);
+        string dut_config_path;
+        dut_config_reader cfg;
         super.new(name, parent);
+        // An embedded covergroup (declared inside a class) can only be
+        // constructed in that class's own new() -- Questa (vlog-60) rejects
+        // `cg_foo = new()` from build_phase or anywhere else, so the DUT
+        // config read that cp_version/cp_stickyunavail/cp_hasresethaltreq/
+        // cp_ndmresetpending need has to happen here too, before those
+        // covergroups are constructed below, rather than in build_phase
+        // alongside num_harts. uvm_config_db::get() still resolves
+        // correctly at this point: tb_top's initial block sets
+        // "dut_config_path" via a plain (non-UVM-phased) `initial` block at
+        // time 0, and this component's own new() is only ever invoked from
+        // its parent's build_phase (via create()), which runs after that.
+        //
+        // Same dut_config_path key/mechanism dm_checker.sv already uses to
+        // construct dm_ref_model (riscv-dbg-vip#117) -- the single declared
+        // source of every implementation-defined field this covergroup also
+        // needs to correctly classify as reachable/unreachable per DUT.
+        if (!uvm_config_db#(string)::get(this, "", "dut_config_path", dut_config_path))
+            dut_config_path = "../src/pydebug/dut_configs/ibex.json";
+        cfg = new(dut_config_path);
+        dut_version         = cfg.get_version();
+        dut_hasresethaltreq = cfg.get_bool("hasresethaltreq");
+        dut_stickyunavail   = cfg.get_bool("stickyunavail");
+
         cg_dmi_access      = new();
         cg_dmcontrol_write = new();
         cg_dmstatus_read   = new();

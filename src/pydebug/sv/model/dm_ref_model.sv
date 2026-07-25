@@ -40,16 +40,27 @@ class dm_ref_model;
   // havereset signals from each hart.") ─────────────────────────────────────
   typedef struct {
     bit halt_request;
-    bit resume_ack;
     bit reset_haltreq;
     bit hart_reset;
-    bit halted;
-    bit running;
+    // halted/running/resume_ack are hart_signal_bit agents, not plain bits:
+    // they're the 3 dmstatus fields spec #3.5 says the DM *receives* from
+    // the hart (as opposed to DM-internal state), and real RTL confirms
+    // that distinction matters -- these reach the DM through genuine,
+    // variable-latency hardware paths this model cannot predict
+    // synchronously. See hart_signal_bit.sv for the full rationale.
+    hart_signal_bit halted;
+    hart_signal_bit running;
+    hart_signal_bit resume_ack;
     bit havereset;       // sticky until ackhavereset
     bit available;
     bit unavail_sticky;  // sticky until ackunavail (spec #3.14.2)
     bit nonexistent;
   } hart_state_s;
+
+  // dmstatus.version encoding (spec #3.14.1) -- matches covergroups.sv's
+  // VERSION_0_13/VERSION_1_0 localparams, duplicated here since this class
+  // has no visibility into that module's scope.
+  localparam bit [3:0] VERSION_1_0 = 4'd3;
 
   // ── Configuration (constructor args mirror predictor.py's DMPredictor) ────
   local int unsigned num_harts;
@@ -140,19 +151,26 @@ class dm_ref_model;
 
     harts = new[(num_harts > 0) ? num_harts : 1];
     foreach (harts[i]) begin
-      harts[i] = '{default: 0};
-      harts[i].resume_ack = resumeack_reset;
+      // No '{default: 0} here: hart_state_s now mixes plain bits with
+      // hart_signal_bit class handles, and a literal 0 cannot construct a
+      // handle at elaboration -- each field is set explicitly instead.
+      harts[i].halt_request    = 1'b0;
+      harts[i].reset_haltreq   = 1'b0;
+      harts[i].hart_reset      = 1'b0;
+      harts[i].unavail_sticky  = 1'b0;
+      harts[i].nonexistent     = 1'b0;
+      harts[i].resume_ack      = new(resumeack_reset);
       // predictor.py's HartState.available defaults True ("powered and
-      // clocked" -- #3.2); the struct-fill above zeroes it, so it must be
-      // set explicitly here to match, same as the other per-hart fields.
+      // clocked" -- #3.2); set explicitly here to match, same as the
+      // other per-hart fields.
       harts[i].available  = 1'b1;
       if (power_on || i >= prev.size()) begin
-        harts[i].halted    = 1'b0;
-        harts[i].running   = 1'b1;
+        harts[i].halted    = new(1'b0);
+        harts[i].running   = new(1'b1);
         harts[i].havereset = havereset_poweron;
       end else begin
-        harts[i].halted    = prev[i].halted;
-        harts[i].running   = prev[i].running;
+        harts[i].halted    = new(prev[i].halted.get());
+        harts[i].running   = new(prev[i].running.get());
         harts[i].havereset = prev[i].havereset;
       end
     end
@@ -240,9 +258,9 @@ class dm_ref_model;
       harts[sel].halt_request = haltreq_f;
       if (haltreq_f && !harts[sel].nonexistent &&
           !(harts[sel].unavail_sticky || !harts[sel].available)) begin
-        if (harts[sel].running && !harts[sel].halted) begin
-          harts[sel].halted  = 1'b1;
-          harts[sel].running = 1'b0;
+        if (harts[sel].running.get() && !harts[sel].halted.get()) begin
+          harts[sel].halted.set(1'b1);
+          harts[sel].running.set(1'b0);
         end
       end
 
@@ -261,11 +279,11 @@ class dm_ref_model;
   local function void apply_resumereq(int sel);
     if (!hart_exists(sel) || harts[sel].nonexistent ||
         harts[sel].unavail_sticky || !harts[sel].available) return;
-    harts[sel].resume_ack = 1'b0;
-    if (harts[sel].halted) begin
-      harts[sel].halted     = 1'b0;
-      harts[sel].running    = 1'b1;
-      harts[sel].resume_ack = 1'b1;
+    harts[sel].resume_ack.set(1'b0);
+    if (harts[sel].halted.get()) begin
+      harts[sel].halted.set(1'b0);
+      harts[sel].running.set(1'b1);
+      harts[sel].resume_ack.set(1'b1);
       // Same reasoning as the postexec case in write_command (#110): once
       // resumed, the hart runs arbitrary code (possibly just one
       // instruction, for single-step) outside DM control before its next
@@ -282,7 +300,7 @@ class dm_ref_model;
     if (asserted && !ndmreset) begin
       ndmreset = 1'b1;
       foreach (harts[i]) begin
-        harts[i].halted    = 1'b0;
+        harts[i].halted.set(1'b0);
         // Spec #3.2: "Which states a hart that is reset goes through is
         // implementation dependent." Both current DUTs' dm_csrs.sv compute
         // allrunning/anyrunning combinationally as ~halted & ~unavailable
@@ -290,11 +308,19 @@ class dm_ref_model;
         // unavailable reads running=1 throughout the reset window, not
         // "neither" (confirmed on real RTL via riscv-dbg-vip, not guessed;
         // see [[dv_model_derive_from_spec]]).
-        harts[i].running   = !(harts[i].unavail_sticky || !harts[i].available);
+        harts[i].running.set(!(harts[i].unavail_sticky || !harts[i].available));
         // Both DUTs' dm_csrs.sv set havereset_d combinationally on
         // ndmreset_o ("if (ndmreset_o) havereset_d_aligned = '1") --
         // immediately on assertion, not deferred to release_from_reset.
         harts[i].havereset = 1'b1;
+        // #3.5: "These 4 [DM-tracked] bits reset to 0, except for resume
+        // ack, which may reset to either 0 or 1" -- explicitly declared
+        // implementation-defined, per-DUT, same category as
+        // havereset_poweron_ (riscv-dbg-vip#117). Applies to every reset
+        // event this bit is exposed to, not just power-on -- resumeack_
+        // reset_ is the single declared parameter that governs it
+        // everywhere, mirroring reset_dm()'s use of the same field.
+        harts[i].resume_ack.set(resumeack_reset);
       end
     end else if (!asserted && ndmreset) begin
       ndmreset = 1'b0;
@@ -309,8 +335,13 @@ class dm_ref_model;
     if (asserted && !hartreset_level) begin
       hartreset_level        = 1'b1;
       harts[sel].hart_reset  = 1'b1;
-      harts[sel].halted      = 1'b0;
-      harts[sel].running     = 1'b0;
+      harts[sel].halted.set(1'b0);
+      harts[sel].running.set(1'b0);
+      // Same declared, implementation-defined reset value as ndmreset's
+      // identical resume_ack handling above (#3.5) -- not currently
+      // exercised on either DUT (hartreset is WARL-tied 0 on both), kept
+      // for correctness/consistency should a future DUT implement it.
+      harts[sel].resume_ack.set(resumeack_reset);
     end else if (!asserted && hartreset_level) begin
       hartreset_level       = 1'b0;
       harts[sel].hart_reset = 1'b0;
@@ -325,11 +356,11 @@ class dm_ref_model;
     if (!hart_exists(idx) || harts[idx].nonexistent) return;
     harts[idx].havereset = 1'b1;
     if (harts[idx].reset_haltreq || harts[idx].halt_request) begin
-      harts[idx].halted  = 1'b1;
-      harts[idx].running = 1'b0;
+      harts[idx].halted.set(1'b1);
+      harts[idx].running.set(1'b0);
     end else begin
-      harts[idx].halted  = 1'b0;
-      harts[idx].running = 1'b1;
+      harts[idx].halted.set(1'b0);
+      harts[idx].running.set(1'b1);
     end
   endfunction
 
@@ -339,8 +370,8 @@ class dm_ref_model;
   local function void settle_reset_state();
     foreach (harts[i]) begin
       if (ndmreset || (harts[i].hart_reset && !harts[i].nonexistent)) begin
-        harts[i].halted  = 1'b0;
-        harts[i].running = !(harts[i].unavail_sticky || !harts[i].available);
+        harts[i].halted.set(1'b0);
+        harts[i].running.set(!(harts[i].unavail_sticky || !harts[i].available));
       end
     end
   endfunction
@@ -438,6 +469,22 @@ class dm_ref_model;
     endcase
   endfunction
 
+  // Called by dm_checker.sv on every real dmstatus read, BEFORE predict()
+  // is compared against it -- syncs the 3 hart_signal_bit fields (halted/
+  // running/resume_ack) to what the DUT just reported for the currently
+  // selected hart, so predict() recomputes those specific bits from the
+  // same value actual just supplied (see hart_signal_bit.sv for why: they
+  // reach the DM through real, variable-latency hart-side hardware this
+  // untimed model cannot predict synchronously). Every other dmstatus
+  // field is untouched and still meaningfully compared.
+  function void sync_observed_hart_signals(bit [31:0] r);
+    int sel = selected_index();
+    if (!hart_exists(sel)) return;
+    harts[sel].halted.observe(r[9]);      // allhalted
+    harts[sel].running.observe(r[11]);    // allrunning
+    harts[sel].resume_ack.observe(r[17]); // allresumeack
+  endfunction
+
   // dmstatus read-back (spec #3.14.1). Field positions match both
   // riscv_dm.py's accessor functions and model/registers.py's DMSTATUS table.
   local function bit [31:0] expect_dmstatus();
@@ -446,10 +493,10 @@ class dm_ref_model;
     bit [31:0] word;
 
     if (hart_exists(sel)) begin
-      halted    = harts[sel].halted;
-      running   = harts[sel].running;
+      halted    = harts[sel].halted.get();
+      running   = harts[sel].running.get();
       havereset = harts[sel].havereset;
-      resumeack = harts[sel].resume_ack;
+      resumeack = harts[sel].resume_ack.get();
       nonexist  = harts[sel].nonexistent;
       unavail   = harts[sel].unavail_sticky || !harts[sel].available;
     end else begin
@@ -459,7 +506,12 @@ class dm_ref_model;
     end
 
     word = '0;
-    word[24]   = ndmreset;              // ndmresetpending
+    // ndmresetpending (bit 24) is a v1.0 addition (#3.14.1); a v0.13 DUT's
+    // dm_pkg dmstatus_t has no such field routed at all and reads it tied 0
+    // regardless of the real ndmreset level -- confirmed against real Ibex
+    // RTL (vendored, unmodified v0.13 riscv-dbg), 2026-07-25. Mirrors the
+    // identical fix in predictor.py.
+    word[24]   = (version >= VERSION_1_0) ? ndmreset : 1'b0; // ndmresetpending
     word[23]   = stickyunavail;         // #520, declared capability -- see constructor
     word[22]   = impebreak;
     word[19]   = havereset;             // allhavereset (single selected hart: all==any)
