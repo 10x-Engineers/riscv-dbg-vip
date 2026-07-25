@@ -79,7 +79,7 @@ soc_compile: uvm_bridge_soc.so sw/$(notdir $(ELF))
 	 export TARGET_CFG=cv64a6_imafdc_sv39; \
 	 export HPDCACHE_DIR=$(CVA6_REPO_DIR)/core/cache_subsystem/hpdcache; \
 	 python3 $(CVA6_REPO_DIR)/util/flist_flattener.py --print_incdir --print_newline $(CVA6_REPO_DIR)/core/Flist.cva6 > flist_soc.tmp
-	vlog $(QUESTA_FLAGS) +define+RISCV_VIP_MODE \
+	vlog $(QUESTA_FLAGS) +define+RISCV_VIP_MODE +define+DUT_VERSION_1_0 \
 	    +incdir+$(CVA6_REPO_DIR)/corev_apu/register_interface/include \
 	    +incdir+$(CVA6_REPO_DIR)/corev_apu/instr_tracing/ITI/include \
 	    +incdir+$(CVA6_REPO_DIR)/corev_apu/fpga/src/apb/include \
@@ -156,7 +156,7 @@ soc_compile_cov: uvm_bridge_soc.so sw/$(notdir $(ELF))
 	 export TARGET_CFG=cv64a6_imafdc_sv39; \
 	 export HPDCACHE_DIR=$(CVA6_REPO_DIR)/core/cache_subsystem/hpdcache; \
 	 python3 $(CVA6_REPO_DIR)/util/flist_flattener.py --print_incdir --print_newline $(CVA6_REPO_DIR)/core/Flist.cva6 > flist_soc.tmp
-	vlog $(QUESTA_FLAGS) +cover=sbceft +define+RISCV_VIP_MODE \
+	vlog $(QUESTA_FLAGS) +cover=sbceft +define+RISCV_VIP_MODE +define+DUT_VERSION_1_0 \
 	    +incdir+$(CVA6_REPO_DIR)/corev_apu/register_interface/include \
 	    +incdir+$(CVA6_REPO_DIR)/corev_apu/instr_tracing/ITI/include \
 	    +incdir+$(CVA6_REPO_DIR)/corev_apu/fpga/src/apb/include \

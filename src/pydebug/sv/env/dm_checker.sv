@@ -143,6 +143,15 @@ class dm_checker extends uvm_component;
     total_checked++;
     if (!model.has_model(addr)) return; // nothing checkable for this address
 
+    // Sync the hart-driven dmstatus fields (halted/running/resume_ack) to
+    // what the DUT just reported BEFORE comparing -- they reach the DM
+    // through real, variable-latency hart-side hardware this model cannot
+    // predict synchronously (see dm_ref_model.sv's sync_observed_hart_
+    // signals / hart_signal_bit.sv). Every other dmstatus field is
+    // unaffected and still compared normally below.
+    if (addr == dm_defines_pkg::DM_ADDR_DMSTATUS)
+      model.sync_observed_hart_signals(actual);
+
     if (actual !== model.predict(addr)) begin
       total_mismatches++;
       `uvm_error("MODEL_MISMATCH",

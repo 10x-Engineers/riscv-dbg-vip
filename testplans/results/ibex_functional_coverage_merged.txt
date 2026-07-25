@@ -1,5 +1,5 @@
 QuestaSim-64 vcover 2021.2_1 Coverage Utility 2021.05 May 15 2021
-Start time: 13:58:20 on Jul 25,2026
+Start time: 15:43:15 on Jul 25,2026
 vcover report -cvg -details ./sim_outputs/coverage/merged.ucdb 
 Coverage Report by instance with details
 
@@ -9,9 +9,9 @@ Coverage Report by instance with details
 =================================================================================
 
 Covergroup Coverage:
-    Covergroups                     14        na        na    99.72%
+    Covergroups                     14        na        na   100.00%
         Coverpoints/Crosses         70        na        na        na
-            Covergroup Bins        151       149         2    98.67%
+            Covergroup Bins        149       149         0   100.00%
 ----------------------------------------------------------------------------------------------------------
 Covergroup                                             Metric       Goal       Bins    Status               
                                                                                                          
@@ -28,7 +28,7 @@ Covergroup                                             Metric       Goal       B
         bin dmstatus                                       67          1          -    Covered              
         bin hartinfo                                        2          1          -    Covered              
         bin data0                                          43          1          -    Covered              
-        bin abstractcs                                     66          1          -    Covered              
+        bin abstractcs                                     69          1          -    Covered              
         bin command                                        58          1          -    Covered              
         bin progbuf                                        10          1          -    Covered              
         bin dmcs2                                           7          1          -    Covered              
@@ -40,8 +40,8 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 3          3          -                      
         missing/total bins:                                 0          3          -                      
         % Hit:                                        100.00%        100          -                      
-        bin nop                                           179          1          -    Covered              
-        bin read                                          179          1          -    Covered              
+        bin nop                                           182          1          -    Covered              
+        bin read                                          182          1          -    Covered              
         bin write                                         204          1          -    Covered              
     Coverpoint cp_status                              100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
@@ -49,13 +49,13 @@ Covergroup                                             Metric       Goal       B
         % Hit:                                        100.00%        100          -                      
         ignore_bin failed                                   0                     -    ZERO                 
         ignore_bin busy                                     0                     -    ZERO                 
-        bin success                                       562          1          -    Covered              
+        bin success                                       568          1          -    Covered              
     Cross x_addr_op [2]                                 0.00%        100          -    ZERO                 
         covered/total bins:                                 0          0          -                      
         missing/total bins:                                 0          0          -                      
         % Hit:                                        100.00%        100          -                      
         Illegal and Ignore Bins:
-            ignore_bin all_other                          383                     -    Occurred             
+            ignore_bin all_other                          386                     -    Occurred             
             illegal_bin dmstatus_write                      0                     -    ZERO                 
  Covergroup instance \/debug_pkg::debug_coverage::cg_dmi_access  
                                                       100.00%        100          -    Covered              
@@ -70,7 +70,7 @@ Covergroup                                             Metric       Goal       B
         bin dmstatus                                       67          1          -    Covered              
         bin hartinfo                                        2          1          -    Covered              
         bin data0                                          43          1          -    Covered              
-        bin abstractcs                                     66          1          -    Covered              
+        bin abstractcs                                     69          1          -    Covered              
         bin command                                        58          1          -    Covered              
         bin progbuf                                        10          1          -    Covered              
         bin dmcs2                                           7          1          -    Covered              
@@ -82,8 +82,8 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 3          3          -                      
         missing/total bins:                                 0          3          -                      
         % Hit:                                        100.00%        100          -                      
-        bin nop                                           179          1          -    Covered              
-        bin read                                          179          1          -    Covered              
+        bin nop                                           182          1          -    Covered              
+        bin read                                          182          1          -    Covered              
         bin write                                         204          1          -    Covered              
     Coverpoint cp_status                              100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
@@ -91,13 +91,13 @@ Covergroup                                             Metric       Goal       B
         % Hit:                                        100.00%        100          -                      
         ignore_bin failed                                   0                     -    ZERO                 
         ignore_bin busy                                     0                     -    ZERO                 
-        bin success                                       562          1          -    Covered              
+        bin success                                       568          1          -    Covered              
     Cross x_addr_op [2]                                 0.00%        100          -    ZERO                 
         covered/total bins:                                 0          0          -                      
         missing/total bins:                                 0          0          -                      
         % Hit:                                        100.00%        100          -                      
         Illegal and Ignore Bins:
-            ignore_bin all_other                          383                     -    Occurred             
+            ignore_bin all_other                          386                     -    Occurred             
             illegal_bin dmstatus_write                      0                     -    ZERO                 
  TYPE /debug_pkg/debug_coverage/cg_dmcontrol_write    100.00%        100          -    Covered              
     covered/total bins:                                    47         47          -                      
@@ -366,200 +366,125 @@ Covergroup                                             Metric       Goal       B
             bin <zero,one>                                  9          1          -    Covered              
             bin <one,zero>                                 16          1          -    Covered              
             bin <zero,zero>                                77          1          -    Covered              
- TYPE /debug_pkg/debug_coverage/cg_dmstatus_read       96.15%        100          -    Uncovered            
-    covered/total bins:                                    41         43          -                      
-    missing/total bins:                                     2         43          -                      
-    % Hit:                                             95.34%        100          -                      
-    Coverpoint cp_ndmresetpending                      50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
-        bin zero                                           67          1          -    Covered              
-        bin one                                             0          1          -    ZERO                 
+ TYPE /debug_pkg/debug_coverage/cg_dmstatus_read      100.00%        100          -    Covered              
+    covered/total bins:                                    41         41          -                      
+    missing/total bins:                                     0         41          -                      
+    % Hit:                                            100.00%        100          -                      
+    Coverpoint cp_ndmresetpending                     100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
     Coverpoint cp_allhavereset                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           51          1          -    Covered              
-        bin one                                            16          1          -    Covered              
     Coverpoint cp_anyhavereset                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           51          1          -    Covered              
-        bin one                                            16          1          -    Covered              
     Coverpoint cp_allresumeack                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           58          1          -    Covered              
-        bin one                                             9          1          -    Covered              
     Coverpoint cp_anyresumeack                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           58          1          -    Covered              
-        bin one                                             9          1          -    Covered              
     Coverpoint cp_allnonexistent                      100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           66          1          -    Covered              
-        bin one                                             1          1          -    Covered              
     Coverpoint cp_anynonexistent                      100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           66          1          -    Covered              
-        bin one                                             1          1          -    Covered              
     Coverpoint cp_allunavail                          100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin unavailable_i_tied_0                     0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_anyunavail                          100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin unavailable_i_tied_0                     0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_allrunning                          100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           21          1          -    Covered              
-        bin one                                            46          1          -    Covered              
     Coverpoint cp_anyrunning                          100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           21          1          -    Covered              
-        bin one                                            46          1          -    Covered              
     Coverpoint cp_allhalted                           100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           46          1          -    Covered              
-        bin one                                            21          1          -    Covered              
     Coverpoint cp_anyhalted                           100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           46          1          -    Covered              
-        bin one                                            21          1          -    Covered              
     Coverpoint cp_hasresethaltreq                     100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin hardcoded_0_both_duts                    0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_authenticated                       100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin locked_dm                                0                     -    ZERO                 
-        bin one                                            67          1          -    Covered              
     Coverpoint cp_authbusy                            100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin auth_slice                               0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_impebreak                           100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin progbuf_slice                            0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_confstrptrvalid                     100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin discovery_slice                          0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_stickyunavail                       100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin preset_high                              0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
-    Coverpoint cp_version                              50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
-        ignore_bin none                                     0                     -    ZERO                 
-        ignore_bin v0_11                                    0                     -    ZERO                 
-        ignore_bin custom                                   0                     -    ZERO                 
-        bin v0_13                                          67          1          -    Covered              
-        bin v1_0                                            0          1          -    ZERO                 
+    Coverpoint cp_version                             100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
     Cross x_halted                                    100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                  21          1          -    Covered              
-            bin <zero,zero>                                46          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_running                                   100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                  46          1          -    Covered              
-            bin <zero,zero>                                21          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_havereset                                 100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                  16          1          -    Covered              
-            bin <zero,zero>                                51          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_resumeack                                 100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                   9          1          -    Covered              
-            bin <zero,zero>                                58          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_nonexistent                               100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                   1          1          -    Covered              
-            bin <zero,zero>                                66          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_unavail                                   100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <zero,zero>                                67          1          -    Covered              
  Covergroup instance \/debug_pkg::debug_coverage::cg_dmstatus_read  
-                                                       96.15%        100          -    Uncovered            
-    covered/total bins:                                    41         43          -                      
-    missing/total bins:                                     2         43          -                      
-    % Hit:                                             95.34%        100          -                      
-    Coverpoint cp_ndmresetpending                      50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
+                                                      100.00%        100          -    Covered              
+    covered/total bins:                                    41         41          -                      
+    missing/total bins:                                     0         41          -                      
+    % Hit:                                            100.00%        100          -                      
+    Coverpoint cp_ndmresetpending                     100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
+        ignore_bin one_pre_1_0                              0                     -    ZERO                 
         bin zero                                           67          1          -    Covered              
-        bin one                                             0          1          -    ZERO                 
     Coverpoint cp_allhavereset                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
@@ -636,8 +561,8 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin hardcoded_0_both_duts                    0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
+        ignore_bin undeclared                               0                     -    ZERO                 
+        bin declared                                       67          1          -    Covered              
     Coverpoint cp_authenticated                       100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
@@ -666,17 +591,17 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin preset_high                              0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
-    Coverpoint cp_version                              50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
+        ignore_bin undeclared                               0                     -    ZERO                 
+        bin declared                                       67          1          -    Covered              
+    Coverpoint cp_version                             100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
+        ignore_bin undeclared                               0                     -    ZERO                 
         ignore_bin v0_11                                    0                     -    ZERO                 
         ignore_bin custom                                   0                     -    ZERO                 
-        bin v0_13                                          67          1          -    Covered              
-        bin v1_0                                            0          1          -    ZERO                 
+        bin declared                                       67          1          -    Covered              
     Cross x_halted                                    100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
@@ -803,26 +728,26 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin idle                                           50          1          -    Covered              
-        bin busy                                           16          1          -    Covered              
+        bin idle                                           45          1          -    Covered              
+        bin busy                                           24          1          -    Covered              
     Coverpoint cp_cmderr_none                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin error                                   30                     -    Occurred             
-        bin clean                                          36          1          -    Covered              
+        bin clean                                          39          1          -    Covered              
     Coverpoint cp_has_progbuf                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
     Coverpoint cp_has_data                            100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
  Covergroup instance \/debug_pkg::debug_coverage::cg_abstractcs_read  
                                                       100.00%        100          -    Covered              
     covered/total bins:                                     5          5          -                      
@@ -832,26 +757,26 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin idle                                           50          1          -    Covered              
-        bin busy                                           16          1          -    Covered              
+        bin idle                                           45          1          -    Covered              
+        bin busy                                           24          1          -    Covered              
     Coverpoint cp_cmderr_none                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin error                                   30                     -    Occurred             
-        bin clean                                          36          1          -    Covered              
+        bin clean                                          39          1          -    Covered              
     Coverpoint cp_has_progbuf                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
     Coverpoint cp_has_data                            100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
  TYPE /debug_pkg/debug_coverage/cg_progbuf            100.00%        100          -    Covered              
     covered/total bins:                                     2          2          -                      
     missing/total bins:                                     0          2          -                      
@@ -1124,7 +1049,7 @@ Covergroup                                             Metric       Goal       B
         bin dmstatus                                       67          1          -    Covered              
         bin hartinfo                                        2          1          -    Covered              
         bin data0                                          43          1          -    Covered              
-        bin abstractcs                                     66          1          -    Covered              
+        bin abstractcs                                     69          1          -    Covered              
         bin command                                        58          1          -    Covered              
         bin progbuf                                        10          1          -    Covered              
         bin dmcs2                                           7          1          -    Covered              
@@ -1136,8 +1061,8 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 3          3          -                      
         missing/total bins:                                 0          3          -                      
         % Hit:                                        100.00%        100          -                      
-        bin nop                                           179          1          -    Covered              
-        bin read                                          179          1          -    Covered              
+        bin nop                                           182          1          -    Covered              
+        bin read                                          182          1          -    Covered              
         bin write                                         204          1          -    Covered              
     Coverpoint cp_status                              100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
@@ -1145,13 +1070,13 @@ Covergroup                                             Metric       Goal       B
         % Hit:                                        100.00%        100          -                      
         ignore_bin failed                                   0                     -    ZERO                 
         ignore_bin busy                                     0                     -    ZERO                 
-        bin success                                       562          1          -    Covered              
+        bin success                                       568          1          -    Covered              
     Cross x_addr_op [2]                                 0.00%        100          -    ZERO                 
         covered/total bins:                                 0          0          -                      
         missing/total bins:                                 0          0          -                      
         % Hit:                                        100.00%        100          -                      
         Illegal and Ignore Bins:
-            ignore_bin all_other                          383                     -    Occurred             
+            ignore_bin all_other                          386                     -    Occurred             
             illegal_bin dmstatus_write                      0                     -    ZERO                 
  Covergroup instance \/debug_pkg::debug_coverage::cg_dmi_access  
                                                       100.00%        100          -    Covered              
@@ -1166,7 +1091,7 @@ Covergroup                                             Metric       Goal       B
         bin dmstatus                                       67          1          -    Covered              
         bin hartinfo                                        2          1          -    Covered              
         bin data0                                          43          1          -    Covered              
-        bin abstractcs                                     66          1          -    Covered              
+        bin abstractcs                                     69          1          -    Covered              
         bin command                                        58          1          -    Covered              
         bin progbuf                                        10          1          -    Covered              
         bin dmcs2                                           7          1          -    Covered              
@@ -1178,8 +1103,8 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 3          3          -                      
         missing/total bins:                                 0          3          -                      
         % Hit:                                        100.00%        100          -                      
-        bin nop                                           179          1          -    Covered              
-        bin read                                          179          1          -    Covered              
+        bin nop                                           182          1          -    Covered              
+        bin read                                          182          1          -    Covered              
         bin write                                         204          1          -    Covered              
     Coverpoint cp_status                              100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
@@ -1187,13 +1112,13 @@ Covergroup                                             Metric       Goal       B
         % Hit:                                        100.00%        100          -                      
         ignore_bin failed                                   0                     -    ZERO                 
         ignore_bin busy                                     0                     -    ZERO                 
-        bin success                                       562          1          -    Covered              
+        bin success                                       568          1          -    Covered              
     Cross x_addr_op [2]                                 0.00%        100          -    ZERO                 
         covered/total bins:                                 0          0          -                      
         missing/total bins:                                 0          0          -                      
         % Hit:                                        100.00%        100          -                      
         Illegal and Ignore Bins:
-            ignore_bin all_other                          383                     -    Occurred             
+            ignore_bin all_other                          386                     -    Occurred             
             illegal_bin dmstatus_write                      0                     -    ZERO                 
  TYPE /debug_pkg/debug_coverage/cg_dmcontrol_write    100.00%        100          -    Covered              
     covered/total bins:                                    47         47          -                      
@@ -1462,200 +1387,125 @@ Covergroup                                             Metric       Goal       B
             bin <zero,one>                                  9          1          -    Covered              
             bin <one,zero>                                 16          1          -    Covered              
             bin <zero,zero>                                77          1          -    Covered              
- TYPE /debug_pkg/debug_coverage/cg_dmstatus_read       96.15%        100          -    Uncovered            
-    covered/total bins:                                    41         43          -                      
-    missing/total bins:                                     2         43          -                      
-    % Hit:                                             95.34%        100          -                      
-    Coverpoint cp_ndmresetpending                      50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
-        bin zero                                           67          1          -    Covered              
-        bin one                                             0          1          -    ZERO                 
+ TYPE /debug_pkg/debug_coverage/cg_dmstatus_read      100.00%        100          -    Covered              
+    covered/total bins:                                    41         41          -                      
+    missing/total bins:                                     0         41          -                      
+    % Hit:                                            100.00%        100          -                      
+    Coverpoint cp_ndmresetpending                     100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
     Coverpoint cp_allhavereset                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           51          1          -    Covered              
-        bin one                                            16          1          -    Covered              
     Coverpoint cp_anyhavereset                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           51          1          -    Covered              
-        bin one                                            16          1          -    Covered              
     Coverpoint cp_allresumeack                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           58          1          -    Covered              
-        bin one                                             9          1          -    Covered              
     Coverpoint cp_anyresumeack                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           58          1          -    Covered              
-        bin one                                             9          1          -    Covered              
     Coverpoint cp_allnonexistent                      100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           66          1          -    Covered              
-        bin one                                             1          1          -    Covered              
     Coverpoint cp_anynonexistent                      100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           66          1          -    Covered              
-        bin one                                             1          1          -    Covered              
     Coverpoint cp_allunavail                          100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin unavailable_i_tied_0                     0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_anyunavail                          100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin unavailable_i_tied_0                     0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_allrunning                          100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           21          1          -    Covered              
-        bin one                                            46          1          -    Covered              
     Coverpoint cp_anyrunning                          100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           21          1          -    Covered              
-        bin one                                            46          1          -    Covered              
     Coverpoint cp_allhalted                           100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           46          1          -    Covered              
-        bin one                                            21          1          -    Covered              
     Coverpoint cp_anyhalted                           100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin zero                                           46          1          -    Covered              
-        bin one                                            21          1          -    Covered              
     Coverpoint cp_hasresethaltreq                     100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin hardcoded_0_both_duts                    0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_authenticated                       100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin locked_dm                                0                     -    ZERO                 
-        bin one                                            67          1          -    Covered              
     Coverpoint cp_authbusy                            100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin auth_slice                               0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_impebreak                           100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin progbuf_slice                            0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_confstrptrvalid                     100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin discovery_slice                          0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
     Coverpoint cp_stickyunavail                       100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin preset_high                              0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
-    Coverpoint cp_version                              50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
-        ignore_bin none                                     0                     -    ZERO                 
-        ignore_bin v0_11                                    0                     -    ZERO                 
-        ignore_bin custom                                   0                     -    ZERO                 
-        bin v0_13                                          67          1          -    Covered              
-        bin v1_0                                            0          1          -    ZERO                 
+    Coverpoint cp_version                             100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
     Cross x_halted                                    100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                  21          1          -    Covered              
-            bin <zero,zero>                                46          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_running                                   100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                  46          1          -    Covered              
-            bin <zero,zero>                                21          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_havereset                                 100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                  16          1          -    Covered              
-            bin <zero,zero>                                51          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_resumeack                                 100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                   9          1          -    Covered              
-            bin <zero,zero>                                58          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_nonexistent                               100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <one,one>                                   1          1          -    Covered              
-            bin <zero,zero>                                66          1          -    Covered              
-        Illegal and Ignore Bins:
-            ignore_bin split                                0                     -    ZERO                 
-            illegal_bin impossible                          0                     -    ZERO                 
     Cross x_unavail                                   100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        Auto, Default and User Defined Bins:
-            bin <zero,zero>                                67          1          -    Covered              
  Covergroup instance \/debug_pkg::debug_coverage::cg_dmstatus_read  
-                                                       96.15%        100          -    Uncovered            
-    covered/total bins:                                    41         43          -                      
-    missing/total bins:                                     2         43          -                      
-    % Hit:                                             95.34%        100          -                      
-    Coverpoint cp_ndmresetpending                      50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
+                                                      100.00%        100          -    Covered              
+    covered/total bins:                                    41         41          -                      
+    missing/total bins:                                     0         41          -                      
+    % Hit:                                            100.00%        100          -                      
+    Coverpoint cp_ndmresetpending                     100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
+        ignore_bin one_pre_1_0                              0                     -    ZERO                 
         bin zero                                           67          1          -    Covered              
-        bin one                                             0          1          -    ZERO                 
     Coverpoint cp_allhavereset                        100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
@@ -1732,8 +1582,8 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin hardcoded_0_both_duts                    0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
+        ignore_bin undeclared                               0                     -    ZERO                 
+        bin declared                                       67          1          -    Covered              
     Coverpoint cp_authenticated                       100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
@@ -1762,17 +1612,17 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
-        ignore_bin preset_high                              0                     -    ZERO                 
-        bin zero                                           67          1          -    Covered              
-    Coverpoint cp_version                              50.00%        100          -    Uncovered            
-        covered/total bins:                                 1          2          -                      
-        missing/total bins:                                 1          2          -                      
-        % Hit:                                         50.00%        100          -                      
+        ignore_bin undeclared                               0                     -    ZERO                 
+        bin declared                                       67          1          -    Covered              
+    Coverpoint cp_version                             100.00%        100          -    Covered              
+        covered/total bins:                                 1          1          -                      
+        missing/total bins:                                 0          1          -                      
+        % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
+        ignore_bin undeclared                               0                     -    ZERO                 
         ignore_bin v0_11                                    0                     -    ZERO                 
         ignore_bin custom                                   0                     -    ZERO                 
-        bin v0_13                                          67          1          -    Covered              
-        bin v1_0                                            0          1          -    ZERO                 
+        bin declared                                       67          1          -    Covered              
     Cross x_halted                                    100.00%        100          -    Covered              
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
@@ -1899,26 +1749,26 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin idle                                           50          1          -    Covered              
-        bin busy                                           16          1          -    Covered              
+        bin idle                                           45          1          -    Covered              
+        bin busy                                           24          1          -    Covered              
     Coverpoint cp_cmderr_none                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin error                                   30                     -    Occurred             
-        bin clean                                          36          1          -    Covered              
+        bin clean                                          39          1          -    Covered              
     Coverpoint cp_has_progbuf                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
     Coverpoint cp_has_data                            100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
  Covergroup instance \/debug_pkg::debug_coverage::cg_abstractcs_read  
                                                       100.00%        100          -    Covered              
     covered/total bins:                                     5          5          -                      
@@ -1928,26 +1778,26 @@ Covergroup                                             Metric       Goal       B
         covered/total bins:                                 2          2          -                      
         missing/total bins:                                 0          2          -                      
         % Hit:                                        100.00%        100          -                      
-        bin idle                                           50          1          -    Covered              
-        bin busy                                           16          1          -    Covered              
+        bin idle                                           45          1          -    Covered              
+        bin busy                                           24          1          -    Covered              
     Coverpoint cp_cmderr_none                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin error                                   30                     -    Occurred             
-        bin clean                                          36          1          -    Covered              
+        bin clean                                          39          1          -    Covered              
     Coverpoint cp_has_progbuf                         100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
     Coverpoint cp_has_data                            100.00%        100          -    Covered              
         covered/total bins:                                 1          1          -                      
         missing/total bins:                                 0          1          -                      
         % Hit:                                        100.00%        100          -                      
         ignore_bin none                                     0                     -    ZERO                 
-        bin present                                        66          1          -    Covered              
+        bin present                                        69          1          -    Covered              
  TYPE /debug_pkg/debug_coverage/cg_progbuf            100.00%        100          -    Covered              
     covered/total bins:                                     2          2          -                      
     missing/total bins:                                     0          2          -                      
@@ -2205,9 +2055,9 @@ Covergroup                                             Metric       Goal       B
 
  [2] - Does not contribute coverage as the item is empty
 
-TOTAL COVERGROUP COVERAGE: 99.72%  COVERGROUP TYPES: 14
+TOTAL COVERGROUP COVERAGE: 100.00%  COVERGROUP TYPES: 14
 
-Total Coverage By Instance (filtered view): 99.72%
+Total Coverage By Instance (filtered view): 100.00%
 
-End time: 13:58:21 on Jul 25,2026, Elapsed time: 0:00:01
+End time: 15:43:15 on Jul 25,2026, Elapsed time: 0:00:00
 Errors: 0, Warnings: 0

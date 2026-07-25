@@ -93,3 +93,83 @@ this round, all scenarios under `+cover=sbceft`).
 — identical structure to their CVA6 counterparts (empty `params`, single
 hart, UVM transport); no DUT-specific parameterization needed since both
 current DUT integrations are single-hart.
+
+## Round 3 — genuine 100%/100% closure (same day, 2026-07-25)
+
+The 99.58%/99.72% residuals above were each real, reachable bins that
+simply belonged to the *other* DUT (`cp_stickyunavail`, `cp_version`,
+`cp_hasresethaltreq`, `cp_ndmresetpending`) — `covergroups.sv` hardcoded a
+single expected value/exclusion for each, correct for one DUT and backwards
+or wrong for the other. Fixed by making the fcov itself DUT-config-driven,
+the same way `dm_ref_model.sv` already is, rather than accepting the
+cross-DUT split as permanent:
+
+- `debug_coverage`'s `new()` now reads `dut_configs/<name>.json` via the
+  same `dut_config_reader` class `dm_checker.sv` already uses (moved
+  `dut_config_reader.sv`'s `` `include `` ahead of `covergroups.sv`'s in
+  `debug_pkg.sv` so the class is visible), and stores `dut_version`/
+  `dut_hasresethaltreq`/`dut_stickyunavail` as class members *before* the
+  covergroups are constructed (Questa requires a class's own embedded
+  covergroups to be built in that class's own `new()`, not `build_phase()`
+  — confirmed by trying `build_phase()` first and hitting a hard vlog-60
+  error).
+- `cp_version`/`cp_stickyunavail`/`cp_hasresethaltreq` now bin on
+  `{dut_version}`/`{dut_stickyunavail}`/`{dut_hasresethaltreq}` with the
+  complementary value as `ignore_bins`, instead of a hardcoded assumption.
+  `cp_stickyunavail` was silently backwards before this (always expected 0,
+  ignored 1 — correct for Ibex, wrong for CVA6, which is permanently 1).
+- `cp_ndmresetpending` couldn't use that same pattern: unlike the others,
+  it's not "one fixed value per DUT" — on a v1.0 DUT both 0 and 1 are
+  independently real, live values. A runtime value-set trick (an
+  unreachable `1'bz` sentinel for the "wrong" DUT) does not work either:
+  Questa still counts a `bins` entry toward the total even when its value
+  can provably never be sampled — only the `ignore_bins` *keyword* removes
+  it, and that keyword is fixed at elaboration. Needed real conditional
+  compilation instead: `` `ifdef DUT_VERSION_1_0 `` around just this one
+  bin, with `+define+DUT_VERSION_1_0` added to CVA6's two `vlog`
+  invocations only (`cva6_sim/Makefile`).
+
+**Result: CVA6 and Ibex both 100.00% merged coverage.**
+
+### A second, larger finding along the way: `resumeack` timing
+
+While cross-checking mismatch *content* (not just counts) after the above,
+found ~200+ pre-existing `MODEL_MISMATCH` occurrences on `dmstatus.resumeack`
+across the regression — present since before this session's Ibex work even
+started (confirmed in the original PR #131-era regression log). Root cause:
+`dm_csrs.sv`'s `clear_resumeack_o` pulses only on the *rising edge* of
+`resumereq`, and even then the hart's own `resumeack_i` takes real,
+variable cycles to actually drop — but `dm_ref_model.sv`/`predictor.py`
+cleared `resume_ack` synchronously on every write with `resumereq=1`, no
+edge check, zero simulated delay. Same class of bug as the reset-release
+handshake fixed in Round 1, just a different signal pair, triggered far
+more often.
+
+No functional step ever failed from this (every step uses `dm.resume()`'s
+own polling helper, which tolerates the real latency) — it was purely a
+checker-level artifact of comparing *every* read synchronously instead of
+polling like real usage does.
+
+Fixed generally, not just for this one field: `halted`/`running`/
+`resume_ack` (the three dmstatus fields spec #3.5 explicitly frames as
+signals "the DM receives ... from each hart", as opposed to DM-internal
+state) are now `hart_signal_bit` instances
+(`src/pydebug/sv/model/hart_signal_bit.sv`) — a small reusable class with
+`set()` (the model's own write-driven prediction, used exactly like the old
+plain `bit` was) and `observe()` (what a real DMI read just showed,
+unconditionally adopted, called from `dm_checker.sv` before every
+`dmstatus` comparison). A genuine functional defect (the value never
+actually settling) still surfaces through the same stimulus-side polling
+timeout that already existed — this only removes the checker's own false
+positive for known-delayed signals, it doesn't hide a value that's stuck
+wrong. `havereset` (also spec-listed as hart-received) was checked and
+confirmed to stay a plain `bit`: this RTL derives it purely combinationally
+from `ndmreset_o` inside `dm_csrs.sv`, no `havereset_i` input from the hart
+exists in `dm_top.sv` at all, so it has no real propagation delay to
+account for.
+
+Confirmed via full regression on both DUTs after this fix: CVA6's
+`MODEL_CHECK` mismatch count dropped from several hundred to **1** (the
+already-known, already-filed `#130` nonexistent-hart reproduction); Ibex
+dropped to the same, its own single `#130` reproduction. Coverage stayed at
+100.00%/100.00% on both.
