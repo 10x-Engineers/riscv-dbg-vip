@@ -50,6 +50,8 @@ Usage:
     session.run()
 """
 
+import time
+
 from pydebug.api import RISCVDebug, DebugSession, StepResult, DMI
 from pydebug.api.riscv_dm import (
     DebugError,
@@ -57,6 +59,10 @@ from pydebug.api.riscv_dm import (
     allhavereset, anyhavereset, ndmresetpending,
     dmcontrol_hartreset,
 )
+
+POLL_INTERVAL_S = 0.001
+POLL_TIMEOUT_S = 2.0
+
 
 
 def _predictor(dm: RISCVDebug):
@@ -131,6 +137,85 @@ def build_reset_ctrl_sequence(
         )
     session.add_step(
         "TC-RST-001: deassert dmcontrol.ndmreset=0", tc_rst_001_deassert,
+    )
+
+    # ── TC-RST-001 (cont'd): haltreq asserted while a hart is in ndmreset ──
+    # cross.hart_state_transition.in_reset_to_halted needs a hart to come out
+    # of reset already-requested-halted (#3.5: "the hart will immediately
+    # enter debug mode on the next deassertion of its reset"). TC-HOR-002 is
+    # the *documented* owner of this transition, but it can never actually
+    # produce it on either project DUT: dmcontrol.setresethaltreq is
+    # WARL-tied to 0 (dm_csrs.sv, both DUTs -- same family as hartreset,
+    # confirmed 2026-07-25), and the model's own reset_haltreq shadow is
+    # correctly gated off to match (hasresethaltreq=false in both
+    # dut_configs/*.json). haltreq (plain, universally-supported, unlike
+    # resethaltreq) reaches the exact same code path though -- both
+    # dm_ref_model.sv's release_from_reset() and (confirmed) real RTL check
+    # "was a halt requested, by whatever means" on release, not specifically
+    # resethaltreq -- so asserting ordinary haltreq *while* ndmreset is
+    # already asserted, then releasing, exercises the identical spec clause
+    # through a mechanism both DUTs actually implement.
+    def tc_rst_001_haltreq_during_reset():
+        dm.ndmreset(True)
+        # write_dmcontrol()'s unset fields default to 0/False -- ndmreset
+        # must be passed explicitly here or this write deasserts it early.
+        dm.write_dmcontrol(haltreq=True, ndmreset=True)
+        still_in_reset = not anyhalted(dm.read_dmstatus())
+        # NOT dm.ndmreset(False): that helper is a raw absolute dmcontrol
+        # write with no haltreq param, so it defaults haltreq back to 0 --
+        # silently withdrawing the very halt request this step is trying to
+        # test, at the exact edge (reset release) where the spec requires it
+        # to still be observed. A real CVA6 UVM MODEL_MISMATCH first looked
+        # like an RTL bug (hart stayed running forever) until a waveform
+        # trace (dut.i_dm_top.debug_req_o) showed haltreq_o dropping to 0 in
+        # the same delta cycle as ndmreset_o's deassertion -- traced to this
+        # exact stimulus bug, not RTL (dm_csrs.sv's haltreq_o mux and
+        # dm_top.sv's wiring have no reset-dependent gating at all; the DM
+        # was behaving correctly the whole time), 2026-07-25.
+        dm.write_dmcontrol(haltreq=True, ndmreset=False)
+        # The halt handshake (hart exits reset, fetches, observes haltreq,
+        # enters Debug Mode) takes real clock cycles, unlike the untimed
+        # Python mock where the transition is instantaneous -- poll like
+        # dm.halt() does, rather than trusting a single read.
+        #
+        # A single transient MODEL_MISMATCH on the first poll iteration is
+        # expected and accepted here, not a bug to engineer away: a CVA6 UVM
+        # waveform trace confirmed the real handshake takes ~4.6us of sim
+        # time (fetch resume -> observe debug_req -> execute debug-ROM entry
+        # -> write halted_q) that dm_ref_model.sv/predictor.py idealize as
+        # instantaneous. Two mitigations were tried and rejected: a real
+        # time.sleep() before the first read does nothing (this environment's
+        # sim only advances with actual DMI/JTAG transactions, confirmed --
+        # 0.01s of real sleep moved the mismatch's timestamp by 420ns); a
+        # spacer dmcontrol read consumes real sim time but surfaces a
+        # separate, unrelated, pre-existing model gap (expect_dmcontrol()
+        # hardcodes haltreq/resumereq readback to 0, while real CVA6 persists
+        # the last-written value -- out of scope for this step, not filed
+        # here). This mirrors TC-RC-006's established precedent (testplan's
+        # Uncertain bucket): the untimed model cannot express real handshake
+        # latency, and that gap is documented, not silently forced closed
+        # (2026-07-25).
+        deadline = time.monotonic() + POLL_TIMEOUT_S
+        halted_on_release = dm.is_halted()
+        while not halted_on_release and time.monotonic() < deadline:
+            time.sleep(POLL_INTERVAL_S)
+            halted_on_release = dm.is_halted()
+        # Deliberately not resuming: TC-RST-002 (next) halts the hart itself
+        # as its own first action regardless of the state left here (same
+        # reasoning as the removed trailing dm.resume() bug from the first
+        # attempt at this step, 2026-07-25 -- haltreq is now persistently
+        # set and resuming would just hang).
+        return StepResult(
+            ok=still_in_reset and halted_on_release,
+            msg=f"TC-RST-001 (cont'd): haltreq written while ndmreset "
+                f"asserted — still not halted mid-reset={still_in_reset}, "
+                f"halted on release={halted_on_release} (spec #3.5: a "
+                f"pending halt request takes effect the moment reset "
+                f"deasserts)",
+        )
+    session.add_step(
+        "TC-RST-001 (cont'd): haltreq asserted while a hart is in ndmreset (spec #3.5)",
+        tc_rst_001_haltreq_during_reset,
     )
 
     # ── TC-RST-002: hartreset selected-hart reset (discovery) ────────────
@@ -289,6 +374,59 @@ def build_reset_ctrl_sequence(
     session.add_step(
         "TC-RST-006: ackhavereset is a no-op when havereset is already clear (spec #3.14.2)",
         tc_rst_006,
+    )
+
+    # ── TC-DHS-006 (write-only half): ackunavail discovery probe ──────────
+    # Full TC-DHS-006 (conditional-clear semantics: ackunavail clears only
+    # currently-available harts) needs the hart-availability transition
+    # mechanism modeled first (testplan's own noted gap -- no sequence
+    # drives a hart through an actual unavailable->available transition
+    # yet). This is just the write itself: a legitimate thing for a
+    # debugger to probe regardless, and the thing dmcontrol.ackunavail's
+    # own coverage bin is actually asking about (was it ever written),
+    # not the full conditional-clear behavior.
+    def tc_dhs_006_probe():
+        dm.ackunavail()
+        readback = dm.read_dmcontrol()
+        alive = bool(readback & 1)  # dmactive still 1 -- DM state not corrupted
+        return StepResult(
+            ok=alive,
+            msg=f"TC-DHS-006 (write-only half): wrote dmcontrol.ackunavail=1 "
+                f"— DM alive afterward (dmactive={alive}). Full conditional-"
+                f"clear semantics (#3.14.2: clears only currently-available "
+                f"harts) not checked here -- needs hart-availability "
+                f"transition modeling, a later slice.",
+        )
+    session.add_step(
+        "TC-DHS-006 (write-only half): ackunavail discovery probe (spec #3.14.2)",
+        tc_dhs_006_probe,
+    )
+
+    # ── TC-KA-001: setkeepalive/clrkeepalive discovery probe ──────────────
+    # Confirmed present in the exact spec version this project targets
+    # (v1.0.0-rc3, riscv/riscv-debug-spec tag -- resolves the testplan's own
+    # previously-unresolved "was keepalive added after rc3?" question,
+    # 2026-07-25). Optional (like resethaltreq), and this project's
+    # golden model does not track a `keepalive` hart-state field (no
+    # dmstatus bit reports it either -- #3.14.2 keepalive itself "cannot be
+    # read", same family as resethaltreq), so this is discovery-only: the
+    # write happened, the DM survived it, no functional claim beyond that.
+    def tc_ka_001():
+        dm.write_dmcontrol(setkeepalive=True)
+        after_set = dm.read_dmcontrol()
+        dm.write_dmcontrol(clrkeepalive=True)
+        after_clr = dm.read_dmcontrol()
+        alive = bool(after_clr & 1)  # dmactive still 1
+        return StepResult(
+            ok=alive,
+            msg=f"TC-KA-001: wrote setkeepalive=1 (readback=0x{after_set:08x}), "
+                f"then clrkeepalive=1 (readback=0x{after_clr:08x}) — DM alive "
+                f"throughout (dmactive={alive}). keepalive cannot be read back "
+                f"(#3.14.2), so this is discovery-only, same as resethaltreq.",
+        )
+    session.add_step(
+        "TC-KA-001: setkeepalive/clrkeepalive discovery probe (spec #3.14.2)",
+        tc_ka_001,
     )
 
     return session

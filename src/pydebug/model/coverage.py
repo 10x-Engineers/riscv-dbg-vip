@@ -362,8 +362,8 @@ class DebugCoverageModel:
             "anyhavereset": "TC-RST-003",
             "allresumeack": "TC-RC-003",
             "anyresumeack": "TC-RC-003",
-            "allnonexistent": None,  # test-plan gap
-            "anynonexistent": None,  # test-plan gap
+            "allnonexistent": "TC-HS-002",
+            "anynonexistent": "TC-HS-002",
             "allunavail": None,  # test-plan gap
             "anyunavail": None,  # test-plan gap
             "allrunning": "TC-RC-003",
@@ -407,6 +407,15 @@ class DebugCoverageModel:
             ("confstrptrvalid", "1"): "#3.14.1 confstrptrvalid=1 means "
             "confstrptr0-3 hold the configuration string pointer. That is the "
             "\"Discover DM/implementation info\" feature row, a later slice.",
+            ("allunavail", "1"): "#3.2: harts become unavailable for reasons "
+            "outside debugger control (being reset, powered down, unplugged) "
+            "-- not something a debugger's own DMI stimulus can cause. "
+            "Confirmed structurally unreachable on both project SoC "
+            "integrations, not just unimplemented: CVA6's ariane_testharness.sv "
+            "and Ibex's ibex_demo_system.sv both hardwire the DM's "
+            "unavailable_i input to constant 0, so no hart can ever report "
+            "unavailable regardless of stimulus.",
+            ("anyunavail", "1"): "Same reason as allunavail=1 above.",
         }
         for f in DMSTATUS.fields:
             if f.width != 1:
@@ -476,17 +485,18 @@ class DebugCoverageModel:
                        architecturally impossible for any non-empty selection, and
                        invariants.py is what proves a DUT never does it.
         """
-        #: (TC-ID for all0_any0, TC-ID for all1_any1), per pair. The nonexistent
-        #: and unavail pairs have no TC-ID for their all1_any1 bin because no
-        #: RC/RST/HOR case ever selects a nonexistent hart or observes an
-        #: unavailable one — both are test-plan gaps, not model limitations.
+        #: (TC-ID for all0_any0, TC-ID for all1_any1), per pair. "unavail"'s
+        #: all1_any1 entry here is unused (excluded below instead, not a
+        #: reachable bin) -- both project SoC integrations hardwire the DM's
+        #: unavailable_i input to 0. "nonexistent"'s all1_any1 IS reachable,
+        #: via TC-HS-002's deliberately-out-of-range hartsel selection.
         tc_by_pair = {
             "halted": ("TC-RC-003", "TC-RC-001"),
             "running": ("TC-RC-001", "TC-RC-003"),
             "havereset": ("TC-RST-004", "TC-RST-003"),
             "resumeack": ("TC-RC-004", "TC-RC-003"),
-            "nonexistent": ("TC-RC-001", None),
-            "unavail": ("TC-RC-001", None),
+            "nonexistent": ("TC-RC-001", "TC-HS-002"),
+            "unavail": ("TC-RC-001", None),  # unused, see comment above
         }
         for all_name, any_name in DMSTATUS_ALL_ANY_PAIRS:
             state = all_name.removeprefix("all")
@@ -499,13 +509,28 @@ class DebugCoverageModel:
                 f"no selected hart is in the {state} state",
                 tc_none,
             )
-            self._add(
-                g,
-                "all1_any1",
-                "#3.14.1",
-                f"every selected hart is in the {state} state",
-                tc_all,
-            )
+            if state == "unavail":
+                # Structurally unreachable, not just a test-plan gap: both
+                # project SoC integrations (CVA6's ariane_testharness.sv,
+                # Ibex's ibex_demo_system.sv) hardwire the DM's
+                # unavailable_i input to constant 0, so no hart can ever
+                # report unavailable regardless of stimulus -- same reason
+                # as the dmstatus.allunavail/anyunavail=1 exclusions above.
+                self._exclude(
+                    g,
+                    "all1_any1",
+                    "every selected hart unavailable (#3.14.1) -- both "
+                    "project SoC integrations hardwire the DM's "
+                    "unavailable_i input to constant 0.",
+                )
+            else:
+                self._add(
+                    g,
+                    "all1_any1",
+                    "#3.14.1",
+                    f"every selected hart is in the {state} state",
+                    tc_all,
+                )
             self._exclude(
                 g,
                 "all0_any1",
@@ -585,8 +610,13 @@ class DebugCoverageModel:
             "in_reset_to_halted",
             "#3.5",
             "reset deasserted with haltreq or resethaltreq set: \"the hart will "
-            "immediately enter debug mode on the next deassertion of its reset\"",
-            "TC-HOR-002",
+            "immediately enter debug mode on the next deassertion of its reset\". "
+            "Produced via haltreq, not resethaltreq (TC-HOR-002's own "
+            "mechanism) -- resethaltreq is WARL-tied to 0 on both project "
+            "DUTs, same family as hartreset, so it can never actually "
+            "produce this transition; TC-RST-001's own persistent haltreq "
+            "reaches the identical release_from_reset() code path.",
+            "TC-RST-001",
         )
 
         # ── havereset x ackhavereset (#3.2, #3.14.2 ackhavereset) ─────────────
@@ -619,6 +649,16 @@ class DebugCoverageModel:
         # This cross is halt-on-reset itself. The resethaltreq shadow is what makes
         # it possible: the bit "cannot be read" (#3.14.2 resethaltreq), so only the
         # debugger's own write history knows its value.
+        # NOTE: self._reset_haltreq (unlike DMPredictor's own reset_haltreq
+        # shadow in predictor.py) is a raw debugger-write tracker, not gated
+        # by DUT capability -- it answers "did the debugger write
+        # setresethaltreq, then hit an ndmreset edge", regardless of whether
+        # the DUT actually honors that write. That combination is real,
+        # useful stimulus to have covered even on a DUT that WARL-ties
+        # resethaltreq to 0 (confirms the probe doesn't break anything),
+        # so these bins stay real (not excluded) -- see
+        # halt_on_reset_sequence.py's TC-HOR-002/003 for why the write now
+        # always happens, gate or no gate.
         g = "cross.ndmreset_x_reset_haltreq"
         self._add(g, "assert_rhr0", "#3.2", "reset asserted, no halt-on-reset request", "TC-RST-001")
         self._add(g, "assert_rhr1", "#3.5", "reset asserted with halt-on-reset request", "TC-HOR-002")
@@ -634,7 +674,10 @@ class DebugCoverageModel:
             g,
             "deassert_rhr1",
             "#3.5",
-            "reset released with halt-on-reset request — hart must halt out of reset",
+            "reset released with halt-on-reset request — hart must halt out of reset "
+            "if the DUT implements it, or stays running/N/A if it doesn't "
+            "(spec Optional, #3.5) -- either way the write+edge combination "
+            "is the thing being covered here, not a specific DUT behavior",
             "TC-HOR-002",
         )
 

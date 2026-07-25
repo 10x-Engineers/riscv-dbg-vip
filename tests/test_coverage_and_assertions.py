@@ -38,7 +38,9 @@ from pydebug.model.coverage import DebugCoverageModel
 from pydebug.model.dut_config import load_dut_config
 from pydebug.model.invariants import check_all
 from pydebug.model.mock_transport import ModelBackedMockTransport
+from pydebug.sequences.dm_activation_sequence import build_dm_activation_sequence
 from pydebug.sequences.halt_on_reset_sequence import build_halt_on_reset_sequence
+from pydebug.sequences.hart_selection_sequence import build_hart_selection_sequence
 from pydebug.sequences.reset_ctrl_sequence import build_reset_ctrl_sequence
 from pydebug.sequences.run_control_sequence import build_run_control_sequence
 
@@ -84,12 +86,18 @@ def full_trace():
         dm = RISCVDebug(t)
         pass_session_results.append(build(dm))
 
-    # Pass A — fully-featured DUT: every TC-ID's positive path.
+    # Pass A — fully-featured DUT: every TC-ID's positive path. The full
+    # run_control cluster is 5 sequences/23 TC-IDs (testplan's own framing)
+    # -- dm_activation and hart_selection were missing here entirely until
+    # 2026-07-25, which is why dmcontrol.dmactive.0/hasel.1/hartsel.* sat
+    # permanently unhit despite having real, working stimulus all along.
     def pass_a(dm):
         results = []
         results.append(build_run_control_sequence(dm, mode="batch").run())
         results.append(build_reset_ctrl_sequence(dm, mode="batch").run())
         results.append(build_halt_on_reset_sequence(dm, mode="batch", num_harts=2).run())
+        results.append(build_dm_activation_sequence(dm, mode="batch").run())
+        results.append(build_hart_selection_sequence(dm, mode="batch").run())
         return results
     run_pass(dict(num_harts=2, hasresethaltreq=True, supports_hartreset=True), pass_a)
 
@@ -160,9 +168,43 @@ def test_run_control_slice_coverage_closure(full_trace):
     # it is excluded (model/coverage.py), not forced with stimulus that
     # doesn't actually work (riscv-dbg-vip, 2026-07-25) -- verified via the
     # unhit_with_tc check above that every TC-ID-owned bin is covered.
-    assert report["summary"]["hit"] == 88, report["summary"]
-    assert report["summary"]["bins"] == 103, report["summary"]
-    assert len(report["unhit"]) == 15, report["unhit"]
+    #
+    # 100/100/0 (was 88/103/15) -- full closure of every remaining test-plan
+    # gap, 2026-07-25:
+    #  - dmactive.0/hasel.1/hartsel.* (5 bins): full_trace's own pass_a was
+    #    missing build_dm_activation_sequence/build_hart_selection_sequence
+    #    entirely despite having real, working stimulus all along -- fixed
+    #    in this fixture, not a model or RTL change.
+    #  - allnonexistent.1/anynonexistent.1/all_any.nonexistent.all1_any1
+    #    (3 bins): mislabeled permanent gaps -- genuinely reachable via
+    #    TC-HS-002, now correctly attributed in coverage.py.
+    #  - cross.ndmreset_x_reset_haltreq.assert_rhr1/deassert_rhr1 (2 bins)
+    #    + cross.hart_state_transition.in_reset_to_halted (1 bin, re-owned
+    #    from TC-HOR-002 to TC-RST-001 (cont'd)): TC-HOR-002/003 now always
+    #    perform the setresethaltreq/clrresethaltreq write regardless of the
+    #    hasresethaltreq gate (gating only the functional assertion), and
+    #    TC-RST-001 gained a new haltreq-during-reset step exercising the
+    #    universally-supported substitute for the DUT-unsupported
+    #    resethaltreq path.
+    #  - cross.resumereq_x_prior_state.resumereq_when_in_reset (1 bin):
+    #    TC-RC-007's dm.ndmreset(True) is write-only with no read-back; an
+    #    intervening dm.read_dmstatus() now lets cur_state actually observe
+    #    "in reset" before the resumereq write is evaluated.
+    #  - dmcontrol.setresethaltreq.1/clrresethaltreq.1/ackunavail.1 (write-
+    #    coverage, 3 bins) + dmcontrol.setkeepalive.1/clrkeepalive.1 (2
+    #    bins): closed by discovery-probe steps (TC-DHS-006, TC-KA-001) that
+    #    always perform the write and check only "DM stays alive" -- same
+    #    pattern as the resethaltreq gate fix above.
+    #  - dmstatus.allunavail.1/anyunavail.1/all_any.unavail.all1_any1 (3
+    #    bins): properly excluded, not forced -- both current SoC
+    #    integrations (CVA6-fork/corev_apu/tb/ariane_testharness.sv,
+    #    ibex-demo-system/rtl/system/ibex_demo_system.sv) hardwire the DM's
+    #    unavailable_i input to constant 0, confirmed against real RTL.
+    #  See testplans/riscv_debug_testplan.md (2026-07-25 revision) for the
+    #  corresponding testplan-side updates to every TC-ID referenced above.
+    assert report["summary"]["hit"] == 100, report["summary"]
+    assert report["summary"]["bins"] == 100, report["summary"]
+    assert len(report["unhit"]) == 0, report["unhit"]
 
 
 @pytest.mark.feature("assertions")

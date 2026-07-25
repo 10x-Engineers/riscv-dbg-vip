@@ -239,6 +239,15 @@ def build_run_control_sequence(
         # resume-ack must not spuriously set, matching TC-RC-004's identical
         # rule for "resumereq on a running hart."
         dm.ndmreset(True)
+        # dm.ndmreset() is write-only, no read-back -- an intervening read
+        # here is required so the coverage model's own state tracking
+        # (cur_state, updated only by an observed dmstatus read) actually
+        # sees "in reset" before the resumereq write below is evaluated;
+        # without it, cross.resumereq_x_prior_state.resumereq_when_in_reset
+        # never samples correctly (cur_state stays stale at whatever the
+        # previous step left it), found while closing that exact gap,
+        # 2026-07-25.
+        dm.read_dmstatus()
         # write_dmcontrol()'s unset fields default to 0/False (dmcontrol writes
         # are absolute, not incremental) — ndmreset must be passed explicitly
         # here or this write silently deasserts it, releasing the hart from

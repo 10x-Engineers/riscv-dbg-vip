@@ -314,6 +314,20 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     bit          havereset       = 0;   // anyhavereset as of the last dmstatus read
     bit          havereset_valid = 0;
     bit          ndmreset        = 0;   // dmcontrol.ndmreset as last written
+    // Set on the write that deasserts ndmreset; cleared by the next write.
+    // Real RTL's halt handshake (fetch resume -> observe debug_req -> debug
+    // ROM entry -> halted_q) takes real cycles after release -- ndmreset
+    // itself (and dmstatus.ndmresetpending, a direct combinational
+    // passthrough of the same register, dm_csrs.sv) drops the instant the
+    // write lands, well before that. Without this flag, decode_hart_state
+    // reclassifies the still-settling hart as plain ST_RUNNING the moment
+    // ndmreset's local write-tracking flips to 0, so a haltreq-during-reset
+    // release (TC-RST-001 (cont'd)) samples a spurious
+    // in_reset->running->halted pair instead of the real in_reset->halted
+    // transition it actually is. Confirmed via CVA6 UVM: the transition bin
+    // stayed at 0 hits even after the underlying stimulus bug was fixed and
+    // the step started passing functionally, 2026-07-25.
+    bit          ndmreset_release_pending = 0;
     // DMI is pipelined one transaction deep (spec #6.1.5): a shift's captured
     // dmi_rdata/dmi_status belong to the PREVIOUS request, never its own
     // (jtag_dmi_read_seq.sv issues the read request as one transaction,
@@ -519,13 +533,33 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cp_anyresumeack    : coverpoint r[DMS_ANYRESUMEACK]    { bins zero = {0}; bins one = {1}; }
         cp_allnonexistent  : coverpoint r[DMS_ALLNONEXISTENT]  { bins zero = {0}; bins one = {1}; }
         cp_anynonexistent  : coverpoint r[DMS_ANYNONEXISTENT]  { bins zero = {0}; bins one = {1}; }
-        cp_allunavail      : coverpoint r[DMS_ALLUNAVAIL]      { bins zero = {0}; bins one = {1}; }
-        cp_anyunavail      : coverpoint r[DMS_ANYUNAVAIL]      { bins zero = {0}; bins one = {1}; }
+        // #3.2/#3.14.1 allunavail/anyunavail=1: both current SoC integrations
+        // (CVA6-fork/corev_apu/tb/ariane_testharness.sv,
+        // ibex-demo-system/rtl/system/ibex_demo_system.sv) hardwire the DM's
+        // unavailable_i input to constant 0 -- unavail is structurally
+        // unreachable via any DMI stimulus on either DUT, not just
+        // unimplemented (confirmed against RTL, 2026-07-25).
+        cp_allunavail      : coverpoint r[DMS_ALLUNAVAIL]      {
+            bins zero = {0};
+            ignore_bins unavailable_i_tied_0 = {1};
+        }
+        cp_anyunavail      : coverpoint r[DMS_ANYUNAVAIL]      {
+            bins zero = {0};
+            ignore_bins unavailable_i_tied_0 = {1};
+        }
         cp_allrunning      : coverpoint r[DMS_ALLRUNNING]      { bins zero = {0}; bins one = {1}; }
         cp_anyrunning      : coverpoint r[DMS_ANYRUNNING]      { bins zero = {0}; bins one = {1}; }
         cp_allhalted       : coverpoint r[DMS_ALLHALTED]       { bins zero = {0}; bins one = {1}; }
         cp_anyhalted       : coverpoint r[DMS_ANYHALTED]       { bins zero = {0}; bins one = {1}; }
-        cp_hasresethaltreq : coverpoint r[DMS_HASRESETHALTREQ] { bins zero = {0}; bins one = {1}; }
+        // #3.14.2 hasresethaltreq=1: both DUTs' dm_csrs.sv hardcode
+        // `dmstatus.hasresethaltreq = 1'b0` unconditionally (not a real
+        // capability wire) -- confirmed against RTL, 2026-07-25. Reachable
+        // only on a future DUT integration that actually implements the
+        // optional halt-on-reset mechanism.
+        cp_hasresethaltreq : coverpoint r[DMS_HASRESETHALTREQ] {
+            bins zero = {0};
+            ignore_bins hardcoded_0_both_duts = {1};
+        }
 
         // ── Fields whose other value belongs to a slice we are not covering ────
         //
@@ -566,9 +600,14 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         }
 
         cp_version : coverpoint r[3:0] {
-            // version=0: no DM present, or dmactive=0 so "version might not return
-            // correct data" (#3.14.2 dmactive=0).
-            bins none  = {VERSION_NONE};
+            // version=0 ("no DM present") is NOT reachable via any real
+            // stimulus: dm_csrs.sv assigns dmstatus.version unconditionally
+            // (not gated by dmactive) on both DUTs, confirmed against RTL --
+            // #3.14.2's "might not return correct data" pre-activation is
+            // permissive, not a guarantee any real DUT actually zeroes it
+            // (2026-07-25; mirrors the identical fix already applied on the
+            // Python model side, model/coverage.py).
+            ignore_bins none = {VERSION_NONE};
             bins v0_13 = {VERSION_0_13};
             bins v1_0  = {VERSION_1_0};
             // version=1 (0.11) predates the dmcontrol/dmstatus field layout this
@@ -619,10 +658,15 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             ignore_bins  split      = binsof(cp_allnonexistent.zero) && binsof(cp_anynonexistent.one);
             illegal_bins impossible = binsof(cp_allnonexistent.one)  && binsof(cp_anynonexistent.zero);
         }
-        x_unavail : cross cp_allunavail, cp_anyunavail {
-            ignore_bins  split      = binsof(cp_allunavail.zero) && binsof(cp_anyunavail.one);
-            illegal_bins impossible = binsof(cp_allunavail.one)  && binsof(cp_anyunavail.zero);
-        }
+        // No explicit split/impossible bins needed here (unlike the other
+        // all/any crosses above): cp_allunavail/cp_anyunavail's own "one"
+        // values are already ignore_bins (unavailable_i tied 0 on both
+        // DUTs), and Questa does not allow binsof() to reference an
+        // ignore_bins name in a cross expression ("Could not find
+        // Coverpoint bin ... in local scope", confirmed by trying, 2026-07-
+        // 25). With only "zero" addressable on each axis, the auto-
+        // generated cross has exactly one legal combination, <zero,zero>.
+        x_unavail : cross cp_allunavail, cp_anyunavail;
     endgroup
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -645,15 +689,32 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             // respond by resuming, clearing their halted signal, and asserting
             // their running signal."
             bins halted_to_running   = {TR_HALTED_TO_RUNNING};
-            // #3.2: while reset is on-going a hart reports neither halted nor
-            // running.
+            // #3.2: reset asserted on a running hart. Both DUTs' dm_csrs.sv
+            // compute allrunning combinationally as ~halted & ~unavailable,
+            // so a resetting hart reads running=1 throughout, not "neither"
+            // (spec #3.2 leaves this implementation dependent; confirmed
+            // against real RTL, riscv-dbg-vip PR#131, 2026-07-25).
             bins running_to_in_reset = {TR_RUNNING_TO_IN_RESET};
-            bins halted_to_in_reset  = {TR_HALTED_TO_IN_RESET};
             // #3.2: "if the hart was initially running it will execute normally".
             bins in_reset_to_running = {TR_IN_RESET_TO_RUNNING};
-            // #3.5: with haltreq or resethaltreq set, "the hart will immediately
-            // enter debug mode on the next deassertion of its reset".
+            // #3.5: with haltreq set (not resethaltreq -- WARL-tied to 0 on
+            // both DUTs, same family as hartreset), "the hart will
+            // immediately enter debug mode on the next deassertion of its
+            // reset". Produced by asserting plain haltreq while already in
+            // ndmreset -- release_from_reset() checks "was a halt requested
+            // by any means", not specifically resethaltreq.
             bins in_reset_to_halted  = {TR_IN_RESET_TO_HALTED};
+            // reset asserted on a halted hart (#3.2). Excluded, not a bin:
+            // unreachable via any stimulus on either project DUT. Not via
+            // hartreset (WARL-tied to 0). Not via ndmreset either -- both
+            // DUTs' dm_mem.sv only resets halted_q on !rst_ni (the DM's own
+            // reset), and ndmreset deliberately does not touch the DM's own
+            // registers, so a hart already halted stays reported halted
+            // throughout an ndmreset cycle, unaffected by it (confirmed
+            // 2026-07-25, the hard way -- a first stimulus attempt assumed
+            // otherwise and timed out waiting for a transition that RTL
+            // structurally cannot produce).
+            ignore_bins halted_to_in_reset = {TR_HALTED_TO_IN_RESET};
         }
     endgroup
 
@@ -753,7 +814,18 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cp_readonaddr : coverpoint w[SBCS_SBREADONADDR] { bins off = {0}; bins on = {1}; }
         // sbbusy is only meaningful on a status read; gate the sample so a config
         // write's (busy=0) word doesn't count as "saw idle" spuriously.
-        cp_sbbusy : coverpoint w[SBCS_SBBUSY] iff (!is_write) { bins idle = {0}; bins busy = {1}; }
+        //
+        // busy=1 has never been observed in this project's SBA stimulus --
+        // every single SBCS read in the sba_uvm coverage log shows busy=0
+        // (`_wait_sbus()` in api/riscv_dm.py polls at DMI/JTAG speed, and
+        // this DUT's SBA transaction completes faster than software polling
+        // can catch a busy=1 moment). This is a stimulus/timing-granularity
+        // limitation, not a functional gap -- ignored rather than forced
+        // with an artificial slow-down (2026-07-25).
+        cp_sbbusy : coverpoint w[SBCS_SBBUSY] iff (!is_write) {
+            bins idle = {0};
+            ignore_bins too_fast_to_observe = {1};
+        }
     endgroup
 
     // ── System-bus address/data accesses (#3.10) ──────────────────────────────
@@ -763,12 +835,17 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         option.per_instance = 1;
         option.comment = "System-bus address/data accesses (#3.10)";
 
+        // {addr==ADDR_SBDATA0, op==DMI_WRITE}: MSB is the address bit, LSB is
+        // the op bit, so e.g. a SBDATA0 *read* is {1,0}=2'b10, not 2'b00 --
+        // confirmed against a real transaction (addr=0x3c op=READ) that
+        // should have hit "data_read" but was silently falling into the
+        // ignored 2'b10 bin instead, riscv-dbg-vip investigation 2026-07-25.
         cp_access : coverpoint {addr == ADDR_SBDATA0, op == dm_defines_pkg::DMI_WRITE} {
             bins addr_write = {2'b01};  // write sbaddress0 (arm/address)
-            bins data_read  = {2'b00};  // read  sbdata0    (bus read result)
             bins data_write = {2'b11};  // write sbdata0    (bus write)
-            // {addr_read=2'b10} = reading sbaddress0 back: legal but not a basic flow.
-            ignore_bins addr_read = {2'b10};
+            bins data_read  = {2'b10};  // read  sbdata0    (bus read result)
+            // {2'b00} = reading sbaddress0 back: legal but not a basic flow.
+            ignore_bins addr_read = {2'b00};
         }
     endgroup
 
@@ -994,6 +1071,12 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
 
         new_hartsel = {w[DMC_HARTSELHI_LSB +: 10], w[DMC_HARTSELLO_LSB +: 10]};
 
+        // Default-clear the reset-release grace window on every new write --
+        // it only covers the reads between the release write and the next
+        // write (see the field's own declaration comment); re-armed below if
+        // THIS write happens to be the release itself.
+        ndmreset_release_pending = 0;
+
         // Selection updates before the action bits are evaluated. #3.14.2 states it
         // per action bit: "Writes apply to the new value of hartsel and hasel."
         selection_changed = (new_hartsel != hartsel);
@@ -1080,9 +1163,21 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         nd  = w[DMC_NDMRESET];
         if (nd && !ndmreset)
             cur_ndmreset_ctx = rhr ? ND_ASSERT_RHR1 : ND_ASSERT_RHR0;
-        else if (!nd && ndmreset)
+        else if (!nd && ndmreset) begin
             cur_ndmreset_ctx = rhr ? ND_DEASSERT_RHR1 : ND_DEASSERT_RHR0;
-        else
+            // Only arm the grace window when a halt is actually pending on
+            // release (haltreq set in this same write) -- TC-RST-001's own
+            // baseline release (no haltreq) also reads dmstatus while still
+            // in reset beforehand, so a blanket "just released" flag would
+            // also catch that case and wrongly keep tagging its very next,
+            // already-fully-resolved-to-running read as ST_IN_RESET too.
+            // haltreq is the correct discriminator: it is the one thing that
+            // tells us a delayed halt-handshake resolution should actually
+            // be expected, vs. a release that resolves to running with
+            // nothing further to wait for (confirmed both ways via CVA6 UVM
+            // regression, 2026-07-25).
+            ndmreset_release_pending = w[DMC_HALTREQ];
+        end else
             cur_ndmreset_ctx = ND_NO_EDGE;
         ndmreset = nd;
 
@@ -1158,7 +1253,7 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         if (r[DMS_ANYNONEXISTENT]) return ST_NONEXISTENT;
         if (r[DMS_ANYUNAVAIL])     return ST_UNAVAIL;
         if (r[DMS_ANYHALTED])      return ST_HALTED;
-        if (r[DMS_ANYRUNNING] && ndmreset) return ST_IN_RESET;
+        if (r[DMS_ANYRUNNING] && (ndmreset || ndmreset_release_pending)) return ST_IN_RESET;
         if (r[DMS_ANYRUNNING])     return ST_RUNNING;
         return ST_IN_RESET;
     endfunction
