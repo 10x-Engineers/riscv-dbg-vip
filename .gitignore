@@ -60,3 +60,6 @@ ibex_sim/sw/*.elf
 openocd.pid
 cva6_sim/uart
 ibex_sim/uart
+
+# Local dev environment
+.venv/

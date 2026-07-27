@@ -1,0 +1,12 @@
+{
+    "scenario": "sw_breakpoint_progbuf",
+    "transport": "openocd",
+    "mode": "batch",
+    "params": {},
+    "openocd": {
+        "host": "127.0.0.1",
+        "port": 6666,
+        "config": "openocd_arty_a7_100t.cfg",
+        "startup_wait": 30.0
+    }
+}
