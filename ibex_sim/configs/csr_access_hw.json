@@ -1,0 +1,15 @@
+{
+    "scenario": "csr_access",
+    "transport": "openocd",
+    "mode": "batch",
+    "params": {
+        "pattern0": "0xc5c5c5c5",
+        "pattern1": "0x3a3a3a3a"
+    },
+    "openocd": {
+        "host": "127.0.0.1",
+        "port": 6666,
+        "config": "openocd_arty_a7_100t.cfg",
+        "startup_wait": 30.0
+    }
+}
