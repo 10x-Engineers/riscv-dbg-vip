@@ -187,44 +187,19 @@ def convert_params(params: dict) -> dict:
     return converted
 
 
-# ── Sub-command: run ──────────────────────────────────────────────────────────
+# ── Shared: bring up whichever transport a config asks for ────────────────────
+#
+# Factored out of cmd_run unchanged (same logic, same log lines, same
+# timeouts/behavior) so cmd_interactive can reuse it — cmd_run's own
+# behavior is not modified by this extraction.
 
-def cmd_run(args):
-    """Execute a debug scenario."""
-    # Load config (from file or defaults)
-    if args.config:
-        cfg = load_config(args.config)
-        log.info("Loaded config from %s", args.config)
-    else:
-        cfg = {
-            "scenario": "halt",
-            "transport": "uvm",
-            "mode": "batch",
-            "params": {},
-            "uvm": {},
-            "openocd": {},
-        }
-
-    # CLI overrides
-    if args.scenario:
-        cfg["scenario"] = args.scenario
-    if args.transport:
-        cfg["transport"] = args.transport
-    if args.mode:
-        cfg["mode"] = args.mode
-    if args.openocd_config:
-        cfg["openocd"]["config"] = args.openocd_config
-
-    log.info("Scenario=%s  Transport=%s  Mode=%s",
-             cfg["scenario"], cfg["transport"], cfg["mode"])
-
-    # Load scenario builder
-    builder = load_scenario_builder(cfg["scenario"])
-
-    # Convert params
-    params = convert_params(cfg.get("params", {}))
-
-    # Create transport and run
+def connect_transport(cfg):
+    """
+    Start (if needed) and connect the transport described by `cfg`.
+    Returns (transport, openocd_proc). Caller is responsible for
+    `transport.connect()`'s context (e.g. `with transport:`) and for
+    terminating `openocd_proc` (if not None) when done.
+    """
     openocd_proc = None
     if cfg["transport"] == "openocd":
         ocd_cfg = cfg.get("openocd", {})
@@ -322,7 +297,48 @@ def cmd_run(args):
             log.error("Timed out waiting for OpenOCD TCL port")
             openocd_proc.terminate()
             sys.exit(1)
-    
+
+    return transport, openocd_proc
+
+
+# ── Sub-command: run ──────────────────────────────────────────────────────────
+
+def cmd_run(args):
+    """Execute a debug scenario."""
+    # Load config (from file or defaults)
+    if args.config:
+        cfg = load_config(args.config)
+        log.info("Loaded config from %s", args.config)
+    else:
+        cfg = {
+            "scenario": "halt",
+            "transport": "uvm",
+            "mode": "batch",
+            "params": {},
+            "uvm": {},
+            "openocd": {},
+        }
+
+    # CLI overrides
+    if args.scenario:
+        cfg["scenario"] = args.scenario
+    if args.transport:
+        cfg["transport"] = args.transport
+    if args.mode:
+        cfg["mode"] = args.mode
+    if args.openocd_config:
+        cfg["openocd"]["config"] = args.openocd_config
+
+    log.info("Scenario=%s  Transport=%s  Mode=%s",
+             cfg["scenario"], cfg["transport"], cfg["mode"])
+
+    # Load scenario builder
+    builder = load_scenario_builder(cfg["scenario"])
+
+    # Convert params
+    params = convert_params(cfg.get("params", {}))
+
+    transport, openocd_proc = connect_transport(cfg)
 
     try:
         with transport:
@@ -330,6 +346,38 @@ def cmd_run(args):
             session = builder(dm, mode=cfg["mode"], **params)
             session.run()
             sys.exit(0 if session.all_passed else 1)
+    finally:
+        if openocd_proc:
+            log.info("Terminating OpenOCD subprocess")
+            openocd_proc.terminate()
+            openocd_proc.wait(timeout=2.0)
+
+
+# ── Sub-command: interactive ──────────────────────────────────────────────────
+
+def cmd_interactive(args):
+    """Connect to a running target and drop into a live, GDB-style REPL."""
+    from pydebug.api.interactive_shell import RiscvDebugShell
+
+    cfg = {
+        "transport": args.transport or "uvm",
+        "uvm": {"socket_path": args.socket_path} if args.socket_path else {},
+        "openocd": {},
+    }
+    if args.openocd_config:
+        cfg["openocd"]["config"] = args.openocd_config
+    if args.openocd_host:
+        cfg["openocd"]["host"] = args.openocd_host
+    if args.openocd_port:
+        cfg["openocd"]["port"] = args.openocd_port
+
+    log.info("Connecting (transport=%s) for an interactive session...", cfg["transport"])
+    transport, openocd_proc = connect_transport(cfg)
+
+    try:
+        with transport:
+            dm = RISCVDebug(transport)
+            RiscvDebugShell(dm).cmdloop()
     finally:
         if openocd_proc:
             log.info("Terminating OpenOCD subprocess")
@@ -431,12 +479,37 @@ def main():
                             help="Execution mode (overrides config)")
     run_parser.add_argument("--openocd-config", help="Path to OpenOCD config file")
 
+    # ── interactive ──
+    interactive_parser = subparsers.add_parser(
+        "interactive", help="Connect to a running target and drop into a live REPL"
+    )
+    interactive_parser.add_argument("--transport", "-t", choices=["uvm", "openocd"],
+                                     default="uvm", help="Transport type (default: uvm)")
+    interactive_parser.add_argument("--socket-path", help="UVM bridge Unix socket path override")
+    interactive_parser.add_argument("--openocd-config", help="Path to OpenOCD config file")
+    interactive_parser.add_argument("--openocd-host", help="OpenOCD TCL host override")
+    interactive_parser.add_argument("--openocd-port", type=int, help="OpenOCD TCL port override")
+
     # ── sources ──
     sources_parser = subparsers.add_parser("sources", help="Show shipped source file paths")
     sources_parser.add_argument("--c", action="store_true", help="Show C bridge sources only")
     sources_parser.add_argument("--sv", action="store_true", help="Show SV kit sources only")
     sources_parser.add_argument("--c-dir", action="store_true", help="Show only the C bridge directory")
     sources_parser.add_argument("--sv-dir", action="store_true", help="Show only the SV kit root directory")
+
+    # `--log-level` is defined on the top-level parser (above), which only
+    # recognizes it *before* the subcommand name -- but every real call site
+    # in this project's Makefiles (soc_openocd, soc_interactive) passes it
+    # *after* (e.g. `pydebug run --transport openocd ... --log-level DEBUG`),
+    # which argparse's subparser mechanism otherwise rejects outright
+    # ("unrecognized arguments"). Re-declaring the same flag on each
+    # subparser with default=SUPPRESS makes both positions work: if the user
+    # doesn't pass it at the subcommand level, SUPPRESS means it's simply
+    # absent from that parser's contribution to the namespace, so it doesn't
+    # clobber whatever the top-level parser already set.
+    for _p in (run_parser, interactive_parser, sources_parser):
+        _p.add_argument("--log-level", default=argparse.SUPPRESS,
+                         help="Logging level (DEBUG, INFO, WARNING, ERROR)")
 
     # ── init ──
     init_parser = subparsers.add_parser("init", help="Copy integration templates to a directory")
@@ -447,6 +520,8 @@ def main():
                              help="Which testbench template to copy "
                                   "(e.g. standalone, ibex, cva6, or a custom one)")
     init_parser.add_argument("--output", "-o", help="Output directory (default: cwd)")
+    init_parser.add_argument("--log-level", default=argparse.SUPPRESS,
+                              help="Logging level (DEBUG, INFO, WARNING, ERROR)")
 
     args = parser.parse_args()
 
@@ -458,6 +533,8 @@ def main():
 
     if args.command == "run":
         cmd_run(args)
+    elif args.command == "interactive":
+        cmd_interactive(args)
     elif args.command == "sources":
         cmd_sources(args)
     elif args.command == "init":

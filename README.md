@@ -56,6 +56,35 @@ pydebug sources --sv
 pydebug init --template ibex --output ./my_debug_tb/
 ```
 
+### Interactive, GDB-style live session
+
+Alongside the batch mode above (a scenario runs start-to-finish
+unattended), `pydebug interactive` drops you into a live REPL against an
+already-running target — type one command at a time (`halt`, `resume`,
+`read_gpr a0`, `read_mem 0x80000000`, ...) and see the result immediately,
+the same way GDB's own prompt works. Every command is a thin wrapper
+around a real `RISCVDebug` method — see `pydebug.api.interactive_shell`.
+
+For simulation, this needs the target running with the UVM bridge active
+but *no* auto-launched Python client (`+JTAG_MASTER=external` instead of
+the default `uvm`) — `make soc_interactive` in `cva6_sim/`/`ibex_sim/`
+does exactly that:
+
+```bash
+cd ibex_sim && make soc_interactive
+(pydebug) activate
+(pydebug) halt
+halted, PC = 0x001000be
+(pydebug) read_gpr a0
+a0 = 0x0000000a
+(pydebug) resume
+running
+(pydebug) quit
+```
+
+Works identically over OpenOCD/hardware — connect to an already-running
+target with `pydebug interactive --transport openocd --openocd-config <cfg>`.
+
 ### As a Python API
 
 ```python

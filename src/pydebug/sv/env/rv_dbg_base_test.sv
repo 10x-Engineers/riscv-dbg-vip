@@ -46,6 +46,20 @@ class debug_test extends uvm_test;
                     break;
                 end
             end
+        end else if (jtag_master == "external") begin
+            // External mode: like "openocd" mode, the sim does NOT launch
+            // any Python subprocess itself -- it just brings up the UVM
+            // bridge's Unix-domain-socket server and waits. A separate,
+            // normal foreground process (e.g. `pydebug interactive`)
+            // connects to that socket on its own, from a real terminal, so
+            // it gets genuine interactive stdin/stdout instead of trying to
+            // make a `$system(...)`-backgrounded child act like a live
+            // terminal (unreliable -- background jobs commonly have their
+            // stdin severed by the invoking shell). Ends the same way "uvm"
+            // mode does: serve() returns once the connected client sends
+            // op=4 (shutdown), e.g. on the interactive shell's `quit`.
+            `uvm_info("TEST", "External mode — UVM bridge active, waiting for an external client to connect", UVM_NONE)
+            m_bridge.serve(m_env.m_agent.sequencer);
         end else begin
             // UVM mode: launch Python and serve bridge requests
             cmd = $sformatf("python3 -u %s %s 2>&1 &", python_seq, python_extra);
