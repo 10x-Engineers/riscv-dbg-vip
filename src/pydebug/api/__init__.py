@@ -10,6 +10,7 @@ from .uvm_transport     import UVMTransport
 from .openocd_transport import OpenOCDTransport
 from .riscv_dm          import RISCVDebug, DebugError, DMI
 from .session           import DebugSession, StepResult
+from .interactive_shell import RiscvDebugShell
 
 __all__ = [
     "DebugTransport", "TransportError",
@@ -17,4 +18,5 @@ __all__ = [
     "OpenOCDTransport",
     "RISCVDebug", "DebugError", "DMI",
     "DebugSession", "StepResult",
+    "RiscvDebugShell",
 ]

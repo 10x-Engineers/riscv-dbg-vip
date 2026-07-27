@@ -10,6 +10,7 @@
 #   make soc_compile   — compile ibex-demo-system + pydebug JTAG/DPI kit
 #   make soc_test      — run halt/read-PC/resume session (UVM socket transport)
 #   make soc_openocd   — run the same session over OpenOCD remote-bitbang
+#   make soc_interactive — live, GDB-style interactive session (UVM socket)
 # ──────────────────────────────────────────────────────────────────────────────
 
 SHELL := /bin/bash
@@ -122,6 +123,25 @@ soc_openocd: soc_compile
 	@echo "Starting OpenOCD + pydebug (scenario=$(OPENOCD_SCENARIO))..."
 	$(RUNNER) --transport openocd --scenario $(OPENOCD_SCENARIO) --mode batch --openocd-config $(OPENOCD_IBEX_CFG) --log-level DEBUG
 
+# Live, GDB-style interactive session: the sim runs in the background with
+# the UVM bridge active but no auto-launched Python client (+JTAG_MASTER=
+# external, see rv_dbg_base_test.sv), then `pydebug interactive` connects
+# from this same foreground terminal -- `pydebug interactive`'s own
+# connect_transport() already polls for the bridge socket to appear, so no
+# extra wait-loop is needed here (unlike soc_openocd's RBB-port grep).
+soc_interactive: soc_compile
+	@rm -f sim.log
+	@mkdir -p $(SIM_OUTPUT_DIR)
+	@echo "Starting vsim (ibex-demo-system) with UVM bridge active, no auto-launched client..."
+	$(VSIM_BATCH) -do "run -all; quit -f" \
+	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_ibex \
+	     +UVM_TESTNAME=debug_test \
+	     "+PYTHON_SEQ=unused" \
+	     +JTAG_MASTER=external \
+	     $(ELF_PLUSARGS) \
+	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee sim.log &
+	pydebug interactive --transport uvm --log-level WARNING
+
 soc_compile_cov: uvm_bridge_soc.so sw/$(notdir $(ELF))
 	vlib $(COV_LIB)
 	vlog $(QUESTA_FLAGS) +cover=sbceft $(IBEX_INCDIRS) \
@@ -167,4 +187,4 @@ clean:
 	rm -rf work $(COV_LIB) uvm_bridge_soc.so sim.log transcript vsim.wlf
 	rm -f sw/*.o sw/*.elf
 
-.PHONY: soc_compile soc_test soc_openocd soc_compile_cov soc_test_cov coverage_regress coverage_merge clean
+.PHONY: soc_compile soc_test soc_openocd soc_interactive soc_compile_cov soc_test_cov coverage_regress coverage_merge clean
