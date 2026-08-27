@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="620" viewBox="0 0 660 620" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#000000"/>
+    </marker>
+  </defs>
+  <rect width="660" height="620" fill="#ffffff"/>
+
+  <text x="330" y="24" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#9a4a10">POST-SILICON &#8212; EMULATION</text>
+
+  <!-- B1 -->
+  <rect x="90" y="34" width="480" height="52" rx="4" fill="#ffffff" stroke="#000" stroke-width="1.6"/>
+  <text x="330" y="65" text-anchor="middle" font-size="14">Python Client (pytest / CLI)</text>
+  <line x1="330" y1="86" x2="330" y2="120" stroke="#000" stroke-width="1.6" marker-end="url(#arrow3)"/>
+  <text x="345" y="107" font-size="11.5" font-style="italic">DMI read/write request</text>
+
+  <!-- B2 -->
+  <rect x="90" y="122" width="480" height="52" rx="4" fill="#fbe8d2" stroke="#9a4a10" stroke-width="1.6"/>
+  <text x="330" y="153" text-anchor="middle" font-size="14">OpenOCDTransport (TCP socket)</text>
+  <line x1="330" y1="174" x2="330" y2="208" stroke="#000" stroke-width="1.6" marker-end="url(#arrow3)"/>
+
+  <!-- B3 -->
+  <rect x="90" y="210" width="480" height="52" rx="4" fill="#fbe8d2" stroke="#9a4a10" stroke-width="1.6"/>
+  <text x="330" y="241" text-anchor="middle" font-size="14">OpenOCD Process (TCL interpreter)</text>
+  <line x1="330" y1="262" x2="330" y2="296" stroke="#000" stroke-width="1.6" marker-end="url(#arrow3)"/>
+
+  <!-- B4 -->
+  <rect x="90" y="298" width="480" height="56" rx="4" fill="#fbe8d2" stroke="#9a4a10" stroke-width="1.6"/>
+  <text x="330" y="322" text-anchor="middle" font-size="14">riscv dmi_read / dmi_write</text>
+  <text x="330" y="340" text-anchor="middle" font-size="11.5">low-level DMI passthrough (no high-level abstraction)</text>
+  <line x1="330" y1="354" x2="330" y2="388" stroke="#000" stroke-width="1.6" marker-end="url(#arrow3)"/>
+
+  <!-- B5 -->
+  <rect x="90" y="390" width="480" height="52" rx="4" fill="#fbe8d2" stroke="#9a4a10" stroke-width="1.6"/>
+  <text x="330" y="414" text-anchor="middle" font-size="14">JTAG Scan Chain</text>
+  <text x="330" y="432" text-anchor="middle" font-size="11.5">via physical debug probe</text>
+  <line x1="330" y1="442" x2="330" y2="476" stroke="#000" stroke-width="1.6" marker-end="url(#arrow3)"/>
+
+  <!-- B6 -->
+  <rect x="90" y="478" width="480" height="56" rx="4" fill="#f5d3ab" stroke="#9a4a10" stroke-width="1.8"/>
+  <text x="330" y="502" text-anchor="middle" font-size="14" font-weight="bold">DUT Debug Module</text>
+  <text x="330" y="520" text-anchor="middle" font-size="11.5">silicon / FPGA</text>
+
+  <text x="330" y="580" text-anchor="middle" font-size="12" font-style="italic" fill="#333333">Same request/response shape as Figure 2 &#8212; only the transport and the last two stages differ.</text>
+</svg>

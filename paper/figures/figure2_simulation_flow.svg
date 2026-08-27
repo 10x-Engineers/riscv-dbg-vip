@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="700" viewBox="0 0 660 700" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#000000"/>
+    </marker>
+    <marker id="arrow2d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a4a7a"/>
+    </marker>
+  </defs>
+  <rect width="660" height="700" fill="#ffffff"/>
+
+  <text x="330" y="24" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#1a4a7a">PRE-SILICON &#8212; SIMULATION</text>
+
+  <!-- B1 -->
+  <rect x="90" y="34" width="480" height="52" rx="4" fill="#ffffff" stroke="#000" stroke-width="1.6"/>
+  <text x="330" y="65" text-anchor="middle" font-size="14">Python Client (pytest / CLI)</text>
+  <line x1="330" y1="86" x2="330" y2="120" stroke="#000" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <text x="345" y="107" font-size="11.5" font-style="italic">JSON command</text>
+
+  <!-- B2 -->
+  <rect x="90" y="122" width="480" height="52" rx="4" fill="#dce9f7" stroke="#1a4a7a" stroke-width="1.6"/>
+  <text x="330" y="153" text-anchor="middle" font-size="14">Unix Domain Socket</text>
+  <line x1="330" y1="174" x2="330" y2="208" stroke="#000" stroke-width="1.6" marker-end="url(#arrow2)"/>
+
+  <!-- B3 -->
+  <rect x="90" y="210" width="480" height="56" rx="4" fill="#dce9f7" stroke="#1a4a7a" stroke-width="1.6"/>
+  <text x="330" y="234" text-anchor="middle" font-size="14">C DPI Server</text>
+  <text x="330" y="252" text-anchor="middle" font-size="11.5">(POSIX thread &#8212; uvm_bridge.c)</text>
+  <line x1="330" y1="266" x2="330" y2="300" stroke="#000" stroke-width="1.6" marker-end="url(#arrow2)"/>
+
+  <!-- B4 -->
+  <rect x="90" y="302" width="480" height="56" rx="4" fill="#dce9f7" stroke="#1a4a7a" stroke-width="1.6"/>
+  <text x="330" y="326" text-anchor="middle" font-size="14">UVM python_bridge Component</text>
+  <text x="330" y="344" text-anchor="middle" font-size="11.5">polls request queue, builds sequence</text>
+  <line x1="330" y1="358" x2="330" y2="392" stroke="#000" stroke-width="1.6" marker-end="url(#arrow2)"/>
+
+  <!-- B5 -->
+  <rect x="90" y="394" width="480" height="56" rx="4" fill="#dce9f7" stroke="#1a4a7a" stroke-width="1.6"/>
+  <text x="330" y="418" text-anchor="middle" font-size="14">JTAG DMI Read/Write Sequence</text>
+  <text x="330" y="436" text-anchor="middle" font-size="11.5">(dmi_read_seq / dmi_write_seq, built dynamically)</text>
+  <line x1="330" y1="450" x2="330" y2="484" stroke="#000" stroke-width="1.6" marker-end="url(#arrow2)"/>
+
+  <!-- B6 -->
+  <rect x="90" y="486" width="480" height="52" rx="4" fill="#dce9f7" stroke="#1a4a7a" stroke-width="1.6"/>
+  <text x="330" y="517" text-anchor="middle" font-size="14">JTAG Sequencer / Driver</text>
+  <line x1="330" y1="538" x2="330" y2="572" stroke="#000" stroke-width="1.6" marker-end="url(#arrow2)"/>
+
+  <!-- B7 -->
+  <rect x="90" y="574" width="480" height="56" rx="4" fill="#c3dbf3" stroke="#1a4a7a" stroke-width="1.8"/>
+  <text x="330" y="598" text-anchor="middle" font-size="14" font-weight="bold">DUT Debug Module</text>
+  <text x="330" y="616" text-anchor="middle" font-size="11.5">RTL, in simulation</text>
+
+  <!-- Return path (response), dashed, right side -->
+  <path d="M 570 602 L 610 602 L 610 238 L 574 238" fill="none" stroke="#1a4a7a" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow2d)"/>
+  <text x="614" y="420" font-size="11.5" font-style="italic" fill="#1a4a7a" transform="rotate(-90 614 420)" text-anchor="middle">response (status / data)</text>
+
+  <text x="330" y="670" text-anchor="middle" font-size="12" font-style="italic" fill="#333333">Same request/response shape as Figure 3 &#8212; only the transport and the last two stages differ.</text>
+</svg>

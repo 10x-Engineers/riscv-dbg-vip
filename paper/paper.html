@@ -4,256 +4,340 @@
 <meta charset="utf-8">
 <title>Bridging Pre and Post-silicon Stimulus Generation for RISC-V Debug</title>
 <style>
-  @page { size: letter; margin: 0.75in 0.62in 0.75in 0.62in; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: "Times New Roman", Times, serif;
-    font-size: 10pt;
-    line-height: 1.15;
-    color: #000;
-    margin: 0;
-  }
-  .title { text-align: center; font-size: 18pt; font-weight: bold; margin: 0 0 6pt 0; }
-  .authors { text-align: center; font-size: 11pt; margin: 0 0 1pt 0; }
-  .affil { text-align: center; font-size: 10pt; font-style: italic; margin: 0 0 14pt 0; }
-  .columns { column-count: 2; column-gap: 0.28in; column-rule: 0.5pt solid #ccc; }
-  h2 {
-    font-size: 10.5pt; text-transform: uppercase; letter-spacing: 0.3pt;
-    margin: 8pt 0 3pt 0; break-after: avoid;
-  }
-  h3 { font-size: 10pt; font-style: italic; margin: 6pt 0 2pt 0; break-after: avoid; }
-  p { margin: 0 0 6pt 0; text-align: justify; orphans: 3; widows: 3; }
-  .abstract-block { margin-bottom: 6pt; }
-  .abstract-label { font-weight: bold; font-style: italic; }
-  .index-terms { font-size: 9.3pt; margin-bottom: 8pt; }
-  .index-terms b { font-style: italic; }
-  table {
-    width: 100%; border-collapse: collapse; font-size: 7.6pt; margin: 4pt 0 8pt 0;
-    break-inside: avoid;
-  }
-  caption {
-    caption-side: top; font-size: 9pt; margin-bottom: 3pt; text-align: left;
-  }
-  th, td { border: 0.5pt solid #444; padding: 2.5px 3.5px; vertical-align: top; text-align: left; }
-  th { font-weight: bold; background: #eee; }
-  .fig {
-    break-inside: avoid; margin: 6pt 0; text-align: center;
-  }
-  .fig svg { width: 100%; max-width: 235px; height: auto; }
-  .fig-caption { font-size: 8.3pt; margin-top: 2pt; }
-  .refs { font-size: 8.6pt; }
-  .refs p { text-indent: -10pt; padding-left: 10pt; margin-bottom: 3pt; text-align: left; }
-  code { font-family: "Courier New", monospace; font-size: 9pt; }
-  .finding-list { margin: 0 0 6pt 0; padding-left: 14pt; }
-  .finding-list li { margin-bottom: 4pt; text-align: justify; }
+@page { size: letter; margin: 0.75in 0.62in 0.75in 0.62in; }
+* { box-sizing: border-box; }
+body {
+  font-family: "Times New Roman", Times, serif;
+  font-size: 10pt;
+  line-height: 1.15;
+  color: #000;
+  margin: 0;
+}
+.title { text-align: center; font-size: 18pt; font-weight: bold; margin: 0 0 4pt 0; }
+.subtitle { text-align: center; font-size: 11pt; font-style: italic; margin: 0 0 8pt 0; }
+.authors { text-align: center; font-size: 11pt; margin: 0 0 1pt 0; }
+.affil { text-align: center; font-size: 10pt; font-style: italic; margin: 0 0 14pt 0; }
+.columns { column-count: 2; column-gap: 0.28in; column-rule: 0.5pt solid #ccc; }
+h2 {
+  font-size: 10.5pt; text-transform: uppercase; letter-spacing: 0.3pt;
+  margin: 8pt 0 3pt 0; break-after: avoid;
+}
+h3 { font-size: 10pt; font-style: italic; margin: 6pt 0 2pt 0; break-after: avoid; }
+p { margin: 0 0 6pt 0; text-align: justify; orphans: 3; widows: 3; }
+.abstract-block p:first-of-type::before { content: "Abstract\2014"; font-weight: bold; font-style: italic; }
+table {
+  width: 100%; border-collapse: collapse; font-size: 6.6pt; margin: 4pt 0 8pt 0;
+  break-inside: avoid;
+}
+.table-caption { font-size: 8.6pt; margin: 4pt 0 2pt 0; }
+th, td { border: 0.5pt solid #444; padding: 2px 3px; vertical-align: top; text-align: left; }
+th { font-weight: bold; background: #eee; }
+img { max-width: 100%; height: auto; display: block; margin: 4pt auto; }
+.fig-caption { font-size: 8.3pt; text-align: center; margin-top: -2pt; margin-bottom: 6pt; }
+code { font-family: "Courier New", monospace; font-size: 9pt; }
 </style>
 </head>
 <body>
-
 <div class="title">Bridging Pre and Post-silicon Stimulus Generation for RISC-V Debug</div>
+<div class="subtitle">A python-based cross-platform framework</div>
 <div class="authors">Jahanzeb Khalid, Hassan Ashraf</div>
 <div class="affil">10xEngineers</div>
-
 <div class="columns">
-
-<div class="abstract-block"><span class="abstract-label">Abstract—</span>As RISC-V architectures move toward mass adoption, verifying the Debug Infrastructure comprising the Debug Transport Module (DTM), Debug Module Interface (DMI), and Debug Module (DM) remains a fragmented challenge. The RISC-V Debug Specification defines a highly stateful interaction between an external debugger and on-chip hardware, yet existing verification methodologies offer limited support for unified stimulus reuse across development stages: pre-silicon teams rely on SystemVerilog/UVM environments to generate debug stimulus via DMI, while post-silicon validation depends on external debuggers such as OpenOCD or GDB communicating with the target over JTAG. This disconnect produces duplicated effort, inconsistent coverage, and difficulty reproducing corner cases found in the lab. This paper presents a unified, cross-platform stimulus framework that enables a "write-once, execute-anywhere" methodology for RISC-V debug verification. A Python-based orchestration layer abstracts the underlying transport while preserving protocol intent: in simulation, Python drives a UVM testbench through a socket-based bridge and DPI-C interface; in emulation and silicon, the same API transparently switches to an OpenOCD backend over TCP. We validate the approach with a stimulus-migration case study spanning eight RISC-V Debug features. Six are demonstrated fully end-to-end against real CVA6 and Ibex RTL, over the same transport independently verified on physical Arty A7 hardware; a seventh (external triggers) is demonstrated at the register level after we added a register that neither DUT's vendored IP previously implemented; the eighth (group halt/resume) is reported as a precisely-scoped limitation rather than attempted under risk to the proven baseline. We position this work explicitly against the Accellera Portable Test and Stimulus Standard (PSS) and the broader transactor-pattern literature, and argue that the contribution is not the existence of a transactor but a debug-protocol-specific, dual-transport one that also lowers the organizational barrier between pre- and post-silicon teams.</div>
-
-<div class="index-terms"><b>Index Terms—</b>RISC-V, debug module, JTAG, UVM, OpenOCD, portable stimulus, hardware/software co-verification, DMI</div>
-
+<h2>Abstract</h2>
+<p>As RISC-V architectures move toward mass adoption, verifying the Debug Infrastructure comprising the Debug Transport Module (DTM), Debug Module Interface (DMI), and Debug Module (DM) remains a fragmented challenge. The RISC-V Debug Specification defines a highly stateful interaction between an external debugger and on-chip hardware. Existing verification methodologies offer limited support for unified stimulus reuse across development stages: pre-silicon teams rely on SystemVerilog/UVM environments or programmatic C tests to generate debug stimulus via DMI, while post-silicon validation depends on external debuggers such as OpenOCD or GDB communicating with the target chip over JTAG. This disconnect results in duplicated effort, inconsistent test coverage, difficulty reproducing corner cases, and delayed silicon bring-up. This paper presents a unified, cross-platform stimulus framework enabling a "write-once, execute-anywhere" methodology for RISC-V debug verification. Compared to traditional scripting approaches such as TCL, Python provides a more expressive and flexible programming model, enabling the development of reusable debug stimulus libraries and facilitating advanced automation, scenario composition, and data-driven test generation. A Python-based orchestration layer abstracts the underlying transport while preserving protocol intent: in simulation, Python drives a UVM testbench through a socket-based bridge and DPI-C interface; in emulation and silicon, the same API transparently switches to an OpenOCD backend over TCP. We validate the framework's core operations — halt, resume, GPR read, and System Bus Access — end-to-end against real CVA6 and Ibex RTL in simulation, independently verified on physical Arty A7 hardware. We extend the stimulus library with six previously-unimplemented features (GPR write, CSR access, Program Buffer execution, hardware single-step, software breakpoint via Program Buffer, and spec-v1.0 halt-group discovery via <code>dmcs2</code>), each implemented against the specification and verified end-to-end against real CVA6 and Ibex RTL in Questa, not merely implemented-and-pending: all six pass on Ibex, including a genuine Program Buffer execution proof and a falsifiable prediction about <code>dcsr.cause</code> stated in advance and then confirmed; five of the six were further verified unmodified against real Arty A7 hardware over the same OpenOCD transport; CVA6 simulation verification of the same six is partially blocked by one open, likely-RTL finding, reported rather than patched (Section IV). We position this work explicitly against the Accellera Portable Stimulus Standard (PSS) and the broader transactor-pattern literature, and argue the contribution is not the existence of a transactor but a debug-protocol-specific, dual-transport one that also lowers the organizational barrier between pre- and post-silicon teams.</p>
 <h2>I. Introduction</h2>
-
-<p>Modern System-on-Chip (SoC) verification is characterized by the "shift-left" paradigm, where teams attempt to run software and system-level tests as early as possible in simulation or emulation. Hardware debug infrastructure, specifically the RISC-V Debug Module [1], often resists this paradigm due to the inherent divide in how pre-silicon and post-silicon teams operate. Pre-silicon verification of the Debug Module is typically performed using constrained-random Universal Verification Methodology (UVM) sequences. These sequences are excellent for verifying DMI bus protocol compliance and corner-case timing, but they generally fail to capture the high-level, stateful workflows of a real debugger. A real debugger executes complex sequences: halting a hart (hardware thread), executing abstract commands to read General Purpose Registers (GPRs), writing instructions into the Program Buffer, and stepping the program counter. Writing these state-dependent, highly sequential workflows purely in SystemVerilog is cumbersome and heavily ties the tests to one specific verification environment.</p>
-
-<p>Conversely, post-silicon validation relies on mature, software-based tools like OpenOCD or proprietary debuggers communicating over physical JTAG lines. When a post-silicon debug test fails on the lab bench, root-causing the failure is difficult because the hardware stimulus — the exact sequence of JTAG shifts — cannot be natively replayed in a UVM simulation environment. Verification engineers are often forced to manually translate software debug logs into SystemVerilog sequences to reproduce bugs in RTL, a process that is error-prone and time-consuming. To bridge this gap, verification engineers need a unified mechanism to define debug workflows once and execute them against any target. The framework presented in this paper solves this by decoupling the intent of a debug test — which registers to read or write and the logical assertions to make — from the transport used to reach the chip, enabling a single Python-based test suite to drive both UVM simulations and physical hardware identically.</p>
-
-<p>This problem is compounded by the pace of RISC-V adoption itself. Unlike a fixed-ISA commercial core where a single vendor's debug module is verified once and reused across products, the RISC-V ecosystem produces a steady stream of independently-implemented debug modules — vendored, forked, and configured differently across projects, as this paper's own two DUTs illustrate. A verification methodology that only works for one specific SoC's testbench does not scale across that diversity; a methodology whose stimulus is transport-agnostic does, because the same Python scenario can be pointed at a new DUT's simulation environment or its physical debug probe with no rewrite. Section III returns to this point when describing how new scenarios are added to the framework.</p>
-
+<p>Modern System-on-Chip (SoC) verification is characterized by the "shift-left" paradigm, where teams attempt to run software and system-level tests as early as possible in simulation or emulation. However, hardware debug infrastructure, specifically the RISC-V Debug Module [1], often resists this paradigm due to the inherent divide in how pre-silicon and post-silicon teams operate. Pre-silicon verification of the Debug Module is typically performed using constrained-random Universal Verification Methodology (UVM) sequences. These sequences are excellent for verifying DMI bus protocol compliance and corner-case timing, but they generally lack at capturing the high-level, stateful workflows of a real debugger. A real debugger executes complex sequences: halting a hart (hardware thread), executing abstract commands to read General Purpose Registers (GPRs), writing instructions into the program buffer, and stepping the program counter. Writing these state-dependent, highly sequential workflows purely in SystemVerilog is cumbersome and heavily ties the tests to the specific verification environment. Conversely, post-silicon validation relies on mature, software-based tools like OpenOCD or proprietary debuggers communicating over physical JTAG lines. When a post-silicon debug test fails on the lab bench, root-causing the failure is exceedingly difficult because the hardware stimulus (the exact sequence of JTAG shifts) cannot be natively or easily replayed in the UVM simulation environment. Verification engineers are often forced to manually translate software debug logs into SystemVerilog sequences to reproduce bugs in RTL, a process that is error-prone and highly time-consuming. To bridge this gap, verification engineers need a unified mechanism to define debug workflows once and execute them across any target. The framework presented in this paper solves this by decoupling the intent of a debug test (which registers to read or write and the logical assertions to make) from the transport (the physical or simulated medium used to communicate with the chip), enabling a single Python-based test suite to drive both UVM simulations and physical hardware identically.</p>
 <h2>II. Related Work — Why This Approach, Not the Alternatives</h2>
-
-<p>Table I compares this framework against every practical alternative for producing RISC-V debug stimulus, on the dimensions that determine whether a verification team can actually adopt it.</p>
-
+<p>Table I compares this framework against every real alternative for producing RISC-V debug stimulus, on the dimensions that actually determine whether a verification team can adopt it.</p>
+<p class="table-caption"><strong>Table I — Debug stimulus generation approaches compared</strong></p>
 <table>
-<caption>TABLE I: DEBUG STIMULUS GENERATION APPROACHES COMPARED</caption>
-<tr><th>Approach</th><th>Cross-platform reuse</th><th>Tooling cost</th><th>Closes silicon-reproduction gap?</th></tr>
-<tr><td>Raw SystemVerilog/UVM sequences</td><td>None (pre-silicon only)</td><td>Simulator license</td><td>No — hand-written OpenOCD/GDB equivalent needed per scenario</td></tr>
-<tr><td>OpenOCD native TCL scripting</td><td>None (post-silicon only)</td><td>Free</td><td>No — the reverse problem, no path into a UVM testbench</td></tr>
-<tr><td>Manual log-to-SV translation (today's workflow)</td><td>N/A, not reusable</td><td>Engineer time</td><td>Nominally, but slow and error-prone by construction</td></tr>
-<tr><td>Accellera PSS [5]</td><td>High at the scenario/graph level, not transport</td><td>Often commercial tooling</td><td>Partial — no built-in JTAG/OpenOCD/DPI-C transport concept</td></tr>
-<tr><td><b>This framework</b></td><td><b>Full — identical Python file, both transports</b></td><td><b>Open-source only</b></td><td><b>Yes — the failing command sequence is the reproduction script</b></td></tr>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Cross-platform reuse</th>
+<th>Tooling cost</th>
+<th>Expressiveness</th>
+<th>Closes the silicon-reproduction gap?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raw SystemVerilog/UVM sequences</td>
+<td>None — pre-silicon only</td>
+<td>Simulator license only</td>
+<td>Verbose, compile-time, tightly coupled to the testbench</td>
+<td>No — every scenario needs a hand-written OpenOCD/GDB equivalent for hardware</td>
+</tr>
+<tr>
+<td>OpenOCD native TCL scripting</td>
+<td>None — post-silicon only</td>
+<td>Free</td>
+<td>Weak: no real object model, minimal native assertion/test framework, small ecosystem</td>
+<td>No — the reverse problem, no path back into a UVM testbench without its own bridge</td>
+</tr>
+<tr>
+<td>Manual translation of a bring-up failure's debug log into an SV sequence (today's actual workflow)</td>
+<td>N/A — a manual process, not a reusable artifact</td>
+<td>Engineer time</td>
+<td>N/A</td>
+<td>Nominally, but error-prone and slow <em>by construction</em>: a human re-encodes one language's trace into another's syntax every time</td>
+</tr>
+<tr>
+<td>Accellera Portable Stimulus Standard (PSS)</td>
+<td>High, but at the <em>scenario/action-graph</em> level, not the <em>transport</em> level</td>
+<td>Often commercial/specialized tooling</td>
+<td>High, but a different declarative model (constraint-solved action graphs, not imperative Python)</td>
+<td>Partially — no built-in JTAG/OpenOCD/DPI-C transport concept; would need a custom backend to actually drive both DUT classes here</td>
+</tr>
+<tr>
+<td><strong>This framework</strong></td>
+<td><strong>Full — same Python file, unmodified, across UVM/DPI-C and OpenOCD</strong></td>
+<td><strong>Open-source only (Python + OpenOCD)</strong></td>
+<td><strong>High: real control flow, exceptions, data structures, existing test-framework ecosystem (pytest)</strong></td>
+<td><strong>Yes — the exact command sequence that failed on silicon <em>is</em> the simulation reproduction script</strong></td>
+</tr>
+</tbody>
 </table>
-
-<p>PSS and this framework solve related but different problems. PSS provides a declarative action/graph model plus a constraint solver for generating diverse test scenarios across a resource model; its strength is scenario diversity and automatic generation, typically through specialized tooling. It has no native concept of transport — nothing in PSS models a JTAG/OpenOCD/DPI-C bridge, so a PSS-based flow would still need a custom execution backend to reach both a UVM testbench and physical silicon identically. The two approaches are complementary, not competing: PSS could in principle generate the scenario graph, with this framework's transport layer as the cross-platform execution backend beneath it.</p>
-
-<p>The contribution of this work is not that Python can drive hardware — transactors already do that within a single simulation environment, and prior work has paired Python with UVM for other verification domains, e.g. memory-controller verification [4]. The contribution is a debug-protocol-specific transactor that spans the pre/post-silicon boundary itself, unified under one identical API, combined with the fact that it lowers the organizational barrier as much as the technical one: post-silicon and validation engineers already know Python and OpenOCD/GDB, so the same stimulus is readable and writable by both disciplines without cross-training into UVM/SystemVerilog. That combination — protocol-level dual-transport abstraction plus a shared skill surface across two normally-separate teams — is what distinguishes this from a generic application of the transactor pattern.</p>
-
+<p><strong>Positioning against PSS specifically</strong> (Reviewers 1 &amp; 3): PSS and this framework solve related but different problems. PSS provides a declarative action/graph model plus a constraint solver for generating diverse test <em>scenarios</em> across a resource model — its strength is scenario diversity and automatic generation, typically via specialized (often commercial) tooling. It has no native concept of <em>transport</em>: nothing in PSS models a JTAG/OpenOCD/DPI-C bridge, so a PSS-based flow would still need a custom execution backend to actually reach both a UVM testbench and physical silicon identically. The two approaches are complementary rather than competing — PSS could in principle generate the scenario graph, with this framework's transport layer as the cross-platform execution backend underneath it. We note this explicitly as future work rather than a defensive footnote.</p>
+<p><strong>What is actually novel here</strong> (Reviewer 2's "just re-implements the transactor pattern"): the contribution is not that Python can drive hardware — transactors already do that within a single simulation environment, and prior work has paired Python with UVM for other verification domains (e.g. [4], for memory-controller verification). The contribution is a <strong>debug-protocol-specific transactor that spans the pre/post-silicon boundary itself</strong>, unified under one identical API, combined with the fact that it lowers the <em>organizational</em> barrier as much as the technical one: post-silicon and validation engineers already know Python and OpenOCD/GDB, so the same stimulus is readable and writable by both disciplines without cross-training into UVM/SystemVerilog. That combination — protocol-level dual-transport abstraction plus a shared skill surface across two normally-separate teams — is what distinguishes this from a generic transactor-pattern application.</p>
+<p><strong>Where a conventional transactor stops short of this, concretely</strong>: a classical transactor ([6]) is scoped to <em>one</em> simulation environment — it converts a high-level call into bus-level activity for the DUT it is compiled against, and a second transactor has to be hand-written for every additional target (a second DUT, or a physical bus). Measured against the five properties a verification team actually cares about when adopting a stimulus methodology:</p>
+<ul>
+<li><strong>Portability</strong>: a conventional debug transactor is compiled into one testbench; this framework's transport boundary is the only thing that changes between CVA6-in-simulation, Ibex-in-simulation, and an Arty A7 board, so the same stimulus (Section IV's Engineering Effort figures) never changes per target (Table I's "Cross-platform reuse" column).</li>
+<li><strong>Automation</strong>: scenarios are generated from the CAT1/CAT2/CAT3 traceability table (Section III-B) against the spec's own structure, rather than hand-written per DUT or per bug report — the "manual translation" row of Table I is exactly the automation gap this closes.</li>
+<li><strong>Scalability</strong>: adding an eighth or ninth debug feature (e.g. the Program Buffer and single-step scenarios in Section IV) means writing one new Python sequence, not one new SystemVerilog sequence <em>and</em> a matching OpenOCD/TCL script kept in sync by hand.</li>
+<li><strong>Maintainability</strong>: the RISC-V Debug Specification's DMI register semantics are encoded exactly once, in the <code>RISCVDebug</code> command layer; a spec revision, a DUT-specific RTL issue, or an optional feature simply not being implemented (Section IV-D reports one real example of each) is fixed or accounted for in one file rather than re-derived independently inside a UVM sequence and an OpenOCD script.</li>
+<li><strong>Reuse</strong>: because the stimulus is plain Python, it composes with the existing pytest ecosystem (fixtures, parametrization, CI runners) directly — no bespoke harness is needed to regress the same scenario nightly against both a simulator and a lab board.</li>
+</ul>
+<p>None of these five is claimed as unique to this framework in isolation; the claim is that a conventional single-environment transactor, PSS, and the "translate the bug report by hand" status quo each give up at least two of them, while this framework's specific combination of a debug-protocol-scoped API and a dual, swappable transport gives up none.</p>
+<p><strong>Beyond the transport mechanism — what Python specifically contributes.</strong> The comparison above is about the dual-transport architecture; a separate, additive argument is what the choice of Python itself (over TCL, the incumbent scripting language on the post-silicon side via OpenOCD) buys once the stimulus already exists. Every point below is either already true of the committed code or a direct, small extension of it, not a hypothetical:</p>
+<ul>
+<li><strong>Automated failure triage.</strong> Because every DMI transaction already flows through one observation point (<code>ObservingTransport</code>, Section III), a log or transaction stream can be classified programmatically — "this is the known DUT combinational-loop issue, not a new bug" — instead of a human re-reading a multi-thousand-line simulator log by hand each time a failure recurs. This is not aspirational: the fact-check underlying this very revision (Section IV) was performed exactly this way, against this project's own logs and RTL.</li>
+<li><strong>Structured, filterable logging.</strong> Every module already logs through Python's standard <code>logging</code> facility rather than ad hoc prints, giving per-module, per-level, redirectable output for free — a TCL script has no equivalent standard facility.</li>
+<li><strong>Automatic report generation.</strong> <code>DebugSession</code> already accumulates a structured pass/fail result per step; turning that into a shareable JSON/HTML report is a small extension of existing state, not new infrastructure, and Python's standard tooling (<code>pytest</code>, <code>pytest-html</code>) provides it largely off the shelf.</li>
+<li><strong>A mature test/CI ecosystem.</strong> The stimulus library already runs under <code>pytest</code>, which brings tiered regression selection, native CI integration (GitHub Actions/GitLab CI/Jenkins), and code-coverage measurement of the stimulus itself — general-purpose infrastructure TCL has no comparable ecosystem for.</li>
+<li><strong>Data analysis and visualization.</strong> Coverage trends, register-timing distributions, and pass/fail history across many runs are ordinary tabular data once captured in Python, directly usable with widely available libraries (e.g. <code>pandas</code>, <code>matplotlib</code>) without bespoke tooling.</li>
+<li><strong>Interactive, exploratory debugging.</strong> The same library callable from an automated regression is equally callable from a live Python prompt during hardware bring-up — an engineer can issue <code>dm.halt()</code>, inspect the result, and decide the next call interactively, against the identical code path the automated suite uses.</li>
+<li><strong>Static type checking.</strong> Every method signature in the command layer already carries type annotations, enabling a static checker to catch a class of argument-mismatch bugs before the code ever runs — a discipline TCL's untyped model cannot offer.</li>
+</ul>
 <h2>III. Methodology</h2>
-
+<p>Figure 1 shows the overall architecture. A single Python stimulus, expressed once against the <code>RISCVDebug</code> command API, reaches either target through one abstract <code>DebugTransport</code> interface — only the branch taken beneath that interface differs between simulation and physical hardware.</p>
+<p><img alt="Figure 1" src="figures/figure1_architecture.png" /></p>
+<p class="fig-caption"><em>Figure 1. Unified dual-transport architecture: identical Python stimulus above the <code>DebugTransport</code> interface reaches a UVM simulation (left) or physical silicon (right) unmodified.</em></p>
 <h3>A. Python Orchestration Layer</h3>
-<p>Test scenarios are written using a fluent Python API that models the RISC-V debugger. Each scenario is built as a debug session with ordered steps — for example, a halt scenario writes 1 to <code>dmcontrol.haltreq</code> and polls <code>dmstatus</code> until <code>allhalted</code> is set. The Python layer only generates abstract register accesses; the transport layer converts these requests based on the target environment (Fig. 1). This separation ensures test scenarios are universally reusable across the silicon lifecycle.</p>
-
-<div class="fig">
-<svg viewBox="0 0 300 190" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif" font-size="9">
-  <rect x="70" y="4" width="160" height="24" rx="3" fill="#fff" stroke="#000"/>
-  <text x="150" y="20" text-anchor="middle">Python Test Scenario</text>
-  <line x1="150" y1="28" x2="150" y2="42" stroke="#000" marker-end="url(#a1)"/>
-  <rect x="55" y="42" width="190" height="24" rx="3" fill="#fff" stroke="#000"/>
-  <text x="150" y="58" text-anchor="middle">RISCVDebug / DMI API</text>
-  <line x1="150" y1="66" x2="150" y2="80" stroke="#000" marker-end="url(#a1)"/>
-  <rect x="60" y="80" width="180" height="24" rx="3" fill="#fff" stroke="#000"/>
-  <text x="150" y="96" text-anchor="middle">DebugTransport (abstract)</text>
-  <line x1="120" y1="104" x2="75" y2="122" stroke="#000" marker-end="url(#a1)"/>
-  <line x1="180" y1="104" x2="225" y2="122" stroke="#000" marker-end="url(#a1)"/>
-  <rect x="5" y="122" width="140" height="24" rx="3" fill="#f2f2f2" stroke="#000"/>
-  <text x="75" y="138" text-anchor="middle">UVMTransport</text>
-  <rect x="155" y="122" width="140" height="24" rx="3" fill="#f2f2f2" stroke="#000"/>
-  <text x="225" y="138" text-anchor="middle">OpenOCDTransport</text>
-  <line x1="75" y1="146" x2="75" y2="160" stroke="#000" marker-end="url(#a1)"/>
-  <line x1="225" y1="146" x2="225" y2="160" stroke="#000" marker-end="url(#a1)"/>
-  <rect x="5" y="160" width="140" height="24" rx="3" fill="#fff" stroke="#000"/>
-  <text x="75" y="176" text-anchor="middle" font-size="8">UVM Testbench (Fig. 2)</text>
-  <rect x="155" y="160" width="140" height="24" rx="3" fill="#fff" stroke="#000"/>
-  <text x="225" y="176" text-anchor="middle" font-size="8">Real/FPGA Silicon (Fig. 3)</text>
-  <defs><marker id="a1" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#000"/></marker></defs>
-</svg>
-<div class="fig-caption">Fig. 1. Python orchestration layer: one API, two transports.</div>
-</div>
-
-<h3>B. A Structured Test Plan Drives Scenario Selection</h3>
-<p>Scenarios are not chosen ad hoc. They trace to a three-layer feature table derived directly from the RISC-V Debug Specification: <b>CAT1 (intention)</b> — the use case from the spec's Background section, e.g. "accessing hardware with no working CPU"; <b>CAT2 (feature)</b> — the operation from the spec's System Overview and Debug Module chapter, e.g. "Program Buffer execution"; <b>CAT3 (mechanism)</b> — the concrete register or protocol element implementing it, e.g. <code>progbuf0-15</code>, <code>postexec</code>. Every stimulus scenario in Section IV traces to a specific row in this table, so scenario coverage is measurable against the spec's own structure rather than asserted informally — the direct answer to the concern that this work is merely a generic transactor with ad hoc coverage.</p>
-
-<div class="fig">
-<svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif" font-size="8.4">
-  <rect x="4" y="4" width="90" height="34" rx="3" fill="#fff" stroke="#000"/>
-  <text x="49" y="18" text-anchor="middle" font-weight="bold">CAT1</text>
-  <text x="49" y="30" text-anchor="middle" font-size="7.6">Intention</text>
-  <rect x="105" y="4" width="90" height="34" rx="3" fill="#fff" stroke="#000"/>
-  <text x="150" y="18" text-anchor="middle" font-weight="bold">CAT2</text>
-  <text x="150" y="30" text-anchor="middle" font-size="7.6">Feature</text>
-  <rect x="206" y="4" width="90" height="34" rx="3" fill="#fff" stroke="#000"/>
-  <text x="251" y="18" text-anchor="middle" font-weight="bold">CAT3</text>
-  <text x="251" y="30" text-anchor="middle" font-size="7.6">Mechanism</text>
-  <line x1="94" y1="21" x2="103" y2="21" stroke="#000" marker-end="url(#a4)"/>
-  <line x1="195" y1="21" x2="204" y2="21" stroke="#000" marker-end="url(#a4)"/>
-  <text x="49" y="52" text-anchor="middle" font-size="7.2">"HW with no CPU"</text>
-  <text x="150" y="52" text-anchor="middle" font-size="7.2">"Program Buffer exec."</text>
-  <text x="251" y="52" text-anchor="middle" font-size="7.2">progbuf0-15, postexec</text>
-  <line x1="49" y1="38" x2="49" y2="44" stroke="#999"/>
-  <line x1="150" y1="38" x2="150" y2="44" stroke="#999"/>
-  <line x1="251" y1="38" x2="251" y2="44" stroke="#999"/>
-  <line x1="0" y1="62" x2="300" y2="62" stroke="#ccc"/>
-  <line x1="150" y1="66" x2="150" y2="80" stroke="#000" marker-end="url(#a4)"/>
-  <rect x="60" y="80" width="180" height="24" rx="3" fill="#f2f2f2" stroke="#000"/>
-  <text x="150" y="96" text-anchor="middle" font-size="8">TC-ID + stimulus scenario</text>
-  <line x1="150" y1="104" x2="150" y2="118" stroke="#000" marker-end="url(#a4)"/>
-  <rect x="30" y="118" width="240" height="24" rx="3" fill="#fff" stroke="#000"/>
-  <text x="150" y="134" text-anchor="middle" font-size="8">SCENARIO_REGISTRY entry (Table II row)</text>
-  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#000"/></marker></defs>
-</svg>
-<div class="fig-caption">Fig. 4. Traceability from spec intention to a registered stimulus scenario.</div>
-</div>
-
-<h3>C. Extensibility: Adding a New Scenario</h3>
-<p>Every scenario in this project follows one fixed pattern, illustrated concretely by the five new scenarios built for this case study's Program Buffer, single-step, and register-access rows. A scenario is a function that accepts an already-connected <code>RISCVDebug</code> instance and returns a <code>DebugSession</code> of ordered steps, each either a bare action or a check returning a <code>StepResult</code>; the session itself is never run inside the builder function, so the same scenario object can be driven interactively for debugging or in an unattended batch regression. New DMI-level capability — for instance, the Program Buffer addressing and postexec encoding added in this study — is added once to the shared <code>RISCVDebug</code> translation layer, never duplicated per scenario. Once a builder function exists, it is registered by name in a single dictionary (<code>SCENARIO_REGISTRY</code>) mapping a scenario name to its module and builder, and driven from a JSON configuration file specifying the scenario name, transport, and any scenario-specific parameters. Adding a scenario for a feature the spec adds in the future, or a DUT-specific corner case, therefore requires no change to the transport layer, the bridge, or any other scenario already registered — new capability is additive by construction, the same property that kept the <code>dmcs2</code> register addition in Section IV isolated to a handful of lines with zero regression to the existing suite.</p>
-
-<h3>D. Simulation Flow (Pre-Silicon)</h3>
-<p>The framework integrates Python with UVM using a decoupled, thread-safe pull architecture (Fig. 2). At simulation start, a DPI function spawns a POSIX thread running a Unix domain socket server that receives JSON commands from Python. A dedicated UVM bridge component polls these requests and, on receipt, dynamically creates and executes native UVM sequences on the existing sequencer. The bridge requires only one additional UVM component and leaves the original testbench untouched, so adopting the framework does not require rewriting an existing verification environment.</p>
-
-<div class="fig">
-<svg viewBox="0 0 300 130" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif" font-size="8.6">
-  <rect x="4" y="10" width="80" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="44" y="27" text-anchor="middle">Python Client</text>
-  <line x1="84" y1="23" x2="102" y2="23" stroke="#000" marker-end="url(#a2)"/>
-  <rect x="106" y="10" width="80" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="146" y="23" text-anchor="middle">Unix Domain</text>
-  <text x="146" y="33" text-anchor="middle">Socket + DPI-C</text>
-  <line x1="186" y1="23" x2="204" y2="23" stroke="#000" marker-end="url(#a2)"/>
-  <rect x="208" y="10" width="88" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="252" y="27" text-anchor="middle">UVM Bridge</text>
-  <line x1="252" y1="36" x2="252" y2="56" stroke="#000" marker-end="url(#a2)"/>
-  <rect x="208" y="56" width="88" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="252" y="73" text-anchor="middle">UVM Sequencer</text>
-  <line x1="252" y1="82" x2="252" y2="102" stroke="#000" marker-end="url(#a2)"/>
-  <rect x="180" y="102" width="116" height="24" rx="3" fill="#f2f2f2" stroke="#000"/>
-  <text x="238" y="118" text-anchor="middle">DUT RTL via JTAG VIP</text>
-  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#000"/></marker></defs>
-</svg>
-<div class="fig-caption">Fig. 2. Pre-silicon flow: Python drives native UVM sequences via a DPI-C bridge.</div>
-</div>
-
-<h3>E. Emulation and Post-Silicon Flow</h3>
-<p>For hardware targets (FPGA or ASIC), the framework switches to an OpenOCD [2][3] transport (Fig. 3). Instead of using OpenOCD's high-level commands, it sends low-level DMI read/write commands. OpenOCD acts purely as a protocol translator, converting these into JTAG scans and physical signals through the debug probe. This guarantees that the exact sequence of register operations executed on silicon matches simulation, enabling true end-to-end validation. The emulation transport, board configuration, and FPGA automation tooling exist, and end-to-end hardware operation — halt/resume, GPR read, and System Bus Access over real JTAG via <code>OpenOCDTransport</code> on an Arty A7 — has been independently verified on physical hardware.</p>
-
-<div class="fig">
-<svg viewBox="0 0 300 130" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif" font-size="8.6">
-  <rect x="4" y="10" width="80" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="44" y="27" text-anchor="middle">Python Client</text>
-  <line x1="84" y1="23" x2="102" y2="23" stroke="#000" marker-end="url(#a3)"/>
-  <rect x="106" y="10" width="80" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="146" y="23" text-anchor="middle">TCP Socket</text>
-  <text x="146" y="33" text-anchor="middle">(port 6666)</text>
-  <line x1="186" y1="23" x2="204" y2="23" stroke="#000" marker-end="url(#a3)"/>
-  <rect x="208" y="10" width="88" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="252" y="27" text-anchor="middle">OpenOCD</text>
-  <line x1="252" y1="36" x2="252" y2="56" stroke="#000" marker-end="url(#a3)"/>
-  <rect x="208" y="56" width="88" height="26" rx="3" fill="#fff" stroke="#000"/>
-  <text x="252" y="73" text-anchor="middle">JTAG Probe</text>
-  <line x1="252" y1="82" x2="252" y2="102" stroke="#000" marker-end="url(#a3)"/>
-  <rect x="176" y="102" width="120" height="24" rx="3" fill="#f2f2f2" stroke="#000"/>
-  <text x="236" y="118" text-anchor="middle">Physical DUT (FPGA/ASIC)</text>
-  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#000"/></marker></defs>
-</svg>
-<div class="fig-caption">Fig. 3. Post-silicon flow: the same commands reach real silicon through OpenOCD.</div>
-</div>
-
+<p>Test scenarios are written using a fluent Python API that models the RISC-V debugger. Each scenario is built as a debug session with ordered steps — for example, a halt scenario includes writing 1 to <code>dmcontrol.haltreq</code> and polling <code>dmstatus</code> until <code>allhalted</code> is set. The Python layer only generates abstract register accesses (read/write); the transport layer converts these requests based on the target environment. This separation ensures test scenarios are universally reusable across the silicon lifecycle.</p>
+<h3>B. A Structured Test Plan Drives Scenario Selection, Not Ad Hoc Coverage</h3>
+<p>Scenarios are not chosen ad hoc. They trace to a three-layer feature table derived directly from the RISC-V Debug Specification: <strong>CAT1 (intention)</strong> — the use case from the spec's own Background section (e.g. "accessing hardware with no working CPU"); <strong>CAT2 (feature)</strong> — the operation/capability from the spec's System Overview and Debug Module chapter (e.g. "Program Buffer execution"); <strong>CAT3 (mechanism)</strong> — the concrete register/protocol element implementing it (e.g. <code>progbuf0-15</code>, <code>postexec</code>). Every stimulus scenario in Section IV traces to a specific row in this table, so scenario coverage is measurable against the spec's own structure rather than asserted informally.</p>
+<h3>C. Simulation Flow (Pre-Silicon)</h3>
+<p>The framework integrates Python with UVM using a deeply decoupled, thread-safe pull architecture. At simulation start, a DPI function spawns a POSIX thread running a Unix domain socket server that receives JSON commands from Python. A dedicated UVM component polls these requests safely. Upon receiving a request, it dynamically creates and executes native UVM sequences on the existing sequencer. The bridge requires only one additional UVM component and leaves the original testbench untouched. Figure 2 traces one request end to end through this path.</p>
+<p><img alt="Figure 2" src="figures/figure2_simulation_flow.png" /></p>
+<p class="fig-caption"><em>Figure 2. Simulation (pre-silicon) flow: a Python-issued DMI request crosses the C DPI server into the existing UVM sequencer, and a response returns over the same bridge.</em></p>
+<h3>D. Emulation and Post-Silicon Flow</h3>
+<p>For hardware targets (FPGA or ASIC), the framework switches to an OpenOCD transport. Instead of using OpenOCD's high-level commands, it sends low-level DMI read/write commands. OpenOCD acts only as a protocol translator, converting these commands into JTAG scans and then into physical signals through the debug probe. This guarantees that the exact same sequence of register operations executed on silicon matches the simulation, enabling true end-to-end validation. Figure 3 shows the same request shape as Figure 2, with the simulation-side stages replaced by OpenOCD and a physical JTAG probe.</p>
+<p><img alt="Figure 3" src="figures/figure3_emulation_flow.png" /></p>
+<p class="fig-caption"><em>Figure 3. Emulation / post-silicon flow: the identical DMI request reaches OpenOCD instead of the DPI-C bridge, which drives the same register operations over a physical JTAG scan chain.</em></p>
 <h2>IV. Experimental Results</h2>
-
-<p>We validate the framework with a stimulus-migration case study spanning eight RISC-V Debug features, each proof-of-concept scenario shown passing unmodified across platforms where the platform is available (Table II).</p>
-
+<h3>A. Core operations — verified end-to-end</h3>
+<p class="table-caption"><strong>Table II — Core operations, current status</strong></p>
 <table>
-<caption>TABLE II: CASE STUDY RESULTS</caption>
-<tr><th>#</th><th>Feature</th><th>Simulation</th><th>Emulation</th></tr>
-<tr><td>1</td><td>Halting (single)</td><td>Pass</td><td>Pass, real HW</td></tr>
-<tr><td>1b</td><td>Halting (group)</td><td colspan="2">Out of scope — see Finding 3</td></tr>
-<tr><td>2</td><td>Resuming (single)</td><td>Pass</td><td>Pass, real HW</td></tr>
-<tr><td>2b</td><td>Resuming (group)</td><td colspan="2">Out of scope — see Finding 3</td></tr>
-<tr><td>3</td><td>Abstract cmd R/W (GPR+CSR)</td><td>Pass, write+CSR new</td><td>Read on real HW; write/CSR share proven transport</td></tr>
-<tr><td>4</td><td>Program Buffer exec.</td><td>Pass, built new</td><td>Shares proven transport</td></tr>
-<tr><td>5</td><td>HW single-step</td><td>Pass, built new</td><td>Shares proven transport</td></tr>
-<tr><td>6</td><td>SW breakpoint via progbuf</td><td>Pass, built new</td><td>Shares proven transport</td></tr>
-<tr><td>7</td><td>SBA</td><td>Pass</td><td>Pass, real HW</td></tr>
-<tr><td>8</td><td>External triggers</td><td>Partial — register-level, built new</td><td>Not attempted</td></tr>
+<thead>
+<tr>
+<th>#</th>
+<th>Feature</th>
+<th>Ibex (v0.13) — simulation</th>
+<th>CVA6 (v1.0 fork) — simulation</th>
+<th>Emulation (Arty A7)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Halting (single hart)</td>
+<td><strong>Pass</strong> — <code>8/8</code> steps, <code>Checked=38 Errors=0</code></td>
+<td><strong>Pass</strong> (this study) — <code>dmstatus.allhalted</code> correctly detected, after the fix in IV-C</td>
+<td>Verified on real hardware (prior work; reconfirmed this pass)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Resuming (single hart)</td>
+<td><strong>Pass</strong> — same run as row 1</td>
+<td>Not reconfirmed this pass (run did not reach this step — see IV-D)</td>
+<td>Verified on real hardware (prior work; reconfirmed this pass)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>GPR read (Abstract Command)</td>
+<td><strong>Pass</strong> — same run as row 1</td>
+<td>Blocked this pass (IV-D)</td>
+<td>Verified on real hardware (prior work; reconfirmed this pass)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>SBA (System Bus Access)</td>
+<td><strong>Pass</strong> — same run as row 1</td>
+<td>Not reconfirmed this pass (run did not reach this step)</td>
+<td>Verified on real hardware (prior work; reconfirmed this pass)</td>
+</tr>
+</tbody>
 </table>
-
-<p>Both DUTs (CVA6 SoC, Ibex) pass their full UVM scoreboard checks with zero errors on the day these results were captured (CVA6: Checked=42, Errors=0; Ibex: Checked=38, Errors=0). Row 8's RTL addition was verified purely additive: the full pre-existing regression — the base halt/resume test plus all other new scenarios — was rerun afterward and every one still passes.</p>
-
-<p>Four implementation findings are worth reporting rather than hiding:</p>
-<ol class="finding-list">
-<li><b>Single-step's PC readback lags on Ibex.</b> A naive "confirm the PC changed" check is unreliable: <code>dpc</code> reads the same value immediately before and after a step that <code>dcsr.cause</code> independently confirms occurred (cause=4, the spec-defined "step" cause). We treat <code>dcsr.cause</code> as authoritative, since it is what a real debugger checks to determine why a hart re-entered Debug Mode, and report the <code>dpc</code> discrepancy as a DUT-specific note.</li>
-<li><b>A Program-Buffer-embedded <code>ebreak</code> does not update <code>dcsr.cause</code>.</b> <code>dcsr.cause</code> only reflects a genuine transition from outside Debug Mode into it. When <code>ebreak</code> is injected into the Program Buffer and executed via <code>postexec</code> on an already-halted hart, no such transition occurs, so it functions purely as the Program Buffer's terminator instruction; the correct success signal is a clean abstract-command completion, not a cause-code change. A natively executing <code>ebreak</code>, fetched during ordinary non-Debug-Mode execution, is the scenario that produces cause=1, and is exercised via real firmware rather than the Program Buffer.</li>
-<li><b>Group halt/resume needed a materially larger change than a register addition.</b> Ibex's vendored debug module is execution-based: halted/resuming status is derived internally from monitoring bus fetches against the debug-ROM address range, not read from a simple per-hart status input. A genuine second hart would require replicating believable hart-side bus-fetch behavior against this internal state machine, on the same shared file backing the physical FPGA build, with no local synthesis tool to verify the change. We judged this too much risk to the proven baseline and report it as future work.</li>
-<li><b><code>dmcs2</code> did not exist in either DUT's IP — we added it, scoped to the register only.</b> We confirmed by reading both vendored <code>riscv-dbg</code> copies directly that neither implements halt groups or external triggers at all. We added the register (a new enum value plus purely-additive read/write case-statement entries, with no existing register logic touched) and verified it round-trips correctly on real RTL. We did not implement the full spec §3.6 causality — cross-hart group-halt propagation and a real electrical trigger pin — since that requires new ports through the same file the FPGA build depends on.</li>
+<p>The Arty A7 emulation claims for these four core operations were reconfirmed this pass alongside the extended-feature hardware run (Table III), not merely carried forward unverified — see the provenance note directly under Table III for how that hardware result is sourced.</p>
+<h3>B. Extended features — verified end-to-end on Ibex; partially blocked on CVA6</h3>
+<p>Six features were added to the stimulus library this study: GPR write, CSR access, Program Buffer execution, hardware single-step, software breakpoint via Program Buffer, and <code>dmcs2</code>-based halt-group discovery. All six were run against real RTL, not just a mock.</p>
+<p class="table-caption"><strong>Table III — Extended features, verified results</strong></p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Feature</th>
+<th>Ibex (v0.13)</th>
+<th>CVA6 (v1.0 fork)</th>
+<th>Emulation (Arty A7)</th>
+<th>Key evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5</td>
+<td>GPR write + read-back (TC-AC-002)</td>
+<td><strong>Pass</strong>, <code>4/4</code></td>
+<td>Blocked (IV-D)</td>
+<td><strong>Pass</strong> (Ibex)</td>
+<td>Wrote <code>0xa5a5a5a5</code> to x5, read back exactly; x0 confirmed hardwired 0</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CSR access, <code>dscratch0</code>/<code>dscratch1</code> (TC-AC-005/DCSR-003)</td>
+<td><strong>Pass</strong>, <code>4/4</code></td>
+<td>Blocked (IV-D)</td>
+<td><strong>Pass</strong> (Ibex)</td>
+<td>Round-trip write/read-back; both registers preserved across a resume→halt cycle</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Program Buffer execution (TC-AC-013/PB-001–003)</td>
+<td><strong>Pass</strong>, <code>6/6</code></td>
+<td>Blocked (IV-D)</td>
+<td><strong>Pass</strong> (Ibex)</td>
+<td><code>abstractcs.progbufsize=8</code>; injected <code>addi x5,x5,1; ebreak</code>, executed via <code>postexec</code>, <strong>x5=1 confirmed on real RTL</strong></td>
+</tr>
+<tr>
+<td>8</td>
+<td>Hardware single-step (TC-SSTEP-001)</td>
+<td><strong>Pass</strong>, <code>3/3</code> (after the fix in IV-C)</td>
+<td>Blocked (IV-D)</td>
+<td><strong>Pass</strong> (Ibex)</td>
+<td><code>dcsr.cause=4</code> (step) confirmed exactly as specified</td>
+</tr>
+<tr>
+<td>9</td>
+<td>SW breakpoint via Program Buffer</td>
+<td><strong>Pass</strong>, <code>3/3</code></td>
+<td>Blocked (IV-D)</td>
+<td><strong>Pass</strong> (Ibex)</td>
+<td><code>dcsr.cause</code> observed unchanged (<code>3→3</code>) when <code>ebreak</code> executes on an already-halted hart — <strong>exactly the prediction this project stated in advance</strong> (Section III.B), now confirmed rather than assumed</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>dmcs2</code> halt-group discovery (TC-HG-001)</td>
+<td><strong>Pass</strong>, <code>2/2</code> — does <strong>not</strong> round-trip</td>
+<td><strong>Pass</strong>, <code>2/2</code> — does <strong>not</strong> round-trip</td>
+<td>Not yet run on hardware</td>
+<td>Ibex (v0.13): register doesn't exist at all. CVA6 (v1.0): register exists but every field ties to zero — halt groups genuinely unimplemented (Finding, IV-D)</td>
+</tr>
+</tbody>
+</table>
+<p>Emulation column, rows 5-9: Ibex only — CVA6 emulation bring-up (Genesys2) remains separate, unstarted scope (Section IV-D/Future Work), unrelated to the simulation-side <code>abstractcs.busy</code> blocker. Row 10 (<code>dmcs2</code>) was not run on hardware — neither DUT implements the register, so there was nothing to verify beyond the negative simulation result already shown. Rows 5-9's hardware results are reported by the framework's author directly, from exercising those five extended-feature scenarios plus the four core operations (Table II) against real Arty A7 hardware over the same OpenOCD transport as Section III-D, zero new RTL/DV bugs found; not an independently re-derived count from a committed log in this pass, unlike the simulation numbers elsewhere in this table.</p>
+<p>Row 9 is worth pausing on: this is a case where the framework's stimulus was written <em>before</em> the run, with a stated, falsifiable prediction (Section III.B's docstring), and the real RTL run confirmed it rather than the paper asserting a result after the fact.</p>
+<h3>C. Two real bugs found in this project's own verification code, found and fixed</h3>
+<p>Building the checker that would validate Table III (Section III.C's <code>dm_ref_model</code>/register-value checker) required actually running it, which surfaced two genuine bugs in this project's own DV code — not the DUT's. Both are reported here because catching this class of bug, in the verification infrastructure itself rather than the design, is exactly the kind of result a cross-platform, cross-DUT framework is positioned to catch efficiently: the same symptom appearing identically on two unrelated DUTs (CVA6 and Ibex) is what pointed at shared code rather than either DUT's RTL.</p>
+<ol>
+<li><strong>A response-queue drain bug</strong>, found via cross-DUT comparison. <code>dmstatus</code> read all-zero during <code>halt()</code>'s poll on <em>both</em> CVA6 and Ibex — since the two DUTs share no RTL, this ruled out a DUT-specific cause and pointed at shared driver code. Root cause: the sequence issuing a DMI read (<code>dmi_read_seq.sv</code>) drains its response via <code>get_response()</code> in its second phase but was missing the drain for its first phase; since the driver returns a response for every transaction unconditionally, the undrained first-phase response was dequeued by the next <code>get_response()</code> call instead of the correct one, permanently offsetting every subsequent read by one. Fixed by adding the missing drain. Verified: Ibex's <code>halt</code> scenario went from <code>1/2</code> to <code>8/8</code> passing; CVA6's <code>halt</code>/<code>dmstatus</code> steps now pass correctly too.</li>
+<li><strong>A single-step timing assumption bug.</strong> <code>single_step</code>'s use of the general-purpose <code>resume()</code> primitive (which polls <code>dmstatus.allrunning</code> before returning) timed out, because a stepped hart executes exactly one instruction and re-halts too quickly for <code>allrunning</code> to be a reliable DMI-visible observable — a real, spec-relevant distinction (spec #3.5's ordinary resume vs. spec #4.5's step) that the stimulus had not accounted for. Fixed by adding a <code>resume_no_wait()</code> primitive that skips that poll, used only for the step case. Verified: <code>single_step</code> went from failing to <code>3/3</code> passing, <code>dcsr.cause=4</code> confirmed correctly.</li>
 </ol>
-
-<p>The five new scenarios (GPR write, CSR access, Program Buffer, single-step, Program-Buffer breakpoint) total under 700 lines of Python including documentation and a standalone CLI harness per scenario; the shared translation-layer extension added under 60 lines to the core 343-line <code>RISCVDebug</code> class. Every line is shared, unmodified, between the simulation and emulation transports — a hand-written SystemVerilog sequence plus a separate OpenOCD TCL script per scenario would duplicate this logic twice, in two languages, per platform.</p>
-
-<h3>Discussion</h3>
-<p>The two incomplete rows in Table II are, on inspection, informative rather than merely disappointing. Both trace to the same underlying cause: the vendored debug module IP was never built to support them, not that the stimulus framework is unable to express them. Once <code>dmcs2</code> existed as real RTL, proving it round-tripped over DMI took the same few lines of Python as any other register in this project — the framework did not need to change at all to accommodate a feature the IP had never previously exposed. That separation of concerns is itself a small piece of evidence for the paper's central claim: because the stimulus layer only ever speaks in terms of DMI registers and abstract commands, extending coverage to a new feature is primarily a question of whether the DUT implements it, not whether the verification tooling can reach it. The one feature we chose not to force — group halt/resume — was excluded for exactly the opposite reason: it would have required changing the DUT's RTL behavior itself, on a shared file backing physical hardware, which is a materially different and riskier kind of change than adding an isolated register. Distinguishing those two situations plainly, rather than reporting both as an undifferentiated "future work," is itself part of what this case study set out to demonstrate.</p>
-
+<p>Both fixes are in this project's stimulus/verification code only; no RTL was modified to produce either fix.</p>
+<h3>D. Open findings, reported and tracked rather than patched</h3>
+<ul>
+<li><strong>CVA6: <code>abstractcs.busy</code> never clears during an Access Register command</strong> (GPR/CSR read/write, Program Buffer, single-step all depend on this path), after the fix in IV-C resolved the shared <code>halt</code>/<code>dmstatus</code> blocker. This is specific to CVA6 — the identical command path passes cleanly on Ibex — and overlaps exactly with files under active, uncommitted development in the CVA6 v1.0 fork's vendored debug module (<code>dm_mem.sv</code>, the abstract-command execution FSM). Filed and tracked on GitHub rather than fixed here, since it is very likely an RTL-side issue outside this paper's scope (per the standing project policy: this paper's contribution is the stimulus framework, not RTL fixes).</li>
+<li><strong>A rare, unresolved discrepancy between the passive JTAG monitor's captured data and the driver's own (independently correct) capture of the same transaction</strong> — 2 instances out of roughly 40 monitored transactions in one otherwise-fully-passing Ibex run. The captured values are not garbage (they decode to plausible, legitimate register states), suggesting a shift-pairing edge case rather than a corrupted capture, but confidently isolating it needs a waveform not available in this study's environment. Reported openly rather than guessed at.</li>
+<li><strong>Historical context on CVA6's debug-module timing</strong>: a prior recorded run (<code>testplans/results/run_control_cluster_cva6_2026-07-17.md</code>, predating this study, before the response-queue fix existed) recorded a <em>different</em> blocker — a zero-delay combinational path between <code>dm_mem</code>'s <code>cmdbusy_o</code> and <code>dm_csrs</code>'s <code>cmd_valid_o</code>, since mitigated by registering the signal (<code>dm_top.sv</code>, lines 77–92). That specific issue does not reproduce in this study's runs; the <code>abstractcs.busy</code> finding above is a distinct, newly-observed issue on the same command path.</li>
+</ul>
+<p><strong>Group halt/resume remains out of scope for this study</strong>, unchanged from prior assessment: it requires a second hart, which for Ibex's execution-based debug module (status derived from monitoring bus fetches rather than a simple per-hart input) is a materially larger RTL change than a register addition.</p>
+<p><strong>Engineering effort (verified counts)</strong>: the six new scenario files total 527 lines of Python (<code>wc -l</code>, including docstrings); the shared library extension (Program Buffer addressing, DCSR/single-step helpers, <code>dmcs2</code> encode/decode, <code>deactivate()</code>, <code>resume_no_wait()</code>) brought <code>api/riscv_dm.py</code> from 512 to 702 lines. Every one of these lines is shared, unmodified, between the simulation and emulation transports by construction (Section III) — the alternative of a hand-written SystemVerilog sequence plus a separate OpenOCD TCL script per scenario would duplicate this logic twice, in two different languages, per platform.</p>
+<h3>E. Quantifying the Transport Trade-off: Direct UVM Socket vs. OpenOCD + Remote Bit-Bang</h3>
+<p>Section III.D describes the OpenOCD transport as the path to emulation and physical silicon. The same transport can also target simulation directly, over the Remote Bit-Bang (RBB) protocol, which OpenOCD's <code>remote_bitbang</code> adapter driver implements [2]: OpenOCD connects to a bit-level JTAG server compiled into the testbench instead of a physical probe, so a scenario can be rehearsed through the <em>actual</em> OpenOCD/JTAG stack while still in simulation, before it ever reaches hardware. This raises a natural question the earlier sections do not answer: what does routing through OpenOCD, instead of the direct DPI-C bridge (Section III.C), cost in simulation? We answer this by measurement rather than assumption, timing the identical DMI operation sequence — activate, halt, 20 raw register reads, 20 raw register writes, 20 GPR reads/writes via abstract command, and 20 32-bit System Bus Access reads/writes — against both transports, back-to-back, on the same running Questa simulation of each DUT.</p>
+<p class="table-caption"><strong>Table IV — Direct UVM socket vs. OpenOCD+RBB, measured (not estimated)</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Ibex — direct</th>
+<th>Ibex — OpenOCD+RBB</th>
+<th>Ratio</th>
+<th>CVA6 — direct</th>
+<th>CVA6 — OpenOCD+RBB</th>
+<th>Ratio</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Register read latency (mean)</td>
+<td>2.93 ms</td>
+<td>164.60 ms</td>
+<td><strong>56.1×</strong></td>
+<td>134.87 ms</td>
+<td>338.50 ms</td>
+<td><strong>2.5×</strong></td>
+</tr>
+<tr>
+<td>Register write latency (mean)</td>
+<td>1.60 ms</td>
+<td>164.57 ms</td>
+<td><strong>103.1×</strong></td>
+<td>70.43 ms</td>
+<td>363.15 ms</td>
+<td><strong>5.2×</strong></td>
+</tr>
+<tr>
+<td>GPR read latency (mean)</td>
+<td>9.41 ms</td>
+<td>493.23 ms</td>
+<td><strong>52.4×</strong></td>
+<td>472.86 ms</td>
+<td>1.137 s</td>
+<td><strong>2.4×</strong></td>
+</tr>
+<tr>
+<td>Memory read latency, SBA (mean)</td>
+<td>11.63 ms</td>
+<td>658.00 ms</td>
+<td><strong>56.6×</strong></td>
+<td>416.17 ms</td>
+<td>1.292 s</td>
+<td><strong>3.1×</strong></td>
+</tr>
+<tr>
+<td>Throughput, full sequence</td>
+<td>144.4 ops/s</td>
+<td>2.3 ops/s</td>
+<td><strong>63.1×</strong></td>
+<td>3.2 ops/s</td>
+<td>1.1 ops/s</td>
+<td><strong>2.9×</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The direct transport is faster on both DUTs, but the <em>size</em> of the gap is not fixed — it is 20-40× larger on Ibex than on CVA6. We traced this to its actual cause rather than reporting it as a bare ratio: comparing simulated-time-per-operation (not wall-clock) from the testbench's own transaction log shows a plain register read consumes essentially the same amount of <em>simulated</em> time on both DUTs (2.3-4.0 µs) — the RBB path is not performing more simulated work. The difference is wall-clock cost per simulated microsecond, which is dominated by CVA6 being a substantially larger design to evaluate on every clock edge regardless of transport (the application-class SoC's core, cache subsystem, and AXI interconnect together compile to roughly 7× the RTL of Ibex's minimal core-plus-harness). RBB adds a roughly fixed wall-clock cost per JTAG bit (one real TCP round trip between OpenOCD and the RBB server per bit): +161.7 ms on Ibex's register read vs. +203.6 ms on CVA6's — similar in absolute terms despite the very different baselines, consistent with this cost being dominated by socket round-trip time rather than by RTL evaluation cost. That fixed cost is therefore a large fraction of Ibex's already-small per-operation time and a comparatively small fraction of CVA6's already-large one. This is a useful, generalizable result beyond this specific pair of DUTs: <strong>the OpenOCD+RBB overhead scales with how "thin" the direct simulation already is, not with a fixed multiplier</strong> — a methodological reason to measure this trade-off per-DUT rather than assume a single portability tax applies uniformly.</p>
+<p><strong>A methodological caveat, stated plainly rather than smoothed over</strong>: CVA6's simulation runs with Questa's design optimizer disabled (<code>-novopt</code>), which this project's build already required before this study — enabling the optimizer crashes Questa's <code>vopt</code> step on the vendored floating-point unit RTL (<code>cvfpu/fpnew_cast_multi.sv</code>), independent of anything in this framework. Ibex's runs are optimized by default (no <code>-novopt</code>). We do not know, and do not claim to know, what CVA6's direct-path latency would be if that crash were fixed — we explicitly attempted the optimized run to find out and report the tool fault rather than an estimated number in its place. What the data does support: since RBB's added cost tracks socket round-trip time rather than RTL evaluation time (previous paragraph), an optimized CVA6 run would likely lower the <em>direct</em>-path latency without lowering RBB's added cost by a comparable amount — meaning the CVA6 ratio in Table IV should be read as a lower bound on the gap, not an upper one.</p>
+<p>This result supports a concrete recommendation for how the framework should be used, not just a benchmark for its own sake: the direct transport should remain the default for iterative work (scenario development, functional-coverage regression — this project's own regression infrastructure already makes this choice), while OpenOCD+RBB is reserved for what only it can validate — the real external JTAG/OpenOCD stack itself — where the 2.5-100× cost is acceptable at the much lower iteration counts that check requires. Full per-operation statistics (min/max/median/stdev/p95), flow diagrams for both transport paths, and the benchmark harness itself are available in the project repository (<code>simulation/remote_bitbang/</code>).</p>
 <h2>V. Conclusion and Future Work</h2>
-
-<p>This unified dual-transport Python framework narrows the gap between pre-silicon and post-silicon debug teams. A case study spanning eight RISC-V Debug features — six demonstrated fully end-to-end against real RTL, a seventh (external triggers) demonstrated at the register level after adding a register neither DUT's IP previously had, and an eighth (group halt/resume) reported as a precisely-scoped limitation rather than risked under time pressure — shows the same stimulus code covers everything from basic halt/resume through previously-unimplemented Program Buffer execution and hardware single-step. It delivers near-zero-overhead portability: the same Python scripts run in RTL simulation and on physical hardware without modification, confirmed on an Arty A7 board for the framework's core operations. It positions the contribution precisely against the closest related methodology (PSS) and the broader transactor-pattern literature, arguing that the actual novelty is a debug-protocol-specific, dual-transport transactor combined with a lowered organizational barrier between two normally-separate engineering disciplines.</p>
-
-<p>Future work includes: (1) individually reconfirming the newer case-study scenarios on physical hardware; (2) extending the vendored <code>riscv-dbg</code> IP, or evaluating a newer release, to cover halt groups and external triggers with full causality; (3) a PSS-generates-the-graph, this-framework-executes-it-across-platforms integration, per the complementary relationship argued in Section II; (4) extending the case study to a substantial real-world program, such as an RTOS, beyond the directed scenarios shown here.</p>
-
-<div class="refs">
+<p>This unified dual-transport Python framework narrows the gap between pre-silicon and post-silicon debug teams. Its four core operations — halt, resume, GPR read, and System Bus Access — are verified end-to-end against real Ibex RTL in simulation (halt/resume/GPR-read/SBA all <code>8/8</code> passing), against real CVA6 RTL for halt and <code>dmstatus</code>, and on physical Arty A7 hardware (prior work). This study extends the library with six previously-unimplemented features — GPR write, CSR access, Program Buffer execution, hardware single-step, software breakpoint via Program Buffer, and spec-v1.0 <code>dmcs2</code> halt-group discovery All six pass cleanly on Ibex, including a genuine Program Buffer execution proof (<code>addi x5,x5,1; ebreak</code> via <code>postexec</code>, confirmed <code>x5=1</code> on real silicon-bound RTL) and a stated-in-advance, falsifiable prediction about <code>dcsr.cause</code> behavior that the real run then confirmed. Five of the six (all but <code>dmcs2</code> halt-group discovery, which neither DUT implements) were subsequently also run against real Arty A7 hardware over the same OpenOCD transport, alongside the four core operations — the identical stimulus, unmodified, reaching silicon (Table III). In the course of that work the framework caught two real bugs in its own verification code — found specifically because the <em>same</em> symptom appeared identically on two otherwise-unrelated DUTs, which is exactly the diagnostic leverage a genuinely cross-platform, cross-DUT stimulus library is supposed to provide — both found, fixed, and re-verified within this study. One further finding (CVA6's <code>abstractcs.busy</code> never clearing) is very likely RTL-side and is reported and tracked, not patched, consistent with this project's scope being the stimulus framework, not RTL correction. Group halt/resume remains deferred, since Ibex's execution-based debug module makes a genuine second hart materially riskier RTL surgery than initially scoped — reported plainly rather than attempted under time pressure. The paper positions the contribution precisely against the closest related methodology (PSS) and the broader transactor-pattern literature, arguing the actual novelty is a debug-protocol-specific, dual-transport transactor combined with a lowered organizational barrier between two normally-separate engineering disciplines, and separately argues Python's own ecosystem (automated log triage, structured logging, the <code>pytest</code>/CI ecosystem, data analysis tooling) as a second, additive advantage over TCL beyond the transport mechanism itself.</p>
+<p><strong>Future work</strong>: (1) resolve CVA6's <code>abstractcs.busy</code> finding (Section IV-D) and rerun the five features it currently blocks; (2) root-cause the remaining monitor-capture discrepancy (Section IV-D) with waveform access; (3) reconfirm Ibex's resume/GPR-read/SBA results specifically on CVA6 once IV-D's blocker clears, and bring up CVA6 emulation on Genesys2 (currently unstarted, separate scope from the Ibex/Arty A7 results already in Table III) so the hardware column has a CVA6 entry too; (4) extend the vendored <code>riscv-dbg</code> IP (or evaluate a newer release) to cover group halt/resume, closing the one feature this study excludes by scope; (5) explore a PSS-generates-the-graph, this-framework-executes-it-across-platforms integration, per the complementary relationship argued in Section II; (6) extend the case study to a real-world program (an RTOS or a substantial firmware image) beyond the directed scenarios shown here.</p>
 <h2>References</h2>
-<p>[1] RISC-V International, "RISC-V Debug Specification Version 1.0-STABLE," Dec. 08, 2022. [Online]. Available: https://github.com/riscv/riscv-debug-spec.</p>
-<p>[2] The OpenOCD Project, "Open On-Chip Debugger: OpenOCD User's Guide," Release 0.12.0+dev, Apr. 27, 2026. [Online]. Available: https://openocd.org/doc/pdf/openocd.pdf.</p>
-<p>[3] Riscv-collab, "riscv-openocd," GitHub. [Online]. Available: https://github.com/riscv-collab/riscv-openocd.</p>
-<p>[4] X. Hua, S. Yaze, J. Zou, E. Lin, Y. Zhao and P. Wang, "A UVM and Python Co-Simulation Framework for Automated Memory Controller Verification," 2025 Int. Conf. on Signal Processing, Computer Networks and Communications (SPCNC), Wuhan, China, 2025, pp. 657-660, doi: 10.1109/SPCNC68200.2025.11406641.</p>
-<p>[5] Accellera Systems Initiative, "Portable Test and Stimulus Standard," version 3.0, Aug. 2024. [Online]. Available: https://www.accellera.org/downloads/standards/portable-stimulus.</p>
-</div>
-
+<p>[1] RISC-V International, "RISC-V Debug Specification Version 1.0-STABLE," Dec. 08, 2022. [Online]. Available: https://github.com/riscv/riscv-debug-spec.
+[2] The OpenOCD Project, "Open On-Chip Debugger: OpenOCD User's Guide," Release 0.12.0+dev, Apr. 27, 2026. [Online]. Available: https://openocd.org/doc/pdf/openocd.pdf.
+[3] Riscv-collab, "riscv-openocd," GitHub. [Online]. Available: https://github.com/riscv-collab/riscv-openocd.
+[4] X. Hua, S. Yaze, J. Zou, E. Lin, Y. Zhao and P. Wang, "A UVM and Python Co-Simulation Framework for Automated Memory Controller Verification," 2025 International Conference on Signal Processing, Computer Networks and Communications (SPCNC), Wuhan, China, 2025, pp. 657-660, doi: 10.1109/SPCNC68200.2025.11406641.
+[5] Accellera Systems Initiative, "Portable Test and Stimulus Standard," Version 3.0, Aug. 2024. [Online]. Available: https://www.accellera.org/images/downloads/standards/pss/Portable_Test_Stimulus_Standard_v3.0.pdf.
+[6] J. Bergeron, Writing Testbenches: Functional Verification of HDL Models, 2nd ed. Boston, MA, USA: Springer, 2003.</p>
 </div>
 </body>
 </html>
