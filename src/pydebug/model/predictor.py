@@ -312,6 +312,17 @@ class DMPredictor:
         request and therefore only they set resume-ack again. A hart that was
         already running when resumereq was written ends up with resume_ack=0
         and no way to re-set it until it is halted and resumed.
+
+        Known scope gap (riscv-dbg-vip#119): this predictor never observes
+        abstract-command writes (only DMCONTROL, per this module's declared
+        scope in the file header), so unlike `dm_ref_model.sv` -- which
+        additionally shadows abstract-command traffic and can therefore tell
+        a dcsr.step=1 write apart from an ordinary resume -- this model
+        always predicts `running=True` here, even for a hardware single-step
+        resume that should autonomously re-halt. `dm_ref_model.sv` is the
+        checker actually used against RTL for TC-SSTEP-001 (see its own file
+        header); this gap is declared, not silently guessed past, per this
+        module's own stated documentation discipline.
         """
         for h in self._selected():
             if h.nonexistent or h.unavail:

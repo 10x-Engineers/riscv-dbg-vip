@@ -91,6 +91,11 @@ class dm_ref_model;
   // DUT-specific fact — safe to assert on unconditionally, unlike any other
   // register we never wrote ourselves.
   local const bit [15:0] GPR_X0_REGNO = 16'h1000;
+  // dcsr CSR number (spec #4.8), matching riscv_dm.py's DCSR_REGNO -- not
+  // re-derived, per this file's own stated policy (see header).
+  local const bit [15:0] DCSR_REGNO = 16'h07B0;
+  //: dcsr.step bit position (spec #4.8).
+  local const int unsigned DCSR_STEP_BIT = 2;
 
   // ── System Bus Access (sbaddress0/sbdata0) self-consistency shadow ────────
   local bit [31:0]   shadow_mem[bit [31:0]];    // addr -> last value WE wrote
@@ -277,12 +282,25 @@ class dm_ref_model;
   // resume ack bit is set." Asymmetry: resume_ack clears for the selected
   // hart regardless, but only sets again if it was actually halted.
   local function void apply_resumereq(int sel);
+    bit step_armed;
     if (!hart_exists(sel) || harts[sel].nonexistent ||
         harts[sel].unavail_sticky || !harts[sel].available) return;
     harts[sel].resume_ack.set(1'b0);
     if (harts[sel].halted.get()) begin
-      harts[sel].halted.set(1'b0);
-      harts[sel].running.set(1'b1);
+      // Hardware single-step (spec #4.5, riscv-dbg-vip#119/#132): if the
+      // last write to dcsr (via abstract command, shadowed the same way
+      // any other GPR/CSR write is) left dcsr.step=1, the hart is expected
+      // to execute exactly one instruction and re-halt entirely on its
+      // own -- no second haltreq involved. Derived purely from DMI traffic
+      // this model already observed (the existing shadow_regs
+      // self-consistency mechanism, not a guess about hart-internal
+      // state), so this stays inside the model's documented
+      // self-consistency scope (see file header) rather than requiring a
+      // full ISA simulator. Must be read BEFORE shadow_regs.delete() below.
+      step_armed = shadow_regs.exists(DCSR_REGNO) &&
+                   shadow_regs[DCSR_REGNO][DCSR_STEP_BIT];
+      harts[sel].halted.set(step_armed);
+      harts[sel].running.set(!step_armed);
       harts[sel].resume_ack.set(1'b1);
       // Same reasoning as the postexec case in write_command (#110): once
       // resumed, the hart runs arbitrary code (possibly just one
