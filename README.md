@@ -14,8 +14,9 @@ repo) for two complete worked examples.
 pyproject.toml / setup.py   — the installable pydebug package
 src/pydebug/                — the package itself (see below)
 tests/                      — unit tests for the package (pytest)
-cva6_sim/                   — worked example: pydebug <-> CVA6-fork (Questa)
-ibex_sim/                   — worked example: pydebug <-> ibex-demo-system (Questa)
+cva6_sim/                   — worked example: pydebug <-> CVA6-fork
+ibex_sim/                   — worked example: pydebug <-> ibex-demo-system
+mk/simulator.mk             — Questa/Xcelium selection shared by both (SIM=...)
 CVA6-fork/                  — submodule, 10x-Engineers/CVA6-fork
 ibex-demo-system/           — submodule, 10x-Engineers/ibex-demo-system
 INTEGRATION_GUIDE.md         — integrate a new SoC / run sim tests / run emulation

@@ -63,3 +63,18 @@ ibex_sim/uart
 
 # Local dev environment
 .venv/
+
+# Xcelium (SIM=xcelium) build and run artifacts
+*/xcelium.d/
+*/xcelium_cov.d/
+*/cov_work/
+xrun.log
+xrun.history
+*/xmsc.d/
+.simvision/
+waves.shm/
+INCA_libs/
+# xmvlog_cg/xmelab crash dumps, written into the invoking directory
+*/bpad_*.err
+*/xmelab_*.err
+*/xmvlog_cg_*.err

@@ -28,7 +28,10 @@ module jtag_bitbang #(
     );
     import "DPI-C" function byte rbs_done();
 
-    byte tck_c, tms_c, tdi_c, trstn_c, tdo_c;
+    // done_c exists for the same reason as the other _c bytes: Xcelium rejects
+    // bit-selecting a DPI call's return value directly (*E,DPIFCS), so the
+    // result lands in a variable first. Questa accepts either form.
+    byte tck_c, tms_c, tdi_c, trstn_c, tdo_c, done_c;
     logic initialized;
 
     initial begin
@@ -59,7 +62,8 @@ module jtag_bitbang #(
                 tms_o   <= tms_c[0];
                 tdi_o   <= tdi_c[0];
                 trstn_o <= trstn_c[0];
-                quit_o  <= rbs_done()[0];
+                done_c  = rbs_done();
+                quit_o  <= done_c[0];
             end
         end
     end
