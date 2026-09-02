@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1360" height="734" viewBox="0 0 1360 734" font-family="Arial, Helvetica, sans-serif">
 <rect width="1360" height="734" fill="#ffffff"/>
-<text x="330" y="22" text-anchor="middle" font-size="17" font-weight="bold" fill="#1a4a7a">(a) PRE-SILICON &#8212; SIMULATION</text>
-<text x="1030" y="22" text-anchor="middle" font-size="17" font-weight="bold" fill="#9a4a10">(b) POST-SILICON &#8212; EMULATION / SILICON</text>
+<text x="330" y="22" text-anchor="middle" font-size="17" font-weight="bold" fill="#1a4a7a">(a) SIMULATION PATH</text>
+<text x="1030" y="22" text-anchor="middle" font-size="17" font-weight="bold" fill="#9a4a10">(b) HARDWARE PATH</text>
 <line x1="680" y1="36" x2="680" y2="726" stroke="#b0b0b0" stroke-width="1.5" stroke-dasharray="6 5"/>
 <g transform="translate(0,34)">
   <defs>
@@ -102,7 +102,7 @@
   <!-- B6 -->
   <rect x="90" y="478" width="480" height="56" rx="4" fill="#f5d3ab" stroke="#9a4a10" stroke-width="1.8"/>
   <text x="330" y="502" text-anchor="middle" font-size="14" font-weight="bold">DUT Debug Module</text>
-  <text x="330" y="520" text-anchor="middle" font-size="11.5">silicon / FPGA</text>
+  <text x="330" y="520" text-anchor="middle" font-size="11.5">on FPGA board</text>
 
   
 </g>
