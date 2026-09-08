@@ -71,7 +71,14 @@ def build_single_step_sequence(
         halted_again = _wait_halted_no_haltreq(dm)
         cause = dm.get_dcsr_cause() if halted_again else None
         pc_after = dm.get_pc() if halted_again else None
-        dm.set_step(False)  # leave the hart in the non-stepping state we found it in
+        # Only when the hart is actually halted: set_step() is a read-modify-write
+        # of dcsr over an abstract command, and abstract commands require a halted
+        # hart (spec #3.7.1; dm_mem rejects them with cmderr=4 otherwise). Running
+        # this unconditionally meant that a hart which failed to re-halt reported
+        # "Abstract command error cmderr=4" from the *cleanup*, masking the real
+        # finding below -- the exact failure this test exists to detect.
+        if halted_again:
+            dm.set_step(False)  # leave the hart in the non-stepping state we found it in
 
         if not halted_again:
             return StepResult(
