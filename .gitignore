@@ -78,3 +78,11 @@ INCA_libs/
 */bpad_*.err
 */xmelab_*.err
 */xmvlog_cg_*.err
+
+# Xcelium per-run artifacts
+cva6_sim/xrun.key
+ibex_sim/xrun.key
+
+# Per-scenario simulation logs, replaced on every run
+cva6_sim/sim_outputs/
+ibex_sim/sim_outputs/

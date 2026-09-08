@@ -17,7 +17,16 @@ class debug_test extends uvm_test;
     endfunction
 
     function void build_phase(uvm_phase phase);
+        dbg_report_server rs;
         super.build_phase(phase);
+
+        // Print file basenames rather than the absolute compile-time paths UVM
+        // defaults to; +UVM_FULL_PATHS restores them.
+        if (!$test$plusargs("UVM_FULL_PATHS")) begin
+            rs = new("dbg_report_server");
+            uvm_report_server::set_server(rs);
+        end
+
         m_env    = debug_env::type_id::create("m_env", this);
         m_bridge = python_bridge::type_id::create("m_bridge", this);
 

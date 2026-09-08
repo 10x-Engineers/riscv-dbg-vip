@@ -95,8 +95,7 @@ sw/$(notdir $(ELF)):
 
 soc_test: soc_compile
 	@mkdir -p $(SIM_OUTPUT_DIR); \
-	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/soc_test_*.log 2>/dev/null | wc -l); \
-	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$$TEST_NUM.log; \
+	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$(UCDB_NAME).log; \
 	 echo "Logging output to: $$OUTPUT_FILE"; \
 	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \
