@@ -31,6 +31,7 @@ module tb_top_soc;
     `include "uvm_macros.svh"
     import dm::*;
     import debug_pkg::*;
+    import dbg_axi_pkg::*;
 
     // ── System clock & reset ───────────────────────────────────────────────
     logic clk;
@@ -115,10 +116,74 @@ module tb_top_soc;
 `endif
     );
 
+    // ── AXI taps ───────────────────────────────────────────────────────────
+    // Two buses matter for debug:
+    //   dm_sba   -- dut.slave[1], the Debug Module's System Bus Access master
+    //   dm_slave -- dut.master[ariane_soc::Debug], the hart's accesses to the
+    //               DM: debug-ROM fetches, the halted/going/resuming flag
+    //               writes, and the data0 result store
+    // The second is the one that makes an abstract command legible end to end.
+    dbg_axi_if #(`DBG_AXI_ADDR_W, `DBG_AXI_DATA_W, `DBG_AXI_ID_W)
+        dm_sba_if   (.clk(clk), .rst_n(rst_n));
+    dbg_axi_if #(`DBG_AXI_ADDR_W, `DBG_AXI_DATA_W, `DBG_AXI_ID_W)
+        dm_slave_if (.clk(clk), .rst_n(rst_n));
+
+    // IDs are zero-extended: the crossbar's slave side carries IdWidthSlave
+    // (IdWidth + $clog2(NrSlaves)) bits, narrower than the tap's default 8.
+    `define DBG_AXI_TAP(TAP, BUS)                                              \
+        assign TAP``.aw_id    = BUS``.aw_id;                                   \
+        assign TAP``.aw_addr  = BUS``.aw_addr;                                 \
+        assign TAP``.aw_len   = BUS``.aw_len;                                  \
+        assign TAP``.aw_size  = BUS``.aw_size;                                 \
+        assign TAP``.aw_burst = BUS``.aw_burst;                                \
+        assign TAP``.aw_valid = BUS``.aw_valid;                                \
+        assign TAP``.aw_ready = BUS``.aw_ready;                                \
+        assign TAP``.w_data   = BUS``.w_data;                                  \
+        assign TAP``.w_strb   = BUS``.w_strb;                                  \
+        assign TAP``.w_last   = BUS``.w_last;                                  \
+        assign TAP``.w_valid  = BUS``.w_valid;                                 \
+        assign TAP``.w_ready  = BUS``.w_ready;                                 \
+        assign TAP``.b_id     = BUS``.b_id;                                    \
+        assign TAP``.b_resp   = BUS``.b_resp;                                  \
+        assign TAP``.b_valid  = BUS``.b_valid;                                 \
+        assign TAP``.b_ready  = BUS``.b_ready;                                 \
+        assign TAP``.ar_id    = BUS``.ar_id;                                   \
+        assign TAP``.ar_addr  = BUS``.ar_addr;                                 \
+        assign TAP``.ar_len   = BUS``.ar_len;                                  \
+        assign TAP``.ar_size  = BUS``.ar_size;                                 \
+        assign TAP``.ar_burst = BUS``.ar_burst;                                \
+        assign TAP``.ar_valid = BUS``.ar_valid;                                \
+        assign TAP``.ar_ready = BUS``.ar_ready;                                \
+        assign TAP``.r_id     = BUS``.r_id;                                    \
+        assign TAP``.r_data   = BUS``.r_data;                                  \
+        assign TAP``.r_resp   = BUS``.r_resp;                                  \
+        assign TAP``.r_last   = BUS``.r_last;                                  \
+        assign TAP``.r_valid  = BUS``.r_valid;                                 \
+        assign TAP``.r_ready  = BUS``.r_ready;
+
+    `DBG_AXI_TAP(dm_sba_if,   dut.slave[1])
+    `DBG_AXI_TAP(dm_slave_if, dut.master[ariane_soc::Debug])
+
     // ── Push JTAG virtual interface into UVM config DB ─────────────────────
     initial begin
         uvm_config_db #(virtual jtag_if)::set(
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
+    end
+
+    // ── Publish the AXI taps ───────────────────────────────────────────────
+    // Interfaces only. Every setting -- which taps are enabled, their names,
+    // address windows, region annotation and verbosity -- lives in
+    // axi_configs/cva6_axi.json so DV behaviour is never driven from the
+    // design side. Path is relative to cva6_sim/ (the simulator's CWD).
+    initial begin
+        uvm_config_db #(dbg_axi_vif_t)::set(
+            null, "uvm_test_top.m_env", "axi_vif_dm_sba", dm_sba_if);
+        uvm_config_db #(dbg_axi_vif_t)::set(
+            null, "uvm_test_top.m_env", "axi_vif_dm_slave", dm_slave_if);
+
+        uvm_config_db #(string)::set(
+            null, "uvm_test_top.m_env", "axi_config_path",
+            "../src/pydebug/axi_configs/cva6_axi.json");
     end
 
     // ── Tell dm_checker which declared DUT config to load (#104, #117) ─────

@@ -37,6 +37,8 @@ SRC_SV_KIT = \
     $(PYDEBUG_SV_DIR)/model/dm_defines_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_if.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_pkg.sv \
     $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_bitbang.sv \
     tb_top_cva6.sv
@@ -209,8 +211,7 @@ coverage_merge:
 
 soc_test: soc_compile
 	@mkdir -p $(SIM_OUTPUT_DIR); \
-	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/soc_test_*.log 2>/dev/null | wc -l); \
-	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$$TEST_NUM.log; \
+	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$(UCDB_NAME).log; \
 	 echo "Logging output to: $$OUTPUT_FILE"; \
 	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \

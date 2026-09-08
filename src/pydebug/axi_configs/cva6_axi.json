@@ -1,0 +1,52 @@
+{
+    "_comment": [
+        "AXI tap settings for the CVA6 SoC. This file is DV configuration, not",
+        "a description of the RTL: nothing here is read from or driven by the",
+        "design, so changing a setting cannot move a check. The tb wires the",
+        "physical signals; every decision about what is monitored, how it is",
+        "named, filtered and logged is made here.",
+        "",
+        "Edit this file to change tap behaviour. A tap listed here is built only",
+        "if the tb published a matching interface as axi_vif_<name>; a tap the",
+        "tb publishes but this file omits is not built at all, so this list is",
+        "the enable switch.",
+        "",
+        "log_level: UVM_NONE | UVM_LOW | UVM_MEDIUM | UVM_HIGH | UVM_FULL",
+        "addr_lo/addr_hi: inclusive window; transactions outside are not logged.",
+        "regions: address -> name, printed alongside the address."
+    ],
+
+    "axi_taps": [
+        {
+            "name": "dm_sba",
+            "description": "Debug Module System Bus Access master",
+            "log_level": "UVM_MEDIUM",
+            "monitor_reads": true,
+            "monitor_writes": true,
+            "addr_lo": "0x0",
+            "addr_hi": "0xFFFFFFFFFFFFFFFF",
+            "regions": {
+            }
+        },
+        {
+            "name": "dm_slave",
+            "description": "Hart accesses to the Debug Module: ROM fetches, flag writes, data registers",
+            "log_level": "UVM_HIGH",
+            "monitor_reads": true,
+            "monitor_writes": true,
+            "addr_lo": "0x0",
+            "addr_hi": "0xFFFFFFFFFFFFFFFF",
+            "regions": {
+                "0x100": "HaltedAddr",
+                "0x104": "GoingAddr",
+                "0x108": "ResumingAddr",
+                "0x10C": "ExceptionAddr",
+                "0x300": "WhereToAddr",
+                "0x338": "AbstractCmdBase",
+                "0x380": "Data0",
+                "0x388": "Data1",
+                "0x400": "FlagsBase"
+            }
+        }
+    ]
+}
