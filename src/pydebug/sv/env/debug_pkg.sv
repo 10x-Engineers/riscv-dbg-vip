@@ -7,6 +7,7 @@ package debug_pkg;
   import uvm_pkg::*;
   import jtag_pkg::*;
   import dbg_axi_pkg::*;
+  import dbg_dmi_pkg::*;
   `include "uvm_macros.svh"
 
   `include "../sequences/dmi_read_seq.sv"

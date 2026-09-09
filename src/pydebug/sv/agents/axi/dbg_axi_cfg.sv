@@ -32,6 +32,18 @@ class dbg_axi_cfg extends uvm_object;
     // number. Populate from the SoC's own memory map in the tb.
     string region_name[bit [63:0]];
 
+    // Named address ranges, for regions where naming every word is pointless:
+    // a debug ROM fetch is interesting as "DebugROM", not as 0x838. Checked
+    // after the exact map, so a specific register inside a named range still
+    // wins.
+    typedef struct {
+        bit [63:0] lo;
+        bit [63:0] hi;
+        string     name;
+    } region_range_t;
+
+    region_range_t region_ranges[$];
+
     `uvm_object_utils(dbg_axi_cfg)
 
     function new(string name = "dbg_axi_cfg");
@@ -44,6 +56,14 @@ class dbg_axi_cfg extends uvm_object;
         if (region_name.exists(addr))          return region_name[addr];
         if (region_name.exists(addr & ~64'h3)) return region_name[addr & ~64'h3];
         if (region_name.exists(addr & ~64'h7)) return region_name[addr & ~64'h7];
+        // Fall back to a named range, with the offset so consecutive fetches
+        // are still distinguishable: DebugROM+0x38.
+        foreach (region_ranges[i]) begin
+            if (addr >= region_ranges[i].lo && addr <= region_ranges[i].hi) begin
+                if (addr == region_ranges[i].lo) return region_ranges[i].name;
+                return $sformatf("%s+0x%0h", region_ranges[i].name, addr - region_ranges[i].lo);
+            end
+        end
         return "";
     endfunction
 

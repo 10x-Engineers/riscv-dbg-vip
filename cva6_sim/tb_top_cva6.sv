@@ -32,6 +32,7 @@ module tb_top_soc;
     import dm::*;
     import debug_pkg::*;
     import dbg_axi_pkg::*;
+    import dbg_dmi_pkg::*;
 
     // ── System clock & reset ───────────────────────────────────────────────
     logic clk;
@@ -168,6 +169,28 @@ module tb_top_soc;
     initial begin
         uvm_config_db #(virtual jtag_if)::set(
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
+    end
+
+    // ── DMI bus tap ────────────────────────────────────────────────────────
+    // The DMI is not AXI: it is the DM's own valid/ready request-response bus,
+    // dm::dmi_req_t/dmi_resp_t between dmi_jtag and dm_top. Tapping it lets the
+    // checker verify the DTM -- every request shifted in over JTAG must appear
+    // here unchanged.
+    dbg_dmi_if dmi_bus_if (.clk(clk), .rst_n(rst_n));
+
+    assign dmi_bus_if.req_valid   = dut.debug_req_valid;
+    assign dmi_bus_if.req_ready   = dut.debug_req_ready;
+    assign dmi_bus_if.req_addr    = dut.debug_req.addr;
+    assign dmi_bus_if.req_op      = dut.debug_req.op;
+    assign dmi_bus_if.req_data    = dut.debug_req.data;
+    assign dmi_bus_if.resp_valid  = dut.debug_resp_valid;
+    assign dmi_bus_if.resp_ready  = dut.debug_resp_ready;
+    assign dmi_bus_if.resp_data   = dut.debug_resp.data;
+    assign dmi_bus_if.resp_status = dut.debug_resp.resp;
+
+    initial begin
+        uvm_config_db #(dbg_dmi_pkg::dbg_dmi_vif_t)::set(
+            null, "uvm_test_top.m_env", "dmi_vif", dmi_bus_if);
     end
 
     // ── Publish the AXI taps ───────────────────────────────────────────────

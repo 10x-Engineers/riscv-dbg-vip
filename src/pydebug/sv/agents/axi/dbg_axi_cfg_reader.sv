@@ -166,6 +166,7 @@ class dbg_axi_cfg_reader;
         cfg.addr_hi        = to_u64(value_in(blk, "addr_hi"), 64'hFFFF_FFFF_FFFF_FFFF);
 
         parse_regions(blk, cfg);
+        parse_ranges(blk, cfg);
         return cfg;
     endfunction
 
@@ -199,6 +200,40 @@ class dbg_axi_cfg_reader;
 
             cfg.region_name[to_u64(key, 64'h0)] = val;
             p = v1 + 1;
+        end
+    endfunction
+
+    // "region_ranges": [ {"lo":"0x800","hi":"0x9FF","name":"DebugROM"}, ... ]
+    local function void parse_ranges(string blk, dbg_axi_cfg cfg);
+        int ri, open_i, p, depth, obj_start;
+        string body, entry;
+        dbg_axi_cfg::region_range_t r;
+
+        ri = find_in(blk, "\"region_ranges\"");
+        if (ri < 0) return;
+        open_i = find_in(blk, "[", ri);
+        if (open_i < 0) return;
+
+        depth     = 0;
+        obj_start = -1;
+        for (p = open_i; p < blk.len(); p++) begin
+            byte c = blk[p];
+            if (c == "{") begin
+                if (depth == 0) obj_start = p;
+                depth++;
+            end else if (c == "}") begin
+                depth--;
+                if (depth == 0 && obj_start >= 0) begin
+                    entry  = blk.substr(obj_start, p);
+                    r.lo   = to_u64(value_in(entry, "lo"), 64'h0);
+                    r.hi   = to_u64(value_in(entry, "hi"), 64'h0);
+                    r.name = unquote(value_in(entry, "name"));
+                    if (r.name != "") cfg.region_ranges.push_back(r);
+                    obj_start = -1;
+                end
+            end else if (c == "]" && depth == 0) begin
+                break;
+            end
         end
     endfunction
 

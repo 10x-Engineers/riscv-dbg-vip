@@ -11,6 +11,10 @@ class debug_env extends uvm_env;
     // is OBI) simply gets none and nothing here needs to know about it.
     dbg_axi_agent_t  m_axi_agents[$];
     string           m_axi_names[$];
+
+    // Optional DMI bus tap. Built only when the tb publishes an interface, so
+    // an SoC that does not expose its DMI simply runs without the DTM check.
+    dbg_dmi_agent    m_dmi_agent;
     debug_scoreboard m_scoreboard;
     debug_coverage   m_coverage;
     dm_checker       m_model_checker;
@@ -27,6 +31,7 @@ class debug_env extends uvm_env;
         m_model_checker = dm_checker::type_id::create("m_model_checker", this);
 
         build_axi_taps();
+        build_dmi_tap();
     endfunction
 
     function void connect_phase(uvm_phase phase);
@@ -38,7 +43,29 @@ class debug_env extends uvm_env;
         m_agent.monitor.analysis_port.connect(m_scoreboard.analysis_export);
         m_agent.monitor.analysis_port.connect(m_coverage.analysis_export);
         m_agent.monitor.analysis_port.connect(m_model_checker.dmi_export);
+
+        // Every AXI tap feeds the same checker port. The correlator filters by
+        // address, so a tap that carries no SBA traffic simply never matches;
+        // connecting all of them keeps the env free of per-tap special cases.
+        foreach (m_axi_agents[i])
+            m_axi_agents[i].ap.connect(m_model_checker.axi_export);
+
+        if (m_dmi_agent != null)
+            m_dmi_agent.ap.connect(m_model_checker.dmi_bus_export);
     endfunction
+    // The DMI bus between the DTM and the DM. No config file: there is exactly
+    // one such bus and nothing about it to tune -- unlike the AXI taps, where
+    // naming and windowing are real choices.
+    protected function void build_dmi_tap();
+        dbg_dmi_pkg::dbg_dmi_vif_t vif;
+        if (!uvm_config_db #(dbg_dmi_pkg::dbg_dmi_vif_t)::get(this, "", "dmi_vif", vif)) begin
+            `uvm_info("ENV", "no dmi_vif published -- DTM check disabled", UVM_HIGH)
+            return;
+        end
+        m_dmi_agent = dbg_dmi_agent::type_id::create("m_dmi_agent", this);
+        uvm_config_db #(dbg_dmi_pkg::dbg_dmi_vif_t)::set(this, "m_dmi_agent.*", "vif", vif);
+    endfunction
+
     // Tap settings come from axi_configs/<dut>_axi.json, never from the tb:
     // naming, windowing, annotation and verbosity are DV decisions, and a
     // design-side file driving them could bias what the checkers see. The tb

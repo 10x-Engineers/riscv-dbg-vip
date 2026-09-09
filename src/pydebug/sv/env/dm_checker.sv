@@ -27,7 +27,52 @@ class dm_checker extends uvm_component;
   uvm_analysis_export #(jtag_txn_c)          dmi_export;
   protected uvm_tlm_analysis_fifo #(jtag_txn_c) dmi_fifo;
 
+  // Second monitored interface: the DM's System Bus Access master. Same
+  // export/FIFO/task shape as the DMI stream above.
+  uvm_analysis_export #(dbg_axi_pkg::dbg_axi_txn_t)          axi_export;
+  protected uvm_tlm_analysis_fifo #(dbg_axi_pkg::dbg_axi_txn_t) axi_fifo;
+
+  // Third monitored interface: the DMI bus itself, between the DTM and the DM.
+  // Tapping it is what lets compare_dtm_dmi() verify the DTM's serial-to-
+  // parallel translation rather than trusting it.
+  uvm_analysis_export #(dbg_dmi_pkg::dbg_dmi_txn)          dmi_bus_export;
+  protected uvm_tlm_analysis_fifo #(dbg_dmi_pkg::dbg_dmi_txn) dmi_bus_fifo;
+
   dm_ref_model model;
+
+  // Streams recorded for compare_dtm_dmi(). Bounded so a long run cannot grow
+  // them without limit: the correlation only ever looks at recent traffic.
+  localparam int unsigned CORR_DEPTH = 64;
+
+  typedef struct {
+    bit [63:0] addr;
+    bit [63:0] data;
+    bit        is_write;
+    time       t;
+  } sba_evt_t;
+
+  protected sba_evt_t dmi_sba_q[$];   // what the DTM asked the DM to do
+  protected sba_evt_t axi_sba_q[$];   // what the DM actually put on the bus
+
+  int unsigned sba_matched;
+  int unsigned sba_unmatched;
+
+  // DTM <-> DMI bridge correlation. jtag_q holds requests seen shifted in over
+  // JTAG; bus_q holds what actually appeared on the DMI bus.
+  protected dbg_dmi_pkg::dbg_dmi_txn bus_q[$];
+  typedef struct {
+    bit [6:0]  addr;
+    bit [1:0]  op;
+    bit [31:0] data;
+    time       t;
+  } jtag_evt_t;
+  protected jtag_evt_t jtag_q[$];
+
+  int unsigned dtm_matched;
+  int unsigned dtm_mismatched;
+
+  // Latched sbaddress0, so a later sbdata0 access can be attributed to it.
+  local bit [31:0] sbaddress0;
 
   // One-deep pending-request register (see file header).
   local bit        pending_valid;
@@ -47,6 +92,10 @@ class dm_checker extends uvm_component;
     super.build_phase(phase);
     dmi_export = new("dmi_export", this);
     dmi_fifo   = new("dmi_fifo", this);
+    axi_export = new("axi_export", this);
+    axi_fifo   = new("axi_fifo", this);
+    dmi_bus_export = new("dmi_bus_export", this);
+    dmi_bus_fifo   = new("dmi_bus_fifo", this);
     // dut_config_path points at dut_configs/<name>.json (#117) -- the single
     // declared source of every implementation-defined/Preset field this
     // model needs (version, stickyunavail, hasresethaltreq, ...), shared
@@ -74,6 +123,8 @@ class dm_checker extends uvm_component;
   function void connect_phase(uvm_phase phase);
     super.connect_phase(phase);
     dmi_export.connect(dmi_fifo.analysis_export);
+    axi_export.connect(axi_fifo.analysis_export);
+    dmi_bus_export.connect(dmi_bus_fifo.analysis_export);
   endfunction
 
   // Swap in a differently-configured model (e.g. version=3 for the v1.0
@@ -84,11 +135,145 @@ class dm_checker extends uvm_component;
     model = m;
   endfunction
 
+  // One task per monitored interface, plus the correlator. Kept separate
+  // rather than folded into one loop because the two FIFOs fill independently
+  // -- a blocking get() on either must not stall the other.
   task run_phase(uvm_phase phase);
+    fork
+      get_dtm_txns();
+      get_axi_txns();
+      get_dmi_bus_txns();
+      compare_dtm_dmi();
+      compare_dmi_sba();
+    join
+  endtask
+
+  // ── DTM side: DMI transactions seen on JTAG ─────────────────────────────
+  task get_dtm_txns();
     jtag_txn_c txn;
     forever begin
       dmi_fifo.get(txn);
+      `uvm_info("JTAG_DTM", $sformatf(
+          "DTM  (JTAG shift) addr=0x%02h op=%0d wdata=0x%08h  (prev: status=%0d rdata=0x%08h)",
+          txn.dmi_addr, txn.dmi_op, txn.dmi_wdata, txn.dmi_status, txn.dmi_rdata),
+          UVM_HIGH)
+      record_dmi_sba(txn);
+      // Only real accesses cross the DTM; a nop shift produces no bus request.
+      if (txn.dmi_op inside {2'd1, 2'd2}) begin
+        jtag_q.push_back('{addr: txn.dmi_addr, op: txn.dmi_op,
+                           data: txn.dmi_wdata, t: $time});
+        if (jtag_q.size() > CORR_DEPTH) void'(jtag_q.pop_front());
+      end
       handle_txn(txn);
+    end
+  endtask
+
+  // ── DM side: what the System Bus Access master actually drove ───────────
+  task get_axi_txns();
+    dbg_axi_pkg::dbg_axi_txn_t txn;
+    forever begin
+      axi_fifo.get(txn);
+      `uvm_info("AXI_TXN", {"AXI  ", txn.convert2string()}, UVM_HIGH)
+      axi_sba_q.push_back('{addr:     txn.addr,
+                            data:     (txn.data.size() > 0) ? txn.data[0] : 64'h0,
+                            is_write: (txn.dir == dbg_axi_pkg::dbg_axi_txn_t::AXI_WRITE),
+                            t:        $time});
+      if (axi_sba_q.size() > CORR_DEPTH) void'(axi_sba_q.pop_front());
+    end
+  endtask
+
+  // A DMI access to the SBA registers is a request for a bus transaction.
+  // sbaddress0 is latched; sbcs.sbreadonaddr makes the address write itself
+  // trigger a read, and an sbdata0 write is a bus write.
+  protected function void record_dmi_sba(jtag_txn_c txn);
+    if (txn.dmi_op != 2) return;                       // writes only
+    case (txn.dmi_addr)
+      7'h39: sbaddress0 = txn.dmi_wdata;               // sbaddress0
+      7'h3C: begin                                     // sbdata0 -> bus write
+        dmi_sba_q.push_back('{addr: sbaddress0, data: txn.dmi_wdata,
+                              is_write: 1'b1, t: $time});
+        if (dmi_sba_q.size() > CORR_DEPTH) void'(dmi_sba_q.pop_front());
+      end
+      default: ;
+    endcase
+  endfunction
+
+  // ── DMI bus side ────────────────────────────────────────────────────────
+  task get_dmi_bus_txns();
+    dbg_dmi_pkg::dbg_dmi_txn txn;
+    forever begin
+      dmi_bus_fifo.get(txn);
+      `uvm_info("DMI_BUS", {"DMI  (bus) ", txn.convert2string()}, UVM_HIGH)
+      bus_q.push_back(txn);
+      if (bus_q.size() > CORR_DEPTH) void'(bus_q.pop_front());
+    end
+  endtask
+
+  // ── DTM correlator ──────────────────────────────────────────────────────
+  // Verifies the Debug Transport Module: every DMI access shifted in over JTAG
+  // must appear on the DMI bus with the same addr/op/data. A mismatch here
+  // means the DTM's serial-to-parallel translation is wrong, which no
+  // DMI-only check could catch -- both sides would agree with each other and
+  // be wrong together.
+  task compare_dtm_dmi();
+    forever begin
+      #1us;
+      while (jtag_q.size() > 0 && bus_q.size() > 0) begin
+        jtag_evt_t want = jtag_q[0];
+        int        hit  = -1;
+        foreach (bus_q[i]) begin
+          if (bus_q[i].t_req >= want.t && bus_q[i].addr == want.addr &&
+              bus_q[i].op == want.op) begin
+            hit = i;
+            break;
+          end
+        end
+        if (hit < 0) break;   // not on the bus yet
+
+        if (want.op == 2'd2 && bus_q[hit].wdata !== want.data) begin
+          `uvm_error("DTM_CHECK", $sformatf(
+              "DTM corrupted a write: JTAG shifted addr=0x%02h data=0x%08h, DMI bus carried 0x%08h",
+              want.addr, want.data, bus_q[hit].wdata))
+          dtm_mismatched++;
+        end else begin
+          `uvm_info("DTM_MATCH", $sformatf(
+              "DTM  ok: %s addr=0x%02h matched on the DMI bus",
+              (want.op == 2'd2) ? "write" : "read", want.addr), UVM_HIGH)
+          dtm_matched++;
+        end
+        bus_q.delete(hit);
+        void'(jtag_q.pop_front());
+      end
+    end
+  endtask
+
+  // ── SBA correlator ──────────────────────────────────────────────────────
+  // Verifies the DM's bus bridge: a System Bus Access requested over DMI must
+  // appear on the SBA master with the same address. Runs on a poll rather than
+  // per-transaction because the two sides are inherently skewed -- the DM
+  // issues the bus cycle some cycles after the DMI write that asked for it.
+  task compare_dmi_sba();
+    forever begin
+      #1us;
+      while (dmi_sba_q.size() > 0) begin
+        sba_evt_t want = dmi_sba_q[0];
+        int       hit  = -1;
+        foreach (axi_sba_q[i]) begin
+          if (axi_sba_q[i].addr == want.addr &&
+              axi_sba_q[i].is_write == want.is_write &&
+              axi_sba_q[i].t >= want.t) begin
+            hit = i;
+            break;
+          end
+        end
+        if (hit < 0) break;   // not on the bus yet; look again next poll
+        `uvm_info("SBA_MATCH", $sformatf(
+            "SBA  matched DMI-requested %s at 0x%0h with bus transaction at %0t",
+            want.is_write ? "write" : "read", want.addr, axi_sba_q[hit].t), UVM_MEDIUM)
+        sba_matched++;
+        axi_sba_q.delete(hit);
+        void'(dmi_sba_q.pop_front());
+      end
     end
   endtask
 
@@ -164,6 +349,15 @@ class dm_checker extends uvm_component;
   function void report_phase(uvm_phase phase);
     `uvm_info("MODEL_CHECK",
       $sformatf("Checked=%0d Mismatches=%0d", total_checked, total_mismatches), UVM_NONE)
+    // Reported unconditionally, including the zero case: "no SBA traffic was
+    // correlated" is itself worth seeing, since silence would otherwise look
+    // the same as a correlator that never ran.
+    `uvm_info("DTM_CHECK",
+      $sformatf("JTAG<->DMI bus: matched=%0d mismatched=%0d unmatched=%0d",
+                dtm_matched, dtm_mismatched, jtag_q.size()), UVM_NONE)
+    `uvm_info("SBA_CHECK",
+      $sformatf("DMI<->SBA master: matched=%0d unmatched=%0d",
+                sba_matched, dmi_sba_q.size()), UVM_NONE)
   endfunction
 
 endclass : dm_checker

@@ -61,7 +61,8 @@ class dbg_axi_monitor #(
     protected function void report_txn(txn_t txn);
         if (!cfg.in_window(txn.addr)) return;
         txn.region = cfg.annotate(txn.addr);
-        `uvm_info($sformatf("AXI_MON:%s", cfg.bus_name), txn.convert2string(), cfg.log_level)
+        `uvm_info($sformatf("AXI_%s", cfg.bus_name.toupper()),
+                  {"AXI  ", txn.convert2string()}, cfg.log_level)
         ap.write(txn);
     endfunction
 

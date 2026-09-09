@@ -36,6 +36,14 @@
             "monitor_writes": true,
             "addr_lo": "0x0",
             "addr_hi": "0xFFFFFFFFFFFFFFFF",
+            "_layout_note": "Offsets are dm_mem.sv's, DM-relative: axi2mem sits between the crossbar and the DM, so the tap sees 0x104 rather than a SoC-mapped address. ProgBuf/AbstractCmd bases derive from DataAddr 0x380 with ProgBufSize=8.",
+            "region_ranges": [
+                { "lo": "0x338", "hi": "0x35F", "name": "AbstractCmd" },
+                { "lo": "0x360", "hi": "0x37F", "name": "ProgBuf" },
+                { "lo": "0x380", "hi": "0x38F", "name": "Data" },
+                { "lo": "0x400", "hi": "0x7FF", "name": "Flags" },
+                { "lo": "0x800", "hi": "0x9FF", "name": "DebugROM" }
+            ],
             "regions": {
                 "0x100": "HaltedAddr",
                 "0x104": "GoingAddr",
