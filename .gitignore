@@ -63,3 +63,26 @@ ibex_sim/uart
 
 # Local dev environment
 .venv/
+
+# Xcelium (SIM=xcelium) build and run artifacts
+*/xcelium.d/
+*/xcelium_cov.d/
+*/cov_work/
+xrun.log
+xrun.history
+*/xmsc.d/
+.simvision/
+waves.shm/
+INCA_libs/
+# xmvlog_cg/xmelab crash dumps, written into the invoking directory
+*/bpad_*.err
+*/xmelab_*.err
+*/xmvlog_cg_*.err
+
+# Xcelium per-run artifacts
+cva6_sim/xrun.key
+ibex_sim/xrun.key
+
+# Per-scenario simulation logs, replaced on every run
+cva6_sim/sim_outputs/
+ibex_sim/sim_outputs/

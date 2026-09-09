@@ -31,6 +31,8 @@ module tb_top_soc;
     `include "uvm_macros.svh"
     import dm::*;
     import debug_pkg::*;
+    import dbg_axi_pkg::*;
+    import dbg_dmi_pkg::*;
 
     // ── System clock & reset ───────────────────────────────────────────────
     logic clk;
@@ -115,10 +117,118 @@ module tb_top_soc;
 `endif
     );
 
+    // ── AXI taps ───────────────────────────────────────────────────────────
+    // Two buses matter for debug:
+    //   dm_sba   -- dut.slave[1], the Debug Module's System Bus Access master
+    //   dm_slave -- dut.master[ariane_soc::Debug], the hart's accesses to the
+    //               DM: debug-ROM fetches, the halted/going/resuming flag
+    //               writes, and the data0 result store
+    // The second is the one that makes an abstract command legible end to end.
+    dbg_axi_if #(`DBG_AXI_ADDR_W, `DBG_AXI_DATA_W, `DBG_AXI_ID_W)
+        dm_sba_if   (.clk(clk), .rst_n(rst_n));
+    dbg_axi_if #(`DBG_AXI_ADDR_W, `DBG_AXI_DATA_W, `DBG_AXI_ID_W)
+        dm_slave_if (.clk(clk), .rst_n(rst_n));
+
+    // IDs are zero-extended: the crossbar's slave side carries IdWidthSlave
+    // (IdWidth + $clog2(NrSlaves)) bits, narrower than the tap's default 8.
+    `define DBG_AXI_TAP(TAP, BUS)                                              \
+        assign TAP``.aw_id    = BUS``.aw_id;                                   \
+        assign TAP``.aw_addr  = BUS``.aw_addr;                                 \
+        assign TAP``.aw_len   = BUS``.aw_len;                                  \
+        assign TAP``.aw_size  = BUS``.aw_size;                                 \
+        assign TAP``.aw_burst = BUS``.aw_burst;                                \
+        assign TAP``.aw_valid = BUS``.aw_valid;                                \
+        assign TAP``.aw_ready = BUS``.aw_ready;                                \
+        assign TAP``.w_data   = BUS``.w_data;                                  \
+        assign TAP``.w_strb   = BUS``.w_strb;                                  \
+        assign TAP``.w_last   = BUS``.w_last;                                  \
+        assign TAP``.w_valid  = BUS``.w_valid;                                 \
+        assign TAP``.w_ready  = BUS``.w_ready;                                 \
+        assign TAP``.b_id     = BUS``.b_id;                                    \
+        assign TAP``.b_resp   = BUS``.b_resp;                                  \
+        assign TAP``.b_valid  = BUS``.b_valid;                                 \
+        assign TAP``.b_ready  = BUS``.b_ready;                                 \
+        assign TAP``.ar_id    = BUS``.ar_id;                                   \
+        assign TAP``.ar_addr  = BUS``.ar_addr;                                 \
+        assign TAP``.ar_len   = BUS``.ar_len;                                  \
+        assign TAP``.ar_size  = BUS``.ar_size;                                 \
+        assign TAP``.ar_burst = BUS``.ar_burst;                                \
+        assign TAP``.ar_valid = BUS``.ar_valid;                                \
+        assign TAP``.ar_ready = BUS``.ar_ready;                                \
+        assign TAP``.r_id     = BUS``.r_id;                                    \
+        assign TAP``.r_data   = BUS``.r_data;                                  \
+        assign TAP``.r_resp   = BUS``.r_resp;                                  \
+        assign TAP``.r_last   = BUS``.r_last;                                  \
+        assign TAP``.r_valid  = BUS``.r_valid;                                 \
+        assign TAP``.r_ready  = BUS``.r_ready;
+
+    `DBG_AXI_TAP(dm_sba_if,   dut.slave[1])
+    `DBG_AXI_TAP(dm_slave_if, dut.master[ariane_soc::Debug])
+
     // ── Push JTAG virtual interface into UVM config DB ─────────────────────
     initial begin
         uvm_config_db #(virtual jtag_if)::set(
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
+    end
+
+    // ── Backdoor access to the DM's registers ───────────────────────────────
+    // Expected values come from dm_ref_model; these are the actuals. Reaching
+    // into RTL internals is confined to these assigns and dbg_dm_backdoor_if --
+    // the only place in the VIP that depends on dm_csrs' internal names.
+    // dmstatus and abstractcs are dm_csrs' assembled values, which is what a
+    // DMI read returns and therefore what the model predicts.
+    dbg_dm_backdoor_if dm_backdoor_if (.clk(clk), .rst_n(rst_n));
+
+    assign dm_backdoor_if.dmcontrol    = dut.i_dm_top.i_dm_csrs.dmcontrol_q;
+    assign dm_backdoor_if.dmstatus     = dut.i_dm_top.i_dm_csrs.dmstatus;
+    assign dm_backdoor_if.abstractcs   = dut.i_dm_top.i_dm_csrs.abstractcs;
+    assign dm_backdoor_if.abstractauto = dut.i_dm_top.i_dm_csrs.abstractauto_q;
+    assign dm_backdoor_if.command      = dut.i_dm_top.i_dm_csrs.command_q;
+    assign dm_backdoor_if.sbcs         = dut.i_dm_top.i_dm_csrs.sbcs_q;
+    assign dm_backdoor_if.data0        = dut.i_dm_top.i_dm_csrs.data_q[0];
+    assign dm_backdoor_if.data1        = dut.i_dm_top.i_dm_csrs.data_q[1];
+
+    initial begin
+        uvm_config_db #(virtual dbg_dm_backdoor_if)::set(
+            null, "uvm_test_top.m_env.m_model_checker", "dm_backdoor_vif", dm_backdoor_if);
+    end
+
+    // ── DMI bus tap ────────────────────────────────────────────────────────
+    // The DMI is not AXI: it is the DM's own valid/ready request-response bus,
+    // dm::dmi_req_t/dmi_resp_t between dmi_jtag and dm_top. Tapping it lets the
+    // checker verify the DTM -- every request shifted in over JTAG must appear
+    // here unchanged.
+    dbg_dmi_if dmi_bus_if (.clk(clk), .rst_n(rst_n));
+
+    assign dmi_bus_if.req_valid   = dut.debug_req_valid;
+    assign dmi_bus_if.req_ready   = dut.debug_req_ready;
+    assign dmi_bus_if.req_addr    = dut.debug_req.addr;
+    assign dmi_bus_if.req_op      = dut.debug_req.op;
+    assign dmi_bus_if.req_data    = dut.debug_req.data;
+    assign dmi_bus_if.resp_valid  = dut.debug_resp_valid;
+    assign dmi_bus_if.resp_ready  = dut.debug_resp_ready;
+    assign dmi_bus_if.resp_data   = dut.debug_resp.data;
+    assign dmi_bus_if.resp_status = dut.debug_resp.resp;
+
+    initial begin
+        uvm_config_db #(dbg_dmi_pkg::dbg_dmi_vif_t)::set(
+            null, "uvm_test_top.m_env", "dmi_vif", dmi_bus_if);
+    end
+
+    // ── Publish the AXI taps ───────────────────────────────────────────────
+    // Interfaces only. Every setting -- which taps are enabled, their names,
+    // address windows, region annotation and verbosity -- lives in
+    // axi_configs/cva6_axi.json so DV behaviour is never driven from the
+    // design side. Path is relative to cva6_sim/ (the simulator's CWD).
+    initial begin
+        uvm_config_db #(dbg_axi_vif_t)::set(
+            null, "uvm_test_top.m_env", "axi_vif_dm_sba", dm_sba_if);
+        uvm_config_db #(dbg_axi_vif_t)::set(
+            null, "uvm_test_top.m_env", "axi_vif_dm_slave", dm_slave_if);
+
+        uvm_config_db #(string)::set(
+            null, "uvm_test_top.m_env", "axi_config_path",
+            "../src/pydebug/axi_configs/cva6_axi.json");
     end
 
     // ── Tell dm_checker which declared DUT config to load (#104, #117) ─────
@@ -172,8 +282,21 @@ module tb_top_soc;
             `uvm_info("TB_SOC", $sformatf("Preloading ELF: %s", binary), UVM_LOW)
 
             read_elf(binary);
-            // Wait for clock to start before preloading (avoids race with SIM_INIT)
-            wait(clk);
+            // Preload AFTER reset deasserts, not merely after the first clock.
+            // tc_sram with SimInit="zeros" re-applies init_val to the whole
+            // array on every cycle reset is low:
+            //
+            //   always_ff @(posedge clk_i or negedge rst_ni)
+            //     if (!rst_ni) foreach (init_val[i]) sram[i] <= init_val[i];
+            //
+            // Waiting only for the first clock put the load at edge 1, with
+            // reset still asserted for another nine, so the ELF was written and
+            // then wiped. The hart then fetched zeros at DRAMBase, took an
+            // illegal instruction, and trapped into the bootrom's _hang loop --
+            // which is where every scenario has actually been running the DM
+            // against, with GPRs left at their reset values.
+            wait (rst_n === 1'b1);
+            @(posedge clk);
 
             last_load_address = 'hFFFFFFFF;
             // Iterate over all ELF sections

@@ -36,6 +36,42 @@ log = logging.getLogger(__name__)
 MODES = ("interactive", "batch")
 
 
+
+# ── Output sink ───────────────────────────────────────────────────────────────
+# Step lines normally go to stdout. Under UVM simulation the sink is redirected
+# so the simulator prints them instead (see UVMTransport.emit_log): Python and
+# the simulator are separate processes sharing one stdout, so printing here
+# races with UVM's output and can tear a line in half. Routing through the
+# bridge makes the simulator the single writer, which also gives every line a
+# $time and puts it in order against the DMI traffic it sits between.
+#
+# Sequences never print -- they return StepResults and this module renders them
+# -- so redirecting here leaves every scenario unchanged, and identical between
+# simulation and emulation.
+_sink = None
+_pending = ""
+
+
+def set_output_sink(fn) -> None:
+    """Route step output to `fn` (one call per completed line), or None for stdout."""
+    global _sink, _pending
+    _sink = fn
+    _pending = ""
+
+
+def _out(text: str = "", end: str = "\n", flush: bool = False) -> None:
+    """_out() replacement that honours the sink, including partial lines."""
+    global _pending
+    if _sink is None:
+        print(text, end=end, flush=flush)
+        return
+    _pending += text
+    if end.endswith("\n"):
+        for line in _pending.split("\n"):
+            _sink(line)
+        _pending = ""
+
+
 class StepResult:
     def __init__(self, ok: bool, msg: str = "", data=None):
         self.ok   = ok
@@ -94,7 +130,7 @@ class DebugSession:
             self._results.append(result)
 
             if not result.ok and self.stop_on_error:
-                print(f"\n  [ABORT] Step {idx} failed - stopping session.\n")
+                _out(f"\n  [ABORT] Step {idx} failed - stopping session.\n")
                 break
 
         self._print_summary()
@@ -103,12 +139,12 @@ class DebugSession:
     # ── Interactive step ──────────────────────────────────────────────────────
 
     def _run_step_interactive(self, idx: int, name: str, fn: Callable) -> StepResult:
-        print(f"\n{'-'*60}")
-        print(f"  Step {idx}/{len(self._steps)}: {name}")
-        print(f"{'-'*60}")
+        _out(f"\n{'-'*60}")
+        _out(f"  Step {idx}/{len(self._steps)}: {name}")
+        _out(f"{'-'*60}")
 
         while True:
-            print("  [e] Execute   [s] Skip   [q] Quit   [?] Help")
+            _out("  [e] Execute   [s] Skip   [q] Quit   [?] Help")
             try:
                 choice = input("  > ").strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -120,28 +156,28 @@ class DebugSession:
                 return result
 
             elif choice == "s":
-                print("  -> Skipped.")
+                _out("  -> Skipped.")
                 return StepResult(ok=True, msg="(skipped by user)")
 
             elif choice == "q":
-                print("  -> Quit requested.")
+                _out("  -> Quit requested.")
                 raise KeyboardInterrupt("user quit")
 
             elif choice == "?":
-                print("  e / Enter - execute this step")
-                print("  s         - skip this step (mark ok, continue)")
-                print("  q         - abort the session")
+                _out("  e / Enter - execute this step")
+                _out("  s         - skip this step (mark ok, continue)")
+                _out("  q         - abort the session")
 
             else:
-                print(f"  Unknown option: {choice!r}")
+                _out(f"  Unknown option: {choice!r}")
 
     # ── Batch step ────────────────────────────────────────────────────────────
 
     def _run_step_batch(self, idx: int, name: str, fn: Callable) -> StepResult:
-        print(f"  [{idx:02d}] {name} ...", end=" ", flush=True)
+        _out(f"  [{idx:02d}] {name} ...", end=" ", flush=True)
         result = self._invoke(fn)
         tag = "ok" if result.ok else "FAIL"
-        print(f"[{tag}]  {result.msg}")
+        _out(f"[{tag}]  {result.msg}")
         return result
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -168,22 +204,22 @@ class DebugSession:
 
     def _print_result(self, result: StepResult) -> None:
         tag = "OK" if result.ok else "ERR"
-        print(f"  {tag} {result.msg}")
+        _out(f"  {tag} {result.msg}")
 
     def _print_header(self) -> None:
         mode_str = "INTERACTIVE" if self.mode == "interactive" else "BATCH"
-        print(f"\n{'='*60}")
-        print(f"  Debug Session  [{mode_str}]  {len(self._steps)} step(s)")
-        print(f"{'='*60}")
+        _out(f"\n{'='*60}")
+        _out(f"  Debug Session  [{mode_str}]  {len(self._steps)} step(s)")
+        _out(f"{'='*60}")
 
     def _print_summary(self) -> None:
         total   = len(self._results)
         passed  = sum(1 for r in self._results if r.ok)
         failed  = total - passed
-        print(f"\n{'='*60}")
-        print(f"  Session complete - {passed}/{total} passed", end="")
-        print(f"  ({failed} failed)" if failed else "")
-        print(f"{'='*60}\n")
+        _out(f"\n{'='*60}")
+        _out(f"  Session complete - {passed}/{total} passed", end="")
+        _out(f"  ({failed} failed)" if failed else "")
+        _out(f"{'='*60}\n")
 
     @property
     def results(self) -> list[StepResult]:
@@ -192,3 +228,9 @@ class DebugSession:
     @property
     def all_passed(self) -> bool:
         return all(r.ok for r in self._results)
+
+    @property
+    def failed_count(self) -> int:
+        """Number of steps that failed. Reported to the simulator at shutdown
+        so a failing session fails the simulation, not just this process."""
+        return sum(1 for r in self._results if not r.ok)

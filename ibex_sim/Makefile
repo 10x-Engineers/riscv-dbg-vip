@@ -1,22 +1,29 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Makefile — pydebug <-> ibex-demo-system SoC integration (Questa)
+# Makefile — pydebug <-> ibex-demo-system SoC integration
 #
 # Mirrors ../../integration_with_cva6/cva6_sim/Makefile: deploys the
 # pip-installed `pydebug` package (via `pydebug sources --c/--sv`) against
 # our existing ibex-demo-system checkout. flist_ibex.f and prim_shims/ are
 # generic RTL glue (not pydebug-specific) needed to compile ibex-demo-system
-# standalone in Questa.
+# standalone.
 #
 #   make soc_compile   — compile ibex-demo-system + pydebug JTAG/DPI kit
 #   make soc_test      — run halt/read-PC/resume session (UVM socket transport)
 #   make soc_openocd   — run the same session over OpenOCD remote-bitbang
 #   make soc_interactive — live, GDB-style interactive session (UVM socket)
+#
+# Runs on Questa or Xcelium; the tool invocation lives in ../mk/simulator.mk
+# and is selected with SIM=questa | SIM=xcelium (auto-detected from PATH when
+# unset). `make sim_info` prints what was resolved.
 # ──────────────────────────────────────────────────────────────────────────────
 
 SHELL := /bin/bash
 .SHELLFLAGS := -o pipefail -c
 
 SIM_OUTPUT_DIR = ./sim_outputs
+DUT_REPO_DIR   = ../ibex-demo-system
+DM_REPO_DIR    = ../ibex-demo-system/vendor/pulp_riscv_dbg
+TB_TOP         = tb_top_ibex
 
 PYDEBUG_C_DIR  := $(shell pydebug sources --c-dir)
 PYDEBUG_SV_DIR := $(shell pydebug sources --sv-dir)
@@ -31,6 +38,11 @@ SRC_SV_KIT = \
     $(PYDEBUG_SV_DIR)/model/dm_defines_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_if.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/backdoor/dbg_dm_backdoor_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_pkg.sv \
     $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_bitbang.sv \
     tb_top_ibex.sv
@@ -40,10 +52,6 @@ IBEX_INCDIRS = +incdir+../ibex-demo-system/vendor/lowrisc_ip/ip/prim/rtl \
                +incdir+../ibex-demo-system/vendor/lowrisc_ibex/dv/uvm/core_ibex/common/prim \
                +incdir+./prim_shims
 
-QUESTA_FLAGS = -sv -timescale 1ns/1ps
-VSIM       ?= env -u DISPLAY vsim
-VSIM_BATCH ?= env -u DISPLAY vsim -batch
-
 RUNNER   ?= pydebug run
 CFG_FILE ?= configs/halt_uvm.json
 PYTHON_SEQ ?= -m pydebug.cli run --config $(CFG_FILE)
@@ -51,61 +59,67 @@ PYTHON_SEQ ?= -m pydebug.cli run --config $(CFG_FILE)
 ELF ?= sw/halt_probe.elf
 ELF_PLUSARGS = $(if $(ELF),"+elf_file=$(abspath $(ELF))",)
 
+# Extra plusargs for a single run, e.g.
+#   make soc_test PLUSARGS=+DM_FIELD_TABLE
+#   make soc_test PLUSARGS="+DM_FIELD_TABLE +UVM_VERBOSITY=UVM_HIGH"
+PLUSARGS ?=
+
 OPENOCD_SCENARIO ?= halt
 OPENOCD_IBEX_CFG ?= configs/openocd_bitbang_ibex.cfg
 
-# ── Functional-coverage UCDB collection ───────────────────────────────────────
-# Separate library (work_cov) so day-to-day debug runs (`soc_test`) keep using
-# the uninstrumented `work` library. Requires two things Questa doesn't do by
-# default: vlog must be compiled with +cover=<spec> (a runtime-only `-coverage`
-# on an uninstrumented library silently produces no UCDB — vsim-8634), and the
-# vsim -do script must set `onfinish stop` before `run -all`, because the UVM
-# `$finish` otherwise exits the batch process before the trailing
-# `coverage save` command ever runs.
-COV_LIB       = work_cov
-COV_DIR       = $(SIM_OUTPUT_DIR)/coverage
-RESULTS_DIR   = ../testplans/results
-UCDB_NAME     = $(basename $(notdir $(CFG_FILE)))
+# ── Functional-coverage collection ────────────────────────────────────────────
+# A separate library/snapshot, so day-to-day debug runs (`soc_test`) keep using
+# the uninstrumented build. The per-tool details — Questa needing +cover=<spec>
+# at vlog time and `onfinish stop` before `coverage save`, Xcelium needing its
+# -covworkdir to already exist — live in ../mk/simulator.mk, next to the
+# commands they qualify.
+COV_LIB        = work_cov
+COV_DIR        = $(SIM_OUTPUT_DIR)/coverage
+RESULTS_DIR    = ../testplans/results
+COV_REPORT_TXT = $(RESULTS_DIR)/ibex_functional_coverage_merged.txt
+UCDB_NAME      = $(basename $(notdir $(CFG_FILE)))
 # Every scenario config that drives real stimulus (excludes openocd/hw configs).
-COV_CONFIGS   = $(wildcard configs/*_uvm.json)
+COV_CONFIGS    = $(wildcard configs/*_uvm.json)
+
+# Selects Questa or Xcelium and defines every $(SIM_*) used below.
+include ../mk/simulator.mk
+
+IBEX_DEFINES = +define+PRIM_DEFAULT_IMPL=prim_pkg::ImplGeneric \
+               +define+INC_ASSERT \
+               +define+RVFI
 
 uvm_bridge_soc.so: $(SRC_C_SOC)
 	gcc -shared -fPIC -std=c11 \
 	    -I"$(PYDEBUG_C_DIR)" \
 	    -I/usr/include/x86_64-linux-gnu \
-	    -I/home/jk/mentor/questasim/include \
+	    -I"$(DPI_INC)" \
 	    $(SRC_C_SOC) -o uvm_bridge_soc.so -lpthread
 
 soc_compile: uvm_bridge_soc.so sw/$(notdir $(ELF))
-	vlib work
-	vlog $(QUESTA_FLAGS) $(IBEX_INCDIRS) \
-	    +define+PRIM_DEFAULT_IMPL=prim_pkg::ImplGeneric \
-	    +define+INC_ASSERT \
-	    +define+RVFI \
+	$(SIM_PRE_COMPILE)
+	$(SIM_COMPILE) $(IBEX_INCDIRS) $(IBEX_DEFINES) \
 	    -f flist_ibex.f \
-	    $(SRC_SV_KIT)
+	    $(SRC_SV_KIT) \
+	    $(SIM_COMPILE_POST)
 
 sw/$(notdir $(ELF)):
 	$(MAKE) -C sw
 
 soc_test: soc_compile
-	@mkdir -p $(SIM_OUTPUT_DIR); \
-	 TEST_NUM=$$(ls -1 $(SIM_OUTPUT_DIR)/soc_test_*.log 2>/dev/null | wc -l); \
-	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$$TEST_NUM.log; \
-	 echo "Logging output to: $$OUTPUT_FILE"; \
-	 $(VSIM_BATCH) -do "run -all; quit -f" \
-	      -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_ibex \
+	@mkdir -p $(RESULT_DIR); \
+	 echo "Logging output to: $(RESULT_DIR)/run.log"; \
+	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
-	      $(ELF_PLUSARGS) \
-	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
+	      $(ELF_PLUSARGS) $(PLUSARGS) \
+	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(RESULT_DIR)/run.log
+	@$(collect_results)
 
 soc_openocd: soc_compile
 	@rm -f sim.log
 	@mkdir -p $(SIM_OUTPUT_DIR)
-	@echo "Starting vsim (ibex-demo-system) with JTAG bitbang server..."
-	$(VSIM_BATCH) -do "run -all; quit -f" \
-	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_ibex \
+	@echo "Starting $(SIM) (ibex-demo-system) with JTAG bitbang server..."
+	$(SIM_RUN) \
 	     +UVM_TESTNAME=debug_test \
 	     "+PYTHON_SEQ=unused" \
 	     +JTAG_MASTER=openocd \
@@ -132,9 +146,8 @@ soc_openocd: soc_compile
 soc_interactive: soc_compile
 	@rm -f sim.log
 	@mkdir -p $(SIM_OUTPUT_DIR)
-	@echo "Starting vsim (ibex-demo-system) with UVM bridge active, no auto-launched client..."
-	$(VSIM_BATCH) -do "run -all; quit -f" \
-	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc work.tb_top_ibex \
+	@echo "Starting $(SIM) (ibex-demo-system) with UVM bridge active, no auto-launched client..."
+	$(SIM_RUN) \
 	     +UVM_TESTNAME=debug_test \
 	     "+PYTHON_SEQ=unused" \
 	     +JTAG_MASTER=external \
@@ -143,22 +156,18 @@ soc_interactive: soc_compile
 	pydebug interactive --transport uvm --log-level WARNING
 
 soc_compile_cov: uvm_bridge_soc.so sw/$(notdir $(ELF))
-	vlib $(COV_LIB)
-	vlog $(QUESTA_FLAGS) +cover=sbceft $(IBEX_INCDIRS) \
-	    +define+PRIM_DEFAULT_IMPL=prim_pkg::ImplGeneric \
-	    +define+INC_ASSERT \
-	    +define+RVFI \
-	    -work $(COV_LIB) \
+	$(SIM_PRE_COMPILE_COV)
+	$(SIM_COMPILE_COV) $(IBEX_INCDIRS) $(IBEX_DEFINES) \
 	    -f flist_ibex.f \
-	    $(SRC_SV_KIT)
+	    $(SRC_SV_KIT) \
+	    $(SIM_COMPILE_COV_POST)
 
-# Run one scenario against the coverage-instrumented library, saving its own
-# UCDB named after the scenario config (re-running the same scenario refreshes
-# its UCDB rather than accumulating duplicates).
+# Run one scenario against the coverage-instrumented build, saving its own
+# database named after the scenario config (re-running the same scenario
+# refreshes it rather than accumulating duplicates).
 soc_test_cov: soc_compile_cov
 	@mkdir -p $(COV_DIR)
-	$(VSIM_BATCH) -coverage -do "onfinish stop; run -all; coverage save $(COV_DIR)/$(UCDB_NAME).ucdb; quit -f" \
-	     -dpioutoftheblue 1 -sv_lib uvm_bridge_soc $(COV_LIB).tb_top_ibex \
+	$(SIM_RUN_COV) \
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(PYTHON_SEQ)" \
 	     $(ELF_PLUSARGS) \
@@ -175,16 +184,15 @@ coverage_regress: soc_compile_cov
 			echo "!!! scenario $$cfg failed, continuing !!!"; \
 	done
 
-# Merge every scenario's UCDB into one aggregate and report the true combined
-# functional-coverage percentage (bins hit in ANY run count as covered) —
-# this is the number no single scenario log can show on its own.
+# Merge every scenario's coverage database into one aggregate and report the
+# true combined functional-coverage percentage (bins hit in ANY run count as
+# covered) — the number no single scenario log can show on its own.
 coverage_merge:
 	@mkdir -p $(RESULTS_DIR)
-	vcover merge $(COV_DIR)/merged.ucdb $(filter-out $(COV_DIR)/merged.ucdb,$(wildcard $(COV_DIR)/*.ucdb))
-	vcover report -cvg -details $(COV_DIR)/merged.ucdb | tee $(RESULTS_DIR)/ibex_functional_coverage_merged.txt
+	$(SIM_COV_MERGE_REPORT)
 
 clean:
-	rm -rf work $(COV_LIB) uvm_bridge_soc.so sim.log transcript vsim.wlf
+	rm -rf $(SIM_CLEAN_ARTIFACTS) uvm_bridge_soc.so sim.log
 	rm -f sw/*.o sw/*.elf
 
 .PHONY: soc_compile soc_test soc_openocd soc_interactive soc_compile_cov soc_test_cov coverage_regress coverage_merge clean

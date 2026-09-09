@@ -605,6 +605,7 @@ class RISCVDebug:
             dcsr |= (1 << 2)
         else:
             dcsr &= ~(1 << 2)
+        log.info("[DM] set_step: dcsr.step=%d  (dcsr=0x%08x)", int(enable), dcsr)
         self.write_dcsr(dcsr)
 
     def get_dcsr_cause(self) -> int:
@@ -613,7 +614,11 @@ class RISCVDebug:
         (spec #4.8). Encodings: 1=ebreak, 2=trigger, 3=haltreq, 4=step,
         5=resethaltreq, 6=group, 7=other. TC-DCSR-001/TC-SSTEP-001's check.
         """
-        return (self.read_dcsr() >> 6) & 0x7
+        cause = (self.read_dcsr() >> 6) & 0x7
+        names = {1: "ebreak", 2: "trigger", 3: "haltreq", 4: "step",
+                 5: "resethaltreq", 6: "group", 7: "other"}
+        log.info("[DM] dcsr.cause=%d (%s)", cause, names.get(cause, "reserved"))
+        return cause
 
     # ── Halt groups / external trigger (#3.6, optional, spec v1.0 only) ──────
 

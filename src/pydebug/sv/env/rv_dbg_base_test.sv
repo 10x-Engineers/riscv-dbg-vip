@@ -17,7 +17,28 @@ class debug_test extends uvm_test;
     endfunction
 
     function void build_phase(uvm_phase phase);
+        dbg_report_server rs;
         super.build_phase(phase);
+
+        // Print file basenames rather than the absolute compile-time paths UVM
+        // defaults to; +UVM_FULL_PATHS restores them.
+        if (!$test$plusargs("UVM_FULL_PATHS")) begin
+            rs = new("dbg_report_server");
+            uvm_report_server::set_server(rs);
+        end
+
+        // Stop at the first error. A conformance defect is re-checked on every
+        // DMI access, so one bug reports over a hundred times in a polling-heavy
+        // scenario -- and the run keeps going, burning simulation time proving
+        // the same point. The first error is the finding; the rest is repetition.
+        //
+        // UVM's own +UVM_MAX_QUIT_COUNT=<n>[,<yes|no>] still wins when given, so
+        // a sweep that wants the full picture can ask for it.
+        if (!$test$plusargs("UVM_MAX_QUIT_COUNT")) begin
+            uvm_report_server srv = uvm_report_server::get_server();
+            srv.set_max_quit_count(1);
+        end
+
         m_env    = debug_env::type_id::create("m_env", this);
         m_bridge = python_bridge::type_id::create("m_bridge", this);
 

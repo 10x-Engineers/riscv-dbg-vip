@@ -44,6 +44,7 @@ import time
 import shutil
 
 from pydebug.api import UVMTransport, OpenOCDTransport, RISCVDebug
+from pydebug.api import session as session_mod
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +193,53 @@ def convert_params(params: dict) -> dict:
 # Factored out of cmd_run unchanged (same logic, same log lines, same
 # timeouts/behavior) so cmd_interactive can reuse it — cmd_run's own
 # behavior is not modified by this extraction.
+
+class _UVMLogHandler(logging.Handler):
+    """Forwards `logging` records to the simulator instead of stdout."""
+
+    #: UVM_LOW, the same level as the session's step lines. Python's own
+    #: --log-level already decides which records exist; re-filtering them by
+    #: UVM verbosity on this side would only hide, at random, the commands
+    #: someone turned on in order to see.
+    VERBOSITY = 100
+
+    def __init__(self, transport):
+        super().__init__()
+        self.transport = transport
+
+    def emit(self, record):
+        try:
+            self.transport.emit_log(self.format(record), self.VERBOSITY)
+        except Exception:
+            pass   # logging must never break a run
+
+
+def _route_output_to_uvm(transport) -> None:
+    """
+    Under UVM simulation, have the simulator print our output.
+
+    Both step lines and `logging` records go over the existing bridge socket and
+    are printed by `uvm_info`, so they carry $time, sit in order against the DMI
+    traffic they caused, and cannot be torn in half by two processes writing one
+    stdout.
+
+    Only for UVMTransport. On real hardware OpenOCDTransport keeps printing to
+    stdout: there is no simulator and no $time to align to. The sequences are
+    identical either way -- this is the transport's business, not theirs.
+    """
+    if not isinstance(transport, UVMTransport):
+        return
+    # UVM_LOW: the step lines are the run's primary narrative -- what was
+    # attempted and whether it passed -- so they should survive a verbosity
+    # reduction that silences the transaction layers around them.
+    session_mod.set_output_sink(lambda line: transport.emit_log(line, 100))  # UVM_LOW
+    handler = _UVMLogHandler(transport)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.addHandler(handler)
+
 
 def connect_transport(cfg):
     """
@@ -342,9 +390,15 @@ def cmd_run(args):
 
     try:
         with transport:
+            _route_output_to_uvm(transport)
             dm = RISCVDebug(transport)
             session = builder(dm, mode=cfg["mode"], **params)
             session.run()
+            # Tell the simulator the verdict before the transport closes, so a
+            # failed session fails the simulation too rather than only this
+            # process's exit code.
+            if isinstance(transport, UVMTransport):
+                transport.set_session_result(session.failed_count)
             sys.exit(0 if session.all_passed else 1)
     finally:
         if openocd_proc:
