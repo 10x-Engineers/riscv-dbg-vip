@@ -85,6 +85,7 @@ package dm_defines_pkg;
   //   [9:4]  abits   = 7
   //   [11:10] dmistat = 0
 
+  `include "dm_config.sv"
   `include "dm_reg_decode.sv"
 
 endpackage : dm_defines_pkg

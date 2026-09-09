@@ -71,6 +71,15 @@ class dm_checker extends uvm_component;
   int unsigned dtm_matched;
   int unsigned dtm_mismatched;
 
+  // Backdoor view of the DM's registers. Optional: an SoC that does not expose
+  // it simply runs without the model-vs-RTL comparison.
+  virtual dbg_dm_backdoor_if backdoor_vif;
+  bit                     backdoor_en;
+  event                   dmi_settled;
+
+  int unsigned bd_checked;
+  int unsigned bd_mismatched;
+
   // Latched sbaddress0, so a later sbdata0 access can be attributed to it.
   local bit [31:0] sbaddress0;
 
@@ -86,6 +95,44 @@ class dm_checker extends uvm_component;
     super.new(name, parent);
   endfunction
 
+  // Build the declared configuration from dut_configs/<dut>.json. Every field
+  // is required: a Preset the model has to guess is a Preset that can turn a
+  // missing config line into a false failure.
+  protected function dm_defines_pkg::dm_cfg_t read_cfg(dut_config_reader r, int unsigned nharts);
+    dm_defines_pkg::dm_cfg_t c;
+    c.num_harts          = nharts;
+    c.version            = r.get_version();
+    c.authenticated      = r.get_bool("authenticated");
+    c.impebreak          = r.get_bool("impebreak");
+    c.hasresethaltreq    = r.get_bool("hasresethaltreq");
+    c.stickyunavail      = r.get_bool("stickyunavail");
+    c.havereset_poweron  = r.get_bool("havereset_poweron");
+    c.supports_hartreset = r.get_bool("supports_hartreset");
+    c.supports_hasel     = r.get_bool("supports_hasel");
+    c.resumeack_reset    = r.get_bool("resumeack_reset");
+    c.sba_enable            = r.get_bool("sba_enable");
+    c.abstractauto_enable   = r.get_bool("abstractauto_enable");
+    c.hartarray_enable      = r.get_bool("hartarray_enable");
+    c.authentication_enable = r.get_bool("authentication_enable");
+    c.haltgroups_enable     = r.get_bool("haltgroups_enable");
+    c.progbufsize        = r.get_int("progbufsize");
+    c.datacount          = r.get_int("datacount");
+    c.relaxedpriv_reset  = r.get_bool("relaxedpriv_reset");
+    c.nscratch           = r.get_int("nscratch");
+    c.dataaccess         = r.get_bool("dataaccess");
+    c.datasize           = r.get_int("datasize");
+    c.dataaddr           = r.get_int("dataaddr");
+    c.sbversion          = r.get_int("sbversion");
+    c.sbasize            = r.get_int("sbasize");
+    c.sbaccess128        = r.get_bool("sbaccess128");
+    c.sbaccess64         = r.get_bool("sbaccess64");
+    c.sbaccess32         = r.get_bool("sbaccess32");
+    c.sbaccess16         = r.get_bool("sbaccess16");
+    c.sbaccess8          = r.get_bool("sbaccess8");
+    c.nextdm             = r.get_int("nextdm");
+    return c;
+  endfunction
+
   function void build_phase(uvm_phase phase);
     string dut_config_path;
     dut_config_reader cfg;
@@ -96,6 +143,10 @@ class dm_checker extends uvm_component;
     axi_fifo   = new("axi_fifo", this);
     dmi_bus_export = new("dmi_bus_export", this);
     dmi_bus_fifo   = new("dmi_bus_fifo", this);
+    backdoor_en = uvm_config_db #(virtual dbg_dm_backdoor_if)::get(
+                   this, "", "dm_backdoor_vif", backdoor_vif);
+    if (!backdoor_en)
+      `uvm_info("BACKDOOR", "no dm_backdoor_vif -- model-vs-RTL comparison disabled", UVM_HIGH)
     // dut_config_path points at dut_configs/<name>.json (#117) -- the single
     // declared source of every implementation-defined/Preset field this
     // model needs (version, stickyunavail, hasresethaltreq, ...), shared
@@ -106,18 +157,11 @@ class dm_checker extends uvm_component;
     // (e.g. multi-hart configuration) beyond what the config file covers.
     if (!uvm_config_db#(string)::get(this, "", "dut_config_path", dut_config_path))
       dut_config_path = "../src/pydebug/dut_configs/ibex.json";
-    cfg = new(dut_config_path);
-    model = new(
-      .version_            (cfg.get_version()),
-      .authenticated_      (cfg.get_bool("authenticated")),
-      .impebreak_          (cfg.get_bool("impebreak")),
-      .hasresethaltreq_    (cfg.get_bool("hasresethaltreq")),
-      .supports_hartreset_ (cfg.get_bool("supports_hartreset")),
-      .supports_hasel_     (cfg.get_bool("supports_hasel")),
-      .resumeack_reset_    (cfg.get_bool("resumeack_reset")),
-      .stickyunavail_      (cfg.get_bool("stickyunavail")),
-      .havereset_poweron_  (cfg.get_bool("havereset_poweron"))
-    );
+    cfg   = new(dut_config_path);
+    model = new();
+    // One call carrying the whole declared configuration, rather than a
+    // positional list that stopped being reviewable around its tenth entry.
+    model.set_config(read_cfg(cfg, 1));
   endfunction
 
   function void connect_phase(uvm_phase phase);
@@ -145,6 +189,7 @@ class dm_checker extends uvm_component;
       get_dmi_bus_txns();
       compare_dtm_dmi();
       compare_dmi_sba();
+      compare_model_vs_rtl();
     join
   endtask
 
@@ -206,6 +251,7 @@ class dm_checker extends uvm_component;
       `uvm_info("DMI_BUS", {"DMI  (bus) ", txn.convert2string()}, UVM_HIGH)
       bus_q.push_back(txn);
       if (bus_q.size() > CORR_DEPTH) void'(bus_q.pop_front());
+      -> dmi_settled;   // wakes the backdoor comparison
     end
   endtask
 
@@ -337,12 +383,86 @@ class dm_checker extends uvm_component;
     if (addr == dm_defines_pkg::DM_ADDR_DMSTATUS)
       model.sync_observed_hart_signals(actual);
 
-    if (actual !== model.predict(addr)) begin
+    // Compare only the bits the model claims to predict. predict_mask()
+    // excludes genuinely dynamic state -- abstractcs.busy is set while an
+    // abstract command is in flight, and an untimed model cannot know when
+    // that is. Masking here rather than in the caller keeps the front door and
+    // the backdoor honest about the same set of bits.
+    if ((actual & model.predict_mask(addr)) !== (model.predict(addr) & model.predict_mask(addr))) begin
       total_mismatches++;
       `uvm_error("MODEL_MISMATCH",
         $sformatf(
-          "DMI addr=0x%02h: RTL returned 0x%08h, dm_ref_model expected 0x%08h -- reported only, not auto-resolved (author decides RTL vs model vs accepted difference; see VERIFICATION_STRATEGY.md)",
-          addr, actual, model.predict(addr)))
+          "DMI addr=0x%02h: RTL returned 0x%08h, dm_ref_model expected 0x%08h (compared over 0x%08h) -- reported only, not auto-resolved (author decides RTL vs model vs accepted difference; see VERIFICATION_STRATEGY.md)",
+          addr, actual, model.predict(addr), model.predict_mask(addr)))
+    end
+  endfunction
+
+  // ── Model vs RTL, by backdoor ───────────────────────────────────────────
+  // Expected from dm_ref_model.predict(), actual from the DM's own state.
+  // Runs after each DMI access settles; mid-access the two may legitimately
+  // disagree.
+  //
+  // Scope is limited by the model, deliberately, and the limits are worth
+  // stating because they bound what this check is worth:
+  //
+  //   * has_model() gates the address. predict() returns 0 for anything it
+  //     does not implement -- today abstractcs, sbcs, command, abstractauto --
+  //     so comparing those would report the model's own silence as a DUT bug.
+  //   * Within an address, only the bits the model computes are compared.
+  //     expect_dmcontrol() models dmactive/ndmreset/hasel/hartreset/hartsel
+  //     and not haltreq or resumereq, so an unmasked compare would fail on
+  //     every halt request.
+  //   * dmstatus is excluded entirely. Its halted/running/resumeack bits reach
+  //     the DM through hart-side hardware this untimed model cannot predict --
+  //     the front-door path calls sync_observed_hart_signals() first for
+  //     exactly that reason. Syncing from the RTL and then comparing against
+  //     the RTL would be circular, so the front door keeps that check.
+  //
+  // Widening this is a matter of teaching dm_ref_model more registers, not of
+  // adding backdoor signals: the backdoor already carries more than the model can
+  // predict.
+  localparam bit [31:0] DMCONTROL_MODELLED = 32'h27FF_FFC3;
+
+  task compare_model_vs_rtl();
+    if (!backdoor_en) return;
+    forever begin
+      @(dmi_settled);
+      // Let the write land: dm_csrs commits on the clock edge after the DMI
+      // request is accepted, so an immediate sample reads the old value.
+      repeat (3) @(posedge backdoor_vif.clk);
+
+      bd_try("dmcontrol",    dm_defines_pkg::DM_ADDR_DMCONTROL,
+             backdoor_vif.dmcontrol,    DMCONTROL_MODELLED);
+      bd_try("abstractcs",   dm_defines_pkg::DM_ADDR_ABSTRACTCS,
+             backdoor_vif.abstractcs,   32'hFFFF_FFFF);
+      bd_try("abstractauto", dm_defines_pkg::DM_ADDR_ABSTRACTAUTO,
+             backdoor_vif.abstractauto, 32'hFFFF_FFFF);
+      bd_try("command",      dm_defines_pkg::DM_ADDR_COMMAND,
+             backdoor_vif.command,      32'hFFFF_FFFF);
+      bd_try("sbcs",         dm_defines_pkg::DM_ADDR_SBCS,
+             backdoor_vif.sbcs,         32'hFFFF_FFFF);
+    end
+  endtask
+
+  // Compare only if the model claims the address, and only over the bits it
+  // claims to predict -- predict_mask() excludes the dynamic ones.
+  protected function void bd_try(string name, bit [6:0] addr,
+                                 bit [31:0] actual, bit [31:0] extra_mask);
+    if (!model.has_model(addr)) return;
+    bd_check(name, addr, actual, model.predict_mask(addr) & extra_mask);
+  endfunction
+
+  protected function void bd_check(string name, bit [6:0] addr,
+                                   bit [31:0] actual, bit [31:0] mask);
+    bit [31:0] expected = model.predict(addr) & mask;
+    bit [31:0] got      = actual & mask;
+    bd_checked++;
+    if (expected !== got) begin
+      bd_mismatched++;
+      `uvm_error("BACKDOOR", $sformatf(
+          "%s mismatch: model expected 0x%08h, RTL holds 0x%08h (differing modelled bits 0x%08h)%s",
+          name, expected, got, expected ^ got,
+          dm_defines_pkg::dm_field_table(addr, actual)))
     end
   endfunction
 
@@ -355,6 +475,10 @@ class dm_checker extends uvm_component;
     `uvm_info("DTM_CHECK",
       $sformatf("JTAG<->DMI bus: matched=%0d mismatched=%0d unmatched=%0d",
                 dtm_matched, dtm_mismatched, jtag_q.size()), UVM_NONE)
+    if (backdoor_en)
+      `uvm_info("BACKDOOR",
+        $sformatf("model vs RTL: checked=%0d mismatched=%0d", bd_checked, bd_mismatched),
+        UVM_NONE)
     `uvm_info("SBA_CHECK",
       $sformatf("DMI<->SBA master: matched=%0d unmatched=%0d",
                 sba_matched, dmi_sba_q.size()), UVM_NONE)

@@ -171,6 +171,28 @@ module tb_top_soc;
             null, "uvm_test_top.*", "jtag_vif", jtag_vif);
     end
 
+    // ── Backdoor access to the DM's registers ───────────────────────────────
+    // Expected values come from dm_ref_model; these are the actuals. Reaching
+    // into RTL internals is confined to these assigns and dbg_dm_backdoor_if --
+    // the only place in the VIP that depends on dm_csrs' internal names.
+    // dmstatus and abstractcs are dm_csrs' assembled values, which is what a
+    // DMI read returns and therefore what the model predicts.
+    dbg_dm_backdoor_if dm_backdoor_if (.clk(clk), .rst_n(rst_n));
+
+    assign dm_backdoor_if.dmcontrol    = dut.i_dm_top.i_dm_csrs.dmcontrol_q;
+    assign dm_backdoor_if.dmstatus     = dut.i_dm_top.i_dm_csrs.dmstatus;
+    assign dm_backdoor_if.abstractcs   = dut.i_dm_top.i_dm_csrs.abstractcs;
+    assign dm_backdoor_if.abstractauto = dut.i_dm_top.i_dm_csrs.abstractauto_q;
+    assign dm_backdoor_if.command      = dut.i_dm_top.i_dm_csrs.command_q;
+    assign dm_backdoor_if.sbcs         = dut.i_dm_top.i_dm_csrs.sbcs_q;
+    assign dm_backdoor_if.data0        = dut.i_dm_top.i_dm_csrs.data_q[0];
+    assign dm_backdoor_if.data1        = dut.i_dm_top.i_dm_csrs.data_q[1];
+
+    initial begin
+        uvm_config_db #(virtual dbg_dm_backdoor_if)::set(
+            null, "uvm_test_top.m_env.m_model_checker", "dm_backdoor_vif", dm_backdoor_if);
+    end
+
     // ── DMI bus tap ────────────────────────────────────────────────────────
     // The DMI is not AXI: it is the DM's own valid/ready request-response bus,
     // dm::dmi_req_t/dmi_resp_t between dmi_jtag and dm_top. Tapping it lets the

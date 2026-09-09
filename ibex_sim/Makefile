@@ -38,6 +38,7 @@ SRC_SV_KIT = \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_if.sv \
     $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/backdoor/dbg_dm_backdoor_if.sv \
     $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_if.sv \
     $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_pkg.sv \
     $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
