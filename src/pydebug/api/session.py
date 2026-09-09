@@ -228,3 +228,9 @@ class DebugSession:
     @property
     def all_passed(self) -> bool:
         return all(r.ok for r in self._results)
+
+    @property
+    def failed_count(self) -> int:
+        """Number of steps that failed. Reported to the simulator at shutdown
+        so a failing session fails the simulation, not just this process."""
+        return sum(1 for r in self._results if not r.ok)

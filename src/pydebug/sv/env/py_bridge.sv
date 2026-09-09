@@ -144,9 +144,18 @@ class python_bridge extends uvm_component;
                         dpi_bridge_put_rsp(0);
                     end
                     4: begin  // Shutdown
-                        `uvm_info("BRIDGE",
-                            "Shutdown requested by Python — exiting command loop",
-                            UVM_NONE)
+                        // The client reports how many steps failed. Raise it
+                        // here or the two halves disagree about the verdict:
+                        // the client exits non-zero while the simulation ends
+                        // reporting UVM_ERROR: 0, and a failed scenario reads
+                        // as a pass in the log people actually check.
+                        if (data != 0)
+                            `uvm_error("PY_SESSION", $sformatf(
+                                "Python session reported %0d failed step(s)", data))
+                        else
+                            `uvm_info("BRIDGE",
+                                "Shutdown requested by Python — exiting command loop",
+                                UVM_NONE)
                         dpi_bridge_put_rsp(0);
                         uvm_bridge_stop();
                         return;

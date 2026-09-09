@@ -95,11 +95,23 @@ class UVMTransport(DebugTransport):
         self._connected = False
         log.info("[UVMTransport] disconnected")
 
+    def set_session_result(self, failed_steps: int) -> None:
+        """
+        Record how many steps failed, so shutdown can tell the simulator.
+
+        Without this the two halves disagree about the verdict: the client
+        exits non-zero, while the UVM side sees an ordinary shutdown and
+        reports UVM_ERROR: 0. A scenario that failed then looks green in the
+        simulation log, which is the one place people check.
+        """
+        self._failed_steps = failed_steps
+
     def _send_shutdown(self) -> None:
         """Send shutdown command so UVM drops its objection and simulation ends."""
         try:
             tx_id = self._next_id()
-            msg = json.dumps({"id": tx_id, "op": "shutdown"}) + "\n"
+            msg = json.dumps({"id": tx_id, "op": "shutdown",
+                              "data": getattr(self, "_failed_steps", 0)}) + "\n"
             self._sock.sendall(msg.encode())
             raw = self._file.readline()
             if raw:

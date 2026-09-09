@@ -174,7 +174,10 @@ static void handle_request(int client_fd, const char *line) {
         pthread_mutex_lock(&g_mutex);
         g_req_op = OP_SHUTDOWN;
         g_req_addr = 0;
-        g_req_data = 0;
+        /* Carries the client's verdict: number of failed steps. SV raises an
+           error when it is non-zero, so a failing session cannot end in a
+           simulation that reports no errors. */
+        g_req_data = (unsigned int)data;
         g_req_valid = 1;
         g_rsp_valid = 0;
         /* Wait for SV to acknowledge */

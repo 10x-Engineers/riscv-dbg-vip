@@ -392,6 +392,11 @@ def cmd_run(args):
             dm = RISCVDebug(transport)
             session = builder(dm, mode=cfg["mode"], **params)
             session.run()
+            # Tell the simulator the verdict before the transport closes, so a
+            # failed session fails the simulation too rather than only this
+            # process's exit code.
+            if isinstance(transport, UVMTransport):
+                transport.set_session_result(session.failed_count)
             sys.exit(0 if session.all_passed else 1)
     finally:
         if openocd_proc:
