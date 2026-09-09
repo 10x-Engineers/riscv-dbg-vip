@@ -452,13 +452,23 @@ class dm_checker extends uvm_component;
     bd_check(name, addr, actual, model.predict_mask(addr) & extra_mask);
   endfunction
 
+  // Distinct mismatch signatures and how many times each recurred, used only to
+  // summarise at the end. Every occurrence is still reported as its own error:
+  // a mismatch is a candidate RTL defect, and the error count must equal the
+  // mismatch count for a run's verdict to mean anything.
+  protected int unsigned bd_seen[string];
+
   protected function void bd_check(string name, bit [6:0] addr,
                                    bit [31:0] actual, bit [31:0] mask);
     bit [31:0] expected = model.predict(addr) & mask;
     bit [31:0] got      = actual & mask;
+    string     sig;
     bd_checked++;
     if (expected !== got) begin
       bd_mismatched++;
+      sig = $sformatf("%s:%08h:%08h", name, expected, got);
+      if (bd_seen.exists(sig)) bd_seen[sig]++;
+      else                     bd_seen[sig] = 1;
       `uvm_error("BACKDOOR", $sformatf(
           "%s mismatch: model expected 0x%08h, RTL holds 0x%08h (differing modelled bits 0x%08h)%s",
           name, expected, got, expected ^ got,
@@ -475,10 +485,15 @@ class dm_checker extends uvm_component;
     `uvm_info("DTM_CHECK",
       $sformatf("JTAG<->DMI bus: matched=%0d mismatched=%0d unmatched=%0d",
                 dtm_matched, dtm_mismatched, jtag_q.size()), UVM_NONE)
-    if (backdoor_en)
+    if (backdoor_en) begin
       `uvm_info("BACKDOOR",
-        $sformatf("model vs RTL: checked=%0d mismatched=%0d", bd_checked, bd_mismatched),
-        UVM_NONE)
+        $sformatf("model vs RTL: checked=%0d mismatched=%0d across %0d distinct signature(s)",
+                  bd_checked, bd_mismatched, bd_seen.size()), UVM_NONE)
+      // Every distinct finding, with its recurrence count. Each of these is a
+      // candidate RTL defect until someone shows otherwise.
+      foreach (bd_seen[sig])
+        `uvm_info("BACKDOOR", $sformatf("  %s  (x%0d)", sig, bd_seen[sig]), UVM_NONE)
+    end
     `uvm_info("SBA_CHECK",
       $sformatf("DMI<->SBA master: matched=%0d unmatched=%0d",
                 sba_matched, dmi_sba_q.size()), UVM_NONE)

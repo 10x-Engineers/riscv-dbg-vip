@@ -537,6 +537,7 @@ class dm_ref_model;
       // turn a missing config into a false failure.
       dm_defines_pkg::DM_ADDR_HARTINFO,
       dm_defines_pkg::DM_ADDR_HALTSUM0,
+      dm_defines_pkg::DM_ADDR_COMMAND,
       dm_defines_pkg::DM_ADDR_NEXTDM:    return cfg_valid;
       // Optional features: claimed only when the implementation declares them.
       dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return cfg_valid && cfg.abstractauto_enable;
@@ -558,13 +559,11 @@ class dm_ref_model;
       dm_defines_pkg::DM_ADDR_SBDATA0:   return sbdata0_pending_value;
       dm_defines_pkg::DM_ADDR_HARTINFO:  return expect_hartinfo();
       dm_defines_pkg::DM_ADDR_ABSTRACTCS: return expect_abstractcs();
-      // command (0x17) is marked WARZ in both fields (dm_registers.xml), which
-      // conventionally means "write any value, reads zero" -- and both DUTs
-      // read back the written value instead. Deliberately NOT in has_model():
-      // the normative definition of WARZ is not in the specification sources
-      // reachable here, so predicting zero would assert a conformance failure
-      // this model cannot yet substantiate. Resolve against the ratified PDF,
-      // then move this into has_model() and let it find whatever it finds.
+      // command (0x17): cmdtype and control are both WARZ, and the spec's
+      // access-type table defines WARZ as "Write any, read zero. A debugger may
+      // write any value. When read this field returns 0."
+      // (riscv/riscv-debug-spec introduction.adoc). So a conforming DM reads
+      // this register back as zero no matter what was written.
       dm_defines_pkg::DM_ADDR_COMMAND:   return 32'h0;
       dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return expect_abstractauto();
       dm_defines_pkg::DM_ADDR_SBCS:      return expect_sbcs();
@@ -723,8 +722,11 @@ class dm_ref_model;
     case (addr)
       // busy (12) and cmderr (10:8) excluded.
       dm_defines_pkg::DM_ADDR_ABSTRACTCS: return 32'h1F00_080F;
-      // sbbusyerror (22), sbbusy (21) and sberror (14:12) excluded.
-      dm_defines_pkg::DM_ADDR_SBCS:       return 32'hE01B_8FFF;
+      // sbbusyerror (22), sbbusy (21) and sberror (14:12) excluded; everything
+      // else is predicted. E01F_8FFF = sbversion 31:29, sbreadonaddr 20,
+      // sbaccess 19:17, sbautoincrement 16, sbreadondata 15, sbasize 11:5,
+      // sbaccess128..8 4:0.
+      dm_defines_pkg::DM_ADDR_SBCS:       return 32'hE01F_8FFF;
       default:                            return 32'hFFFF_FFFF;
     endcase
   endfunction
