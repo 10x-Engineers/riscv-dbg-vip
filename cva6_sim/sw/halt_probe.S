@@ -41,5 +41,14 @@ main:
         li      x30, 30
         li      x31, 31
 
-main_end:
-        j       main_end
+# Loop the whole register-write sequence rather than spinning on a single
+# instruction. The debugger halts a *running* hart, so the program has to stay
+# busy doing something worth stepping through: a `j .` spin gave one
+# instruction to step -- the jump itself -- where the PC does not advance and
+# no register changes.
+#
+# Looping back to main means the hart is always somewhere in these 31 writes,
+# so a halt lands on a known instruction, a single step advances the PC by one
+# of them, and every GPR still holds its documented constant because each
+# iteration rewrites it.
+        j       main

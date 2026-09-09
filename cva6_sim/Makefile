@@ -21,6 +21,8 @@ SHELL := /bin/bash
 
 CVA6_REPO_DIR := $(abspath ../CVA6-fork)
 SIM_OUTPUT_DIR = ./sim_outputs
+DUT_REPO_DIR   = $(CVA6_REPO_DIR)
+DM_REPO_DIR    = $(CVA6_REPO_DIR)/corev_apu/riscv-dbg
 TB_TOP         = tb_top_soc
 
 # ── pydebug-provided sources (resolved via the installed CLI) ────────────────
@@ -218,14 +220,14 @@ coverage_merge:
 	$(SIM_COV_MERGE_REPORT)
 
 soc_test: soc_compile
-	@mkdir -p $(SIM_OUTPUT_DIR); \
-	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$(UCDB_NAME).log; \
-	 echo "Logging output to: $$OUTPUT_FILE"; \
+	@mkdir -p $(RESULT_DIR); \
+	 echo "Logging output to: $(RESULT_DIR)/run.log"; \
 	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
 	      $(ELF_PLUSARGS) $(PLUSARGS) \
-	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
+	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(RESULT_DIR)/run.log
+	@$(collect_results)
 
 soc_openocd: soc_compile
 	@rm -f sim.log

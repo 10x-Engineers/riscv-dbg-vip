@@ -152,6 +152,57 @@ SIM_CLEAN_ARTIFACTS = \
     xcelium.d xcelium_cov.d cov_work xrun.log xrun.history xmsc.d \
     .simvision waves.shm INCA_libs
 
+# ── Per-test result directory ─────────────────────────────────────────────────
+# Everything a run produces goes in one place, $(SIM_OUTPUT_DIR)/<scenario>/,
+# instead of being scattered across the simulation directory and overwritten by
+# the next run. trace_hart_0.log in particular is rewritten every run, so a
+# trace was only ever available for whichever scenario ran last -- which is
+# rarely the one being investigated.
+#
+# collect_results is called after the run. It is deliberately forgiving: a
+# missing artifact is normal (no waves unless +dump_waves, no trace on an SoC
+# that does not emit one) and must not fail the target.
+RESULT_DIR = $(SIM_OUTPUT_DIR)/$(UCDB_NAME)
+
+# Recorded in the manifest so a result folder says which RTL produced it. Left
+# empty when a SoC does not set them: the manifest just omits that line.
+DUT_REPO_DIR ?=
+DM_REPO_DIR  ?=
+OBJDUMP      ?= $(shell command -v riscv64-unknown-elf-objdump 2>/dev/null)
+
+define collect_results
+	mkdir -p $(RESULT_DIR); \
+	for f in trace_hart_0.log trace_hart_0_commit.log xrun.log xrun.history \
+	         xmelab.log xmsim.log vsim.wlf transcript uart; do \
+	    [ -f "$$f" ] && cp -f "$$f" $(RESULT_DIR)/ 2>/dev/null; \
+	done; \
+	[ -d waves.shm ] && rm -rf $(RESULT_DIR)/waves.shm && cp -r waves.shm $(RESULT_DIR)/ 2>/dev/null; \
+	cp -f $(CFG_FILE) $(RESULT_DIR)/scenario.json 2>/dev/null; \
+	if [ -f $(RESULT_DIR)/trace_hart_0.log ]; then \
+	    python3 $(dir $(lastword $(MAKEFILE_LIST)))trace_disasm.py \
+	        $(RESULT_DIR)/trace_hart_0.log $(RESULT_DIR)/trace_disasm.log \
+	        $(OBJDUMP) 2>/dev/null; \
+	fi; \
+	if [ -n "$(ELF)" ] && [ -f "$(ELF)" ] && command -v $(OBJDUMP) >/dev/null 2>&1; then \
+	    $(OBJDUMP) -d $(ELF) > $(RESULT_DIR)/program.dis 2>/dev/null; \
+	    cp -f $(ELF) $(RESULT_DIR)/ 2>/dev/null; \
+	fi; \
+	{ echo "scenario   : $(UCDB_NAME)"; \
+	  echo "date       : $$(date -Is)"; \
+	  echo "simulator  : $(SIM)"; \
+	  echo "tb top     : $(TB_TOP)"; \
+	  echo "config     : $(CFG_FILE)"; \
+	  echo "elf        : $(ELF)"; \
+	  echo "plusargs   : $(PLUSARGS)"; \
+	  echo "vip commit : $$(git rev-parse --short HEAD 2>/dev/null)"; \
+	  [ -n "$(DUT_REPO_DIR)" ] && echo "dut commit : $$(git -C $(DUT_REPO_DIR) rev-parse --short HEAD 2>/dev/null)"; \
+	  [ -n "$(DM_REPO_DIR)" ]  && echo "dm  commit : $$(git -C $(DM_REPO_DIR) rev-parse --short HEAD 2>/dev/null)"; \
+	  echo; echo "verdict:"; \
+	  grep -aE "Session complete - |^UVM_ERROR :|^UVM_FATAL :" $(RESULT_DIR)/run.log 2>/dev/null; \
+	} > $(RESULT_DIR)/manifest.txt; \
+	echo "Results collected in $(RESULT_DIR)/"
+endef
+
 ## sim_info — print which simulator these targets will use, and where its
 ## DPI headers were found. Run this first when a build fails oddly.
 sim_info:

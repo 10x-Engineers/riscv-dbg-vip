@@ -158,12 +158,12 @@ class UVMTransport(DebugTransport):
         if "data" not in resp:
             raise TransportError(f"UVMTransport read: no data in response: {resp}")
         val = resp["data"]
-        log.debug("[UVMTransport] read  addr=0x%02x → 0x%08x", addr, val)
+        log.debug("[UVMTransport] read  addr=0x%02x -> 0x%08x", addr, val)
         return val
 
     def write(self, addr: int, data: int) -> None:
         self._transact({"op": "write", "addr": addr, "data": data})
-        log.debug("[UVMTransport] write addr=0x%02x ← 0x%08x", addr, data)
+        log.debug("[UVMTransport] write addr=0x%02x <- 0x%08x", addr, data)
 
     def reset(self) -> None:
         self._transact({"op": "reset"})

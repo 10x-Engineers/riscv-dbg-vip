@@ -76,6 +76,10 @@ class dm_checker extends uvm_component;
   virtual dbg_dm_backdoor_if backdoor_vif;
   bit                     backdoor_en;
   event                   dmi_settled;
+  // The transaction that triggered it: a register is compared when it is read,
+  // so the checker needs to know which one.
+  bit [6:0]               settled_addr;
+  bit [1:0]               settled_op;
 
   int unsigned bd_checked;
   int unsigned bd_mismatched;
@@ -251,6 +255,8 @@ class dm_checker extends uvm_component;
       `uvm_info("DMI_BUS", {"DMI  (bus) ", txn.convert2string()}, UVM_HIGH)
       bus_q.push_back(txn);
       if (bus_q.size() > CORR_DEPTH) void'(bus_q.pop_front());
+      settled_addr = txn.addr;
+      settled_op   = txn.op;
       -> dmi_settled;   // wakes the backdoor comparison
     end
   endtask
@@ -424,28 +430,68 @@ class dm_checker extends uvm_component;
   localparam bit [31:0] DMCONTROL_MODELLED = 32'h27FF_FFC3;
 
   task compare_model_vs_rtl();
+    bit [31:0] actual;
     if (!backdoor_en) return;
     forever begin
       @(dmi_settled);
-      // Let the write land: dm_csrs commits on the clock edge after the DMI
+      // Only on a read, and only of the register just read. Sweeping every
+      // modelled register after every access re-checked registers the scenario
+      // never touched: a static defect then reported on every unrelated
+      // transaction -- 131 times in one single_step run -- and with fail-fast
+      // it masked the scenario's own result entirely.
+      //
+      // A read is the moment the value is claimed, so it is the moment to
+      // check it. Collateral corruption is still caught: the corrupted
+      // register reports as soon as anything reads it.
+      if (settled_op !== dm_defines_pkg::DMI_READ) continue;
+      if (!backdoor_has(settled_addr)) continue;
+
+      // Let the access land: dm_csrs commits on the clock edge after the DMI
       // request is accepted, so an immediate sample reads the old value.
       repeat (3) @(posedge backdoor_vif.clk);
 
-      bd_try("dmcontrol",    dm_defines_pkg::DM_ADDR_DMCONTROL,
-             backdoor_vif.dmcontrol,    DMCONTROL_MODELLED);
-      bd_try("abstractcs",   dm_defines_pkg::DM_ADDR_ABSTRACTCS,
-             backdoor_vif.abstractcs,   32'hFFFF_FFFF);
-      bd_try("abstractauto", dm_defines_pkg::DM_ADDR_ABSTRACTAUTO,
-             backdoor_vif.abstractauto, 32'hFFFF_FFFF);
-      // command is deliberately NOT compared by backdoor. WARZ constrains the
-      // value a DMI *read* returns, not what the DM stores: it must keep the
-      // command in command_q to execute it. Comparing that storage against a
-      // read-back rule reports the DM doing its job as a defect. The front
-      // door still checks it, against the read path, where WARZ applies.
-      bd_try("sbcs",         dm_defines_pkg::DM_ADDR_SBCS,
-             backdoor_vif.sbcs,         32'hFFFF_FFFF);
+      actual = backdoor_value(settled_addr);
+      bd_try(backdoor_name(settled_addr), settled_addr, actual,
+             (settled_addr == dm_defines_pkg::DM_ADDR_DMCONTROL)
+                 ? DMCONTROL_MODELLED : 32'hFFFF_FFFF);
     end
   endtask
+
+  // Registers the backdoor carries. command is absent deliberately: WARZ
+  // governs the value a read returns, not what the DM stores, so comparing its
+  // storage reports the DM doing its job as a defect (see the front door).
+  protected function bit backdoor_has(bit [6:0] addr);
+    case (addr)
+      dm_defines_pkg::DM_ADDR_DMCONTROL,
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS,
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO,
+      dm_defines_pkg::DM_ADDR_SBCS,
+      dm_defines_pkg::DM_ADDR_DATA0: return 1'b1;
+      default:                       return 1'b0;
+    endcase
+  endfunction
+
+  protected function bit [31:0] backdoor_value(bit [6:0] addr);
+    case (addr)
+      dm_defines_pkg::DM_ADDR_DMCONTROL:    return backdoor_vif.dmcontrol;
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS:   return backdoor_vif.abstractcs;
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return backdoor_vif.abstractauto;
+      dm_defines_pkg::DM_ADDR_SBCS:         return backdoor_vif.sbcs;
+      dm_defines_pkg::DM_ADDR_DATA0:        return backdoor_vif.data0;
+      default:                              return 32'h0;
+    endcase
+  endfunction
+
+  protected function string backdoor_name(bit [6:0] addr);
+    case (addr)
+      dm_defines_pkg::DM_ADDR_DMCONTROL:    return "dmcontrol";
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS:   return "abstractcs";
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return "abstractauto";
+      dm_defines_pkg::DM_ADDR_SBCS:         return "sbcs";
+      dm_defines_pkg::DM_ADDR_DATA0:        return "data0";
+      default:                              return "unknown";
+    endcase
+  endfunction
 
   // Compare only if the model claims the address, and only over the bits it
   // claims to predict -- predict_mask() excludes the dynamic ones.

@@ -282,8 +282,21 @@ module tb_top_soc;
             `uvm_info("TB_SOC", $sformatf("Preloading ELF: %s", binary), UVM_LOW)
 
             read_elf(binary);
-            // Wait for clock to start before preloading (avoids race with SIM_INIT)
-            wait(clk);
+            // Preload AFTER reset deasserts, not merely after the first clock.
+            // tc_sram with SimInit="zeros" re-applies init_val to the whole
+            // array on every cycle reset is low:
+            //
+            //   always_ff @(posedge clk_i or negedge rst_ni)
+            //     if (!rst_ni) foreach (init_val[i]) sram[i] <= init_val[i];
+            //
+            // Waiting only for the first clock put the load at edge 1, with
+            // reset still asserted for another nine, so the ELF was written and
+            // then wiped. The hart then fetched zeros at DRAMBase, took an
+            // illegal instruction, and trapped into the bootrom's _hang loop --
+            // which is where every scenario has actually been running the DM
+            // against, with GPRs left at their reset values.
+            wait (rst_n === 1'b1);
+            @(posedge clk);
 
             last_load_address = 'hFFFFFFFF;
             // Iterate over all ELF sections

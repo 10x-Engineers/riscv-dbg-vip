@@ -23,25 +23,35 @@ Usage:
 import time
 
 from pydebug.api import RISCVDebug, DebugSession, StepResult
+from pydebug.api.riscv_dm import DMI, allhalted, anyhalted
 
 #: dcsr.cause encoding for "single-step" (spec #4.8).
 DCSR_CAUSE_STEP = 4
+
+#: dcsr.cause encoding for an external halt request (spec #4.8).
+DCSR_CAUSE_HALTREQ = 3
 
 POLL_INTERVAL_S = 0.001
 POLL_TIMEOUT_S = 2.0
 
 
-def _wait_halted_no_haltreq(dm: RISCVDebug, timeout: float = POLL_TIMEOUT_S) -> bool:
+def _wait_halted(dm: RISCVDebug, timeout: float = POLL_TIMEOUT_S):
     """
-    Poll dmstatus.allhalted without ever writing haltreq -- the hart must
-    re-enter Debug Mode on its own after exactly one instruction (spec #4.5).
+    Poll dmstatus until both allhalted and anyhalted are set.
+
+    Never writes haltreq: the point is to observe the hart's own state, not to
+    put it where we want it. Returns (halted, dmstatus) so the caller can report
+    the value it actually saw rather than just a verdict.
     """
     deadline = time.monotonic() + timeout
+    status = 0
     while time.monotonic() < deadline:
-        if dm.is_halted():
-            return True
+        status = dm.t.read(DMI.DMSTATUS)
+        if allhalted(status) and anyhalted(status):
+            return True, status
         time.sleep(POLL_INTERVAL_S)
-    return dm.is_halted()
+    status = dm.t.read(DMI.DMSTATUS)
+    return (allhalted(status) and anyhalted(status)), status
 
 
 def build_single_step_sequence(
@@ -60,42 +70,93 @@ def build_single_step_sequence(
     session.add_step("Activate Debug Module", lambda: dm.activate())
     session.add_step("Halt hart", lambda: dm.halt())
 
-    # ── TC-SSTEP-001: exactly one instruction, dcsr.cause=step ────────────
-    def tc_sstep_001():
-        pc_before = dm.get_pc()
-        dm.set_step(True)
-        # resume_no_wait(), not resume(): a step re-halts too quickly for
-        # dmstatus.allrunning to be a reliable observable in between (see
-        # GitHub issue #105) -- poll directly for re-halt instead.
-        dm.resume_no_wait()
-        halted_again = _wait_halted_no_haltreq(dm)
-        cause = dm.get_dcsr_cause() if halted_again else None
-        pc_after = dm.get_pc() if halted_again else None
-        # Only when the hart is actually halted: set_step() is a read-modify-write
-        # of dcsr over an abstract command, and abstract commands require a halted
-        # hart (spec #3.7.1; dm_mem rejects them with cmderr=4 otherwise). Running
-        # this unconditionally meant that a hart which failed to re-halt reported
-        # "Abstract command error cmderr=4" from the *cleanup*, masking the real
-        # finding below -- the exact failure this test exists to detect.
-        if halted_again:
-            dm.set_step(False)  # leave the hart in the non-stepping state we found it in
-
-        if not halted_again:
-            return StepResult(
-                ok=False,
-                msg="TC-SSTEP-001: hart never re-halted after resume with "
-                    "dcsr.step=1 -- expected exactly one instruction then "
-                    "automatic re-entry to Debug Mode",
-            )
-        ok = cause == DCSR_CAUSE_STEP
+    # ── Confirm the halt from dmstatus ──────────────────────────────────────
+    def confirm_halted():
+        halted, status = _wait_halted(dm)
         return StepResult(
-            ok=ok,
-            msg=f"TC-SSTEP-001: dcsr.cause={cause} (expect {DCSR_CAUSE_STEP}=step), "
-                f"pc {pc_before:#010x} -> {pc_after:#010x}  {'OK' if ok else 'MISMATCH'}",
+            ok=halted,
+            msg=f"dmstatus=0x{status:08x} allhalted={int(allhalted(status))} "
+                f"anyhalted={int(anyhalted(status))}",
         )
-    session.add_step(
-        "TC-SSTEP-001: single-step exactly one instruction, dcsr.cause=step",
-        tc_sstep_001,
-    )
+    session.add_step("Confirm hart halted (dmstatus allhalted/anyhalted)", confirm_halted)
+
+    # ── Cause after the halt request ────────────────────────────────────────
+    # Captured before step is written, so the read after the step has something
+    # to be compared against.
+    causes = {}
+
+    def cause_after_halt():
+        causes["pc_before"] = dm.get_pc()
+        causes["halt"] = dm.get_dcsr_cause()
+        return StepResult(
+            ok=(causes["halt"] == DCSR_CAUSE_HALTREQ),
+            msg=f"dcsr.cause={causes['halt']} (expect {DCSR_CAUSE_HALTREQ}=haltreq)",
+        )
+    session.add_step("Read dcsr.cause after halt request", cause_after_halt)
+
+    # ── Set single step ─────────────────────────────────────────────────────
+    session.add_step("Set dcsr.step=1", lambda: dm.set_step(True))
+
+    # dcsr.step acts "when set and not in Debug Mode" (spec, dcsr.step), so the
+    # armed bit does nothing until the hart leaves. resumereq is what makes it
+    # leave -- the hart executes dret, retires exactly one instruction, and
+    # re-enters Debug Mode on its own with dcsr.cause=4.
+    #
+    # resume_no_wait(), not resume(): resume() polls dmstatus.allrunning, and a
+    # single step re-halts too quickly for allrunning to be a reliable
+    # observable in between (issue #105). The autonomous re-halt is polled for
+    # in the next step instead, and no haltreq is ever written -- the hart
+    # halting itself is the property under test.
+    session.add_step("Resume (resumereq) to let the step execute",
+                     lambda: dm.resume_no_wait())
+
+    # ── Wait for halted again, then read the cause ──────────────────────────
+    def wait_halted_after_step():
+        halted, status = _wait_halted(dm)
+        return StepResult(
+            ok=halted,
+            msg=f"dmstatus=0x{status:08x} allhalted={int(allhalted(status))} "
+                f"anyhalted={int(anyhalted(status))}",
+        )
+    session.add_step("Wait for dmstatus allhalted and anyhalted", wait_halted_after_step)
+
+    def cause_after_step():
+        causes["step"] = dm.get_dcsr_cause()
+        cause = causes["step"]
+        # Must be 4 (step). A 3 here means the hart re-entered Debug Mode for
+        # the original halt request and never stepped at all -- the failure
+        # this test exists to catch, and one that reports as a pass if the
+        # cause is merely printed rather than checked.
+        note = ""
+        if cause == DCSR_CAUSE_HALTREQ:
+            note = " -- still the halt request: the hart never stepped"
+        return StepResult(
+            ok=(cause == DCSR_CAUSE_STEP),
+            msg=f"dcsr.cause={cause} after step "
+                f"(expect {DCSR_CAUSE_STEP}=step; was {causes.get('halt')} "
+                f"after halt request){note}",
+        )
+    session.add_step("Read dcsr.cause after single step", cause_after_step)
+
+    # ── PC at the end of the test ───────────────────────────────────────────
+    # dpc holds the M-mode PC the hart was executing when it entered Debug
+    # Mode -- i.e. where it will resume to. With the ELF running this should be
+    # inside the loaded program at DRAMBase (0x8000_0000), not the bootrom; a
+    # bootrom address here means the hart never reached the test program.
+    def read_pc_at_end():
+        pc = dm.get_pc()
+        before = causes.get("pc_before")
+        delta = None if before is None else (pc - before)
+        # The program loops over 31 two-byte writes, so a step that executed
+        # shows up here as the PC advancing by exactly one instruction. If
+        # setting dcsr.step alone stepped the hart, this delta would be 2 (or
+        # the loop's wrap); if nothing executed, the PC is unchanged.
+        return StepResult(
+            ok=True,
+            msg=f"dpc before={before:#010x} after={pc:#010x} "
+                f"delta={delta:+d} bytes -> "
+                f"{'hart executed' if delta else 'hart did NOT execute'}",
+        )
+    session.add_step("Read PC (dpc) at end of test", read_pc_at_end)
 
     return session

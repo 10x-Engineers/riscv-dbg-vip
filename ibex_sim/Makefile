@@ -21,6 +21,8 @@ SHELL := /bin/bash
 .SHELLFLAGS := -o pipefail -c
 
 SIM_OUTPUT_DIR = ./sim_outputs
+DUT_REPO_DIR   = ../ibex-demo-system
+DM_REPO_DIR    = ../ibex-demo-system/vendor/pulp_riscv_dbg
 TB_TOP         = tb_top_ibex
 
 PYDEBUG_C_DIR  := $(shell pydebug sources --c-dir)
@@ -104,14 +106,14 @@ sw/$(notdir $(ELF)):
 	$(MAKE) -C sw
 
 soc_test: soc_compile
-	@mkdir -p $(SIM_OUTPUT_DIR); \
-	 OUTPUT_FILE=$(SIM_OUTPUT_DIR)/soc_test_$(UCDB_NAME).log; \
-	 echo "Logging output to: $$OUTPUT_FILE"; \
+	@mkdir -p $(RESULT_DIR); \
+	 echo "Logging output to: $(RESULT_DIR)/run.log"; \
 	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
 	      $(ELF_PLUSARGS) $(PLUSARGS) \
-	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
+	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(RESULT_DIR)/run.log
+	@$(collect_results)
 
 soc_openocd: soc_compile
 	@rm -f sim.log

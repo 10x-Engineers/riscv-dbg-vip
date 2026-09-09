@@ -197,9 +197,11 @@ def convert_params(params: dict) -> dict:
 class _UVMLogHandler(logging.Handler):
     """Forwards `logging` records to the simulator instead of stdout."""
 
-    #: UVM_HIGH. Library logging is detail; the step lines the session emits are
-    #: the ones worth seeing by default, so these sit a level below them.
-    VERBOSITY = 400
+    #: UVM_LOW, the same level as the session's step lines. Python's own
+    #: --log-level already decides which records exist; re-filtering them by
+    #: UVM verbosity on this side would only hide, at random, the commands
+    #: someone turned on in order to see.
+    VERBOSITY = 100
 
     def __init__(self, transport):
         super().__init__()
