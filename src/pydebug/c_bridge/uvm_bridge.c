@@ -50,6 +50,12 @@
 #define OP_WRITE    2
 #define OP_RESET    3
 #define OP_SHUTDOWN 4
+#define OP_LOG      5   /* Python log record, printed by SV so it carries $time */
+
+/* Log text for OP_LOG. Static because the DPI import returns a const char* that
+   SV copies into a string on return; it only has to stay valid for that call,
+   and the bridge serves one request at a time under g_mutex. */
+static char g_req_text[2048];
 
 /* ── Shared state (bridge ↔ server thread) ──────────────────────────────── */
 static volatile int g_shutdown = 0;    /* set to 1 to stop the thread */
@@ -95,6 +101,42 @@ static int json_get_str(const char *json, const char *key, char *buf, size_t buf
     size_t i = 0;
     while (*p && *p != '"' && i < buf_len - 1)
         buf[i++] = *p++;
+    buf[i] = '\0';
+    return 1;
+}
+
+/* Like json_get_str, but honours JSON escapes. Log text routinely contains
+   quotes and newlines, which the plain reader would truncate at or pass
+   through as a literal backslash-n. */
+static int json_get_str_esc(const char *json, const char *key, char *buf, size_t buf_len) {
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return 0;
+    p += strlen(pattern);
+    while (*p == ':' || *p == ' ') p++;
+    if (*p != '"') return 0;
+    p++;
+    size_t i = 0;
+    while (*p && i < buf_len - 1) {
+        if (*p == '\\' && *(p + 1)) {
+            p++;
+            switch (*p) {
+                case 'n':  buf[i++] = '\n'; break;
+                case 't':  buf[i++] = '\t'; break;
+                case 'r':  break;                 /* drop CR, SV prints one line */
+                case '"':  buf[i++] = '"';  break;
+                case '\\': buf[i++] = '\\'; break;
+                case '/':  buf[i++] = '/';  break;
+                default:   buf[i++] = *p;   break;
+            }
+            p++;
+        } else if (*p == '"') {
+            break;                                 /* closing quote */
+        } else {
+            buf[i++] = *p++;
+        }
+    }
     buf[i] = '\0';
     return 1;
 }
@@ -168,6 +210,26 @@ static void handle_request(int client_fd, const char *line) {
         return;
     }
 
+    if (strcmp(op, "log") == 0) {
+        /* Same handshake as a DMI op: hand the text to SV, wait for it to be
+           printed, then acknowledge. Serialising it this way is the point --
+           the line lands in the log between the transactions it sits between,
+           and carries the simulator's own timestamp. */
+        pthread_mutex_lock(&g_mutex);
+        g_req_text[0] = '\0';
+        json_get_str_esc(line, "text", g_req_text, sizeof(g_req_text));
+        g_req_op   = OP_LOG;
+        g_req_addr = 0;
+        g_req_data = (unsigned int)data;   /* UVM verbosity, chosen Python-side */
+        g_req_valid = 1;
+        g_rsp_valid = 0;
+        while (!g_rsp_valid) { pthread_cond_wait(&g_cond, &g_mutex); }
+        pthread_mutex_unlock(&g_mutex);
+        snprintf(send_buf, sizeof(send_buf), "{\"id\":%lld,\"status\":\"ok\"}\n", id);
+        send_response(client_fd, send_buf);
+        return;
+    }
+
     /* Unknown op */
     snprintf(send_buf, sizeof(send_buf),
              "{\"id\":%lld,\"status\":\"err\",\"msg\":\"unknown op: %s\"}\n",
@@ -212,6 +274,10 @@ static void *server_thread(void *arg) {
 }
 
 /* ── Public API (called from DPI SystemVerilog) ─────────────────────────── */
+
+const char *dpi_bridge_get_text(void) {
+    return g_req_text;
+}
 
 int dpi_bridge_get_req(int *op, int *addr, unsigned int *data) {
     int ret = 0;
