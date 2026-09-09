@@ -559,11 +559,13 @@ class dm_ref_model;
       dm_defines_pkg::DM_ADDR_SBDATA0:   return sbdata0_pending_value;
       dm_defines_pkg::DM_ADDR_HARTINFO:  return expect_hartinfo();
       dm_defines_pkg::DM_ADDR_ABSTRACTCS: return expect_abstractcs();
-      // command (0x17): cmdtype and control are both WARZ, and the spec's
-      // access-type table defines WARZ as "Write any, read zero. A debugger may
-      // write any value. When read this field returns 0."
-      // (riscv/riscv-debug-spec introduction.adoc). So a conforming DM reads
-      // this register back as zero no matter what was written.
+      // command (0x17): cmdtype and control are both WARZ -- "Write any, read
+      // zero. A debugger may write any value. When read this field returns 0."
+      // (riscv/riscv-debug-spec introduction.adoc). That governs the value a
+      // DMI read returns, which is what this predicts. It says nothing about
+      // what the DM stores internally -- it must keep the command to execute
+      // it -- so this is a front-door expectation only; see dm_checker's
+      // backdoor list.
       dm_defines_pkg::DM_ADDR_COMMAND:   return 32'h0;
       dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return expect_abstractauto();
       dm_defines_pkg::DM_ADDR_SBCS:      return expect_sbcs();

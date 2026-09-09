@@ -437,8 +437,11 @@ class dm_checker extends uvm_component;
              backdoor_vif.abstractcs,   32'hFFFF_FFFF);
       bd_try("abstractauto", dm_defines_pkg::DM_ADDR_ABSTRACTAUTO,
              backdoor_vif.abstractauto, 32'hFFFF_FFFF);
-      bd_try("command",      dm_defines_pkg::DM_ADDR_COMMAND,
-             backdoor_vif.command,      32'hFFFF_FFFF);
+      // command is deliberately NOT compared by backdoor. WARZ constrains the
+      // value a DMI *read* returns, not what the DM stores: it must keep the
+      // command in command_q to execute it. Comparing that storage against a
+      // read-back rule reports the DM doing its job as a defect. The front
+      // door still checks it, against the read path, where WARZ applies.
       bd_try("sbcs",         dm_defines_pkg::DM_ADDR_SBCS,
              backdoor_vif.sbcs,         32'hFFFF_FFFF);
     end
