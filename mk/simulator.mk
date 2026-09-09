@@ -47,7 +47,8 @@ DPI_LIB_NAME   ?= uvm_bridge_soc
 # without these two entries fails with 17 *E,COFILX "cannot open include file".
 # Passed to both tools: harmless for Questa, and it stops the search depending
 # on a vendor default.
-SIM_KIT_INCDIRS = +incdir+$(PYDEBUG_SV_DIR)/agents/jtag +incdir+$(PYDEBUG_SV_DIR)/agents/axi +incdir+$(PYDEBUG_SV_DIR)/env
+SIM_KIT_INCDIRS = +incdir+$(PYDEBUG_SV_DIR)/agents/jtag +incdir+$(PYDEBUG_SV_DIR)/agents/axi +incdir+$(PYDEBUG_SV_DIR)/agents/dmi \
+                  +incdir+$(PYDEBUG_SV_DIR)/model +incdir+$(PYDEBUG_SV_DIR)/env
 
 # ══════════════════════════════════════════════════════════════════════════════
 ifeq ($(SIM),questa)

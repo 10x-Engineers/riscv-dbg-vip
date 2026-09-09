@@ -36,6 +36,10 @@ SRC_SV_KIT = \
     $(PYDEBUG_SV_DIR)/model/dm_defines_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_if.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_pkg.sv \
+    $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_pkg.sv \
     $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_bitbang.sv \
     tb_top_ibex.sv
@@ -51,6 +55,11 @@ PYTHON_SEQ ?= -m pydebug.cli run --config $(CFG_FILE)
 
 ELF ?= sw/halt_probe.elf
 ELF_PLUSARGS = $(if $(ELF),"+elf_file=$(abspath $(ELF))",)
+
+# Extra plusargs for a single run, e.g.
+#   make soc_test PLUSARGS=+DM_FIELD_TABLE
+#   make soc_test PLUSARGS="+DM_FIELD_TABLE +UVM_VERBOSITY=UVM_HIGH"
+PLUSARGS ?=
 
 OPENOCD_SCENARIO ?= halt
 OPENOCD_IBEX_CFG ?= configs/openocd_bitbang_ibex.cfg
@@ -100,7 +109,7 @@ soc_test: soc_compile
 	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
-	      $(ELF_PLUSARGS) \
+	      $(ELF_PLUSARGS) $(PLUSARGS) \
 	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $$OUTPUT_FILE
 
 soc_openocd: soc_compile

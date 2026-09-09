@@ -25,7 +25,10 @@ help:
 	@echo "  make coverage Static tier with the functional-coverage report printed."
 	@echo ""
 	@echo "Simulator-backed runs live in the per-SoC Makefiles, e.g.:"
-	@echo "  make -C ../integration_with_cva6/cva6_sim soc_test"
+	@echo "  make -C cva6_sim soc_test CFG_FILE=configs/halt_uvm.json"
+	@echo "  make -C ibex_sim soc_test CFG_FILE=configs/halt_uvm.json"
+	@echo "  make -C cva6_sim soc_test PLUSARGS=+DM_FIELD_TABLE   # decode DM register fields"
+	@echo "  make -C cva6_sim sim_info                            # which simulator resolved"
 
 ## smoke — one basic, happy-path test per feature. Seconds, mock-backed only.
 smoke:
