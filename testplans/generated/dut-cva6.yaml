@@ -1,0 +1,67 @@
+# DUT profile — the version/RTL axis for a generated testplan.
+#
+# Without one, every row is written against the target spec and nothing is
+# marked rtl-unsupported, which reads as "all of this is tested" when it is not.
+#
+# This example describes the CVA6 fork used by riscv-dbg-vip. Copy and edit.
+
+name: cva6-10x-fork
+description: >-
+  CVA6 (cv64a6_imafdc_sv39) with the 10x-Engineers riscv-dbg fork as its Debug
+  Module. Reports dmstatus.version=3.
+
+target_spec: "1.0"        # what the plan is written against
+rtl_spec: "1.0"           # what the RTL claims, read from dmstatus.version
+
+# Discovered, not assumed. Read these from the DUT rather than trusting docs.
+discovered:
+  dmstatus.version: 3
+  dmstatus.impebreak: 1
+  dmstatus.hasresethaltreq: 0     # halt-on-reset unavailable on this DUT
+  hartinfo.nscratch: 2            # DM uses dscratch0/1 -- see known_deviations
+  abstractcs.progbufsize: 8
+  abstractcs.datacount: 2
+
+implemented:
+  - abstract_access_register
+  - program_buffer
+  - system_bus_access
+  - halt_groups
+  - triggers_sdtrig
+
+absent:
+  - quick_access                  # command cmdtype=1
+  - abstract_access_memory        # command cmdtype=2
+  - hart_array                    # hasel / hawindow
+  - zawrs                         # so wrs.sto / wrs.nto rows are rtl-unsupported
+
+# Places the RTL and the spec disagree. Every entry must name where it was
+# raised. A deviation recorded here and nowhere else is a bug being buried.
+known_deviations:
+  - id: DEV-SBCS-001
+    field: sbcs.sbaccess
+    observed: "0x20160808"
+    expected: "0x20140808"
+    note: >-
+      Hardwired at dm_csrs.sv:618 in the 10x riscv-dbg fork; not present in
+      pulp-platform upstream. Regression introduced by PR #4.
+    raised: "10x-Engineers/riscv-dbg PR #4 (pending)"
+
+  - id: DEV-WFI-STEP-001
+    field: csr_regfile.sv wfi_ctrl
+    observed: "hart stalls on a stepped wfi; dmstatus.allrunning stays 1"
+    expected: "stepped wfi treated as a nop (Sdext #stepbit)"
+    note: >-
+      wfi_ctrl arms the stall without checking dcsr.step. Fixed by gating on
+      !dcsr_q.step.
+    raised: "openhwgroup/cva6#3549 (duplicate of #3497, PR #3525)"
+
+# Scenarios known to abort before reaching their verdict, so coverage from them
+# is partial. Stating this stops a coverage number being read as complete.
+partial_scenarios:
+  - name: sba_uvm
+    reason: "aborts on DEV-SBCS-001; sbcs/sb_access covergroups stay at 0%"
+  - name: halt_uvm
+    reason: "aborts on DEV-SBCS-001"
+  - name: hart_selection_uvm
+    reason: "aborts on a dmstatus model/RTL mismatch (0x0080c083 vs 0x0080cc83)"

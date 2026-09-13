@@ -1,472 +1,5344 @@
-# RISC-V Debug Specification v1.0.0-rc3 — Verification Test Plan
+# RISC-V Debug Specification — Verification Test Plan — v1.0
 
-This test plan is derived directly from the RISC-V Debug Specification v1.0.0-rc3 (Frozen). It is organized the way the spec itself is: starting from *why* debug support exists (Background, #1.4), then *what* capabilities serve those reasons (the operations a debugger can perform, per Ch.2's System Overview and Ch.3's own introductory list), and only then the concrete registers and protocol elements that implement each capability. A single table carries all three layers so that scanning any one column shows what's covered from that angle, and scanning a full row shows how intention, feature, and mechanism fit together.
+> **Generated document — do not edit by hand.**
+> Source of truth is `testplans/generated/testplan.yaml`; this file is rendered
+> from it by `debug-testplan/scripts/render_markdown.py`. Edits here are lost on
+> the next render.
 
-This is a **skeleton pass**: every row below is populated at the feature/mechanism-name level, but no `TC-ID` test-case rows exist yet. Those get added incrementally, one CAT2 feature at a time, in the exact `TC-ID | Test Description | Stimulus/Scenario | Expected Result/Check | Priority` table format used for each mechanism once that pass begins, matching the reference test-plan conventions this project has already established.
+Derived from the ratified [RISC-V Debug Specification v1.0](https://docs.riscv.org/reference/debug/v1.0/index.html). Every row carries
+the verbatim normative sentence it tests and a citable spec anchor.
 
-## Scope and Methodology
+- **Generated:** 2026-09-13
+- **DUT profile:** `cva6-10x-fork`
+- **Behaviours:** 515  |  **Test items:** 1279  |  **Total weight:** 171.55
 
-### Verification categories
+## Status of this document
 
-- **Directed tests**: explicit register-write/read sequences verifying each field as specified. Covers all mandatory behaviours and documented enumerations.
-- **Constrained-random tests**: randomised hart selection, command sequences, trigger configurations, and system-bus access patterns with functional coverage collection driving closure.
-- **Corner-case tests**: boundary values, concurrent operations, reset during active debug, unavailable harts, maximum chain lengths.
-- **Negative tests**: illegal command sequences, unsupported register accesses, authentication-bypass attempts, wrong-privilege accesses.
-- **Assertion-based checking**: SVA properties embedded in DUT bind modules to catch protocol violations cycle-accurately.
+**Nothing in this plan has been run.** Every item reads `Not started` and every
+*Final Remarks* cell is empty. Those two columns are where the plan earns its
+keep — a failure recorded against a test item, with the issue it was filed as, is
+the audit trail. A row with no stimulus behind it is a *specification*, not
+coverage.
 
-### Priority scheme
+Rows are generated candidates: summaries are the spec sentence verbatim rather
+than written objectives, behaviours still need merging where several describe one
+thing, and field-value variants still need demoting to coverage bins.
 
-| Priority | Meaning |
-|---|---|
-| P0 | Must-pass. Blocks tapeout. |
-| P1 | Should-pass. Required for compliance. |
-| P2 | Recommended. Corner case / robustness. |
-| P3 | Optional / advanced feature. |
+## Method
 
-### DUT assumptions
+Each behaviour is one normative sentence, decomposed into the verification
+activities it needs — **Stimulate** to drive it, **Check** to verify the outcome,
+**Cover** to close the value space. Which apply follows from the RFC 2119 modality,
+so priority and milestone are derived rather than hand-assigned:
 
-Written generically — these are placeholders to be confirmed per actual DUT, not fixed for any one implementation (this plan itself stays architecture-neutral; per-DUT specifics belong in that DUT's own integration config, per `INTEGRATION_GUIDE.md`):
-
-- DUT implements the JTAG DTM (IR width ≥ 5, IDCODE present).
-- `PROGBUF_SIZE` and `DATA_COUNT` are DUT-configurable; confirm actual values before writing Program-Buffer/Abstract-Command TC-IDs.
-- Confirm which Sdtrig trigger types (`mcontrol`/`mcontrol6`, `icount`, `itrigger`, `etrigger`, `tmexttrigger`) are implemented via `tinfo` before writing Trigger Module TC-IDs.
-- SBA block presence and supported access widths (8/16/32/64/128-bit) are DUT-configurable; confirm via `sbcs.sbaccess*` bits.
-- Authentication is optional; test only if `HAS_AUTHENTICATION=1` for that DUT.
-
-## Feature Traceability Table (CAT1 | CAT2 | CAT3)
-
-**CAT1 (intention)** is the use case from #1.4 Background. **CAT2 (feature)** is the operation/capability from Ch.2's System Overview and Ch.3's own introductory numbered list of DM operations (Required/Optional tags are the spec's own). **CAT3 (mechanism)** is the concrete register/protocol element that implements that feature, with its spec citation.
-
-Underlying every row: the JTAG Debug Transport Module (Ch.6 — IDCODE, `dtmcs`, `dmi`, BYPASS) carries every DMI operation listed here; that dependency is noted once here rather than repeated per row, but the DTM/DMI protocol itself gets its own CAT2 row above (and its own `DTM`-prefixed TC-IDs below) since the protocol layer's own behavior — sticky busy/error, `nextdm` chaining, IR/DR shift lengths — is directly testable and is the cheapest, first thing to verify on any new DUT (per `VERIFICATION_STRATEGY.md`'s phased approach). The JTAG connector pinout (#6.1.7) is physical/mechanical and out of scope for a functional test plan.
-
-| CAT1 (intention, #1.4) | CAT2 (feature) | CAT3 (mechanism) |
+| Modality | Activities | Priority |
 |---|---|---|
-| External debug | DMI register access protocol (op/busy/error, `nextdm` chaining) [Ch.6, underlies every row below] | `dtmcs.dmistat`/`dmireset`/`idle`/`abits`, `dmi.op`/`address`/`data`, `nextdm` (multi-DM chaining pointer) (#3.1, #6.1.4–5) |
-| External debug | Discover DM/implementation info [Ch.3 op 1, Required] | `dmstatus.version`, `confstrptr0-3`/`confstrptrvalid`, `hartinfo` (#3.13 Version Detection, #3.14.1/.3/.9–12) |
-| External debug | Version detection — exact spec-mandated procedure [#3.13, own subsection] | `dmcontrol` read/preserve-bits/write/poll sequence, `dmstatus.version` (#3.13) |
-| External or native debug | Halt / resume individual hart [Ch.3 op 2, Required] | `dmcontrol.haltreq`/`resumereq`, `dmstatus.allhalted`/`anyhalted`/`allrunning`/`anyrunning` (#3.5, #3.14.2) |
-| External or native debug | Report hart halt status [Ch.3 op 3, Required] | `dmstatus` halt-status bits, `haltsum0-3` (#3.14.1, #3.14.18–21) |
-| External debug (accessing HW with no working CPU; low-level SW debug) | Abstract GPR read/write [Ch.3 op 4, Required] | Access Register abstract command (`cmdtype=0`), `data0-11` (#3.7.1.1, #3.14.14) |
-| Bootstrapping before any executable code path; low-level SW debug | Reset signal / debug from first instruction [Ch.3 op 5, Required] | `dmcontrol.ndmreset`/`hartreset`, `dmstatus.allhavereset`/`anyhavereset`/`ackhavereset` (#3.2, #3.14.2) |
-| Bootstrapping before any executable code path | Halt-on-reset [Ch.3 op 6, Optional] | `dmstatus.hasresethaltreq`, `dmcontrol.setresethaltreq`/`clrresethaltreq` (#3.5, #3.14.1–2) |
-| Debugging low-level software; debugging the OS itself | Abstract access to non-GPR registers (CSRs) [Ch.3 op 7, Optional] | Access Register on CSR `regno`s (#3.7.1.1, Table 4) |
-| Debugging low-level software with no OS present | Program Buffer — execute arbitrary instructions on a halted hart [Ch.3 op 8, Optional] | `progbuf0-15`, `postexec` (#3.8, #3.14.15) |
-| Accessing hardware with minimal intrusion on a running system | Quick Access — run one abstract command without a full halt [Ch.3 op 8 sibling, #3.7.1.2, Optional] | `command` (`cmdtype=1`), implicit haltreq/resumereq around the command (#3.7.1.2) |
-| Debugging the OS itself; debugging processes on an OS | Multi-hart halt/resume/reset (hart array mask) [Ch.3 op 9, Optional] | `hasel`, `hawindowsel`/`hawindow` (#3.3.2, #3.14.4–5) |
-| Debugging low-level software; debugging the OS itself | Memory access from the hart's point of view [Ch.3 op 10, Optional] | Access Memory abstract command (`cmdtype=2`) (#3.7.1.3) |
-| Accessing hardware with no working CPU | Direct System Bus Access [Ch.3 op 11, Optional] | `sbcs`, `sbaddress0-3`, `sbdata0-3` (#3.10, #3.14.22–30) |
-| Debugging the OS itself; debugging processes on an OS | Hart grouping — halt group [Ch.3 op 12, Optional] | `dmcs2.grouptype`/`group`/`hgselect`/`hgwrite` (#3.6, #3.14.17) |
-| Debugging processes on an OS (multi-component sync) | External trigger halt response [Ch.3 op 13, Optional] | `dmcs2.dmexttrigger` + halt-group notification (#3.6, #3.14.17) |
-| Debugging processes on an OS (multi-component sync) | External trigger resume signaling [Ch.3 op 14, Optional] | `dmcs2` resume-group notification (#3.6, #3.14.17) |
-| Debugging processes on an OS (multi-component sync) | Resume group assignment & propagation [Ch.3 op 12 sibling, #3.6, Optional] | `dmcs2.grouptype=1`/`group`/`hgselect`/`hgwrite` (#3.6, #3.14.17) |
-| External debug (IP protection) | Authentication / DM locking [#3.12, own subsection, not in Ch.3's numbered list] | `dmstatus.authenticated`/`authbusy`, `authdata` (#3.12, #3.14.16) |
-| Native debug (per #1.4's own framing) | Hart-side Trigger Module — halt on match [Fig.1 box + #1.5 feature 16] | Ch.5 Sdtrig in full: `tselect`/`tdata1-3`, `mcontrol`/`mcontrol6`, `icount`, `itrigger`, `etrigger`, `tmexttrigger` |
-| External debug (entry) or native debug (from within Debug Mode itself) | Sdext — Debug Mode entry/exit & Core Debug Registers [Ch.4, #4.1–#4.9, own subsection] | `dcsr` (`cause`/`ebreakm/s/u/vs/vu`/`prv`/`v`/`stepie`/`stopcount`/`stoptime`/`mprven`/`nmip`), `dpc`, `dscratch0-1` (#4.1, #4.5, #4.9.1–2) |
-| Debugging low-level software; debugging processes on an OS | Hardware single-step [#1.5 feature 8] | `dcsr.step` (#4.5), `icount` trigger as native-debugger alternative |
-
-## Test Cases
-
-This pass covers every CAT2 row in the Feature Traceability Table above — 161 TC-IDs total across ISA (Sdext debug-mode/core-debug-registers, single-step, Sdtrig trigger module) and non-ISA (DTM/JTAG, DMI protocol, DM registers, run control, abstract commands, program buffer, system bus access, halt/resume groups, authentication) feature areas, plus the four cross-cutting process areas (coverage model, SVA assertions, negative/error-injection, regression tiers). Every row states its directed tests first, then corner-case/negative variants as distinct TC-IDs, per this project's established discipline.
-
-**Be honest about what's behind each TC-ID, since this document only specifies *what* to verify, not that it's all been run.** Only the Reset Control / Run Control cluster (`RC`/`RST`/`HOR`, plus `DMA` and the single-field slice of `HS`) has a live golden model (`src/pydebug/model/predictor.py`), stimulus (`src/pydebug/sequences/*.py`), and recorded simulation runs (CVA6, `testplans/results/run_control_cluster_cva6_2026-07-17.md` then `..._2026-07-25.md` — the later run gets all five scenarios clean against CVA6 for the first time, `run_control` and `reset_control`/`halt_on_reset`/`hart_selection` having been blocked or never wired before) behind it — 23 TC-IDs, closing 88/103 functional-coverage bins for that cluster (measured, not estimated; `cross.hart_state_transition.halted_to_in_reset` is excluded as of 2026-07-25, confirmed unreachable via any stimulus on either DUT — see the later results file). Every other prefix added in this pass (`DTM`, `DMI`, `DHS`, `DIS`, `VER`, the rest of `HS`, `AC`, `QA`, `AM`, `PB`, `SBA`, `MID`, `HG`, `AUTH`, `DCSR`, `SSTEP`, `TRIG`, and the cross-cutting `COV`/`SVA`/`NEG`/`REG` clusters) is a **testplan-level specification with no model or stimulus behind it yet** — `src/pydebug/model/registers.py` only encodes `dmcontrol`/`dmstatus` fields today, so this is a real, stated gap, not a silently-assumed one. Their **Bins** columns state the *intended* combinatorial coverage scope for when a model exists, not a measured count (see `TC-COV-002`). This is exactly the "has a test-plan row, zero stimulus" gap the project's own gap-matrix ranking (in `VERIFICATION_STRATEGY.md`) is built to surface — that document's gap matrix should be re-walked against this expanded table next, rather than assuming everything below is closed because it has a TC-ID.
-
-Every row below carries a **Bins** entry: the count of functional-coverage bins
-(`src/pydebug/model/coverage.py`'s `DebugCoverageModel`) that TC-ID is the
-designated owner of, driving the actual coverage-closure numbers reported per
-section. These were measured, not estimated — replaying each TC-ID's write
-sequence through the golden model and reading back `DebugCoverageModel.report()`.
-
-### Halt / Resume individual hart (Ch.3 op 2, #3.5) — prefix `RC`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-RC-001 | Halt request on a running hart | Select hart, write `dmcontrol.haltreq=1` | Hart halts: `running` deasserted, `halted` asserted; `dmstatus.anyhalted`/`allhalted=1` | 41 (the activation/baseline row — every dmcontrol/dmstatus field's reset-adjacent value, `haltreq×resumereq=h1_r0`, `running→halted` transition) | P0 |
-| TC-RC-002 | Halt request ignored once already halted | With hart halted, write `haltreq=1` again | No effect — spec: "Halted harts ignore their halt request bit" | 0 (idempotency; no new bin — this is an invariant check, not a coverage bin) | P1 |
-| TC-RC-003 | Resume request on a halted hart | Select halted hart, write `dmcontrol.resumereq=1` | Hart resumes: `halted` deasserted, `running` asserted, resume-ack bit set; `dmstatus.allresumeack`/`anyresumeack=1`, `allrunning`/`anyrunning=1` | 14 (`haltreq×resumereq=h0_r1`, `halted→running` transition, `resumereq_x_prior_state=resumereq_when_halted`, mutex bit `one`) | P0 |
-| TC-RC-004 | Resume request ignored on a running hart | With hart running, write `resumereq=1` | No effect — spec: "Resume requests are ignored by running harts" | 4 (`resumereq_x_prior_state=resumereq_when_running`, `all/anyresumeack=0` — the #3.5 asymmetry: resume-ack is cleared even though the request itself is ignored) | P1 |
-| TC-RC-005 | `resumereq` ignored when `haltreq` also set | Write `dmcontrol` with both `haltreq=1` and `resumereq=1` in the same access | `resumereq` has no effect — spec: "resumereq is ignored if haltreq is set" | 1 (`haltreq×resumereq=h1_r1` — the only stimulus that reaches this cross bin) | P1 |
-| TC-RC-006 | Halt/resume response latency | Measure cycles between request and status-bit update | Hart responds in under 1 second (spec bound); typical implementations: a few clock cycles | 0 (cycle-domain property; no meaning in the untimed Python model — SVA-only, see Uncertain bucket below) | P2 |
-| TC-RC-007 | `resumereq` while the hart is in reset | Assert `ndmreset`/`hartreset`, then write `resumereq=1` while still asserted | No effect — the hart is neither halted nor running while in reset, so "resume ack is cleared, halted hart resumes" does not apply; confirm no spurious halt/run transition | 1 (`resumereq_x_prior_state=resumereq_when_in_reset`) | P2 |
-
-### Reset signal / debug from first instruction (Ch.3 op 5, #3.2) — prefix `RST`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-RST-001 | `ndmreset` platform reset | Write `dmcontrol.ndmreset=1`, then `0` | Every hart and platform component except DM/DTM/DMI resets; `dmstatus.ndmresetpending=1` while asserted | 6 (`ndmreset=0/1`, `ndmresetpending=0/1`, `running↔in_reset` transitions, `ndmreset_x_reset_haltreq=assert_rhr0`) | P0 |
-| TC-RST-001 (cont'd) | `haltreq` asserted while a hart is in `ndmreset` | Assert `ndmreset`, write `dmcontrol.haltreq=1` while still in reset, then deassert `ndmreset` | Hart stays reported not-halted while reset is asserted; enters Debug Mode the moment reset deasserts (#3.5: a pending halt request takes effect on reset release) — this is the universally-supported substitute for `TC-HOR-002`'s `setresethaltreq` on any DUT with `hasresethaltreq=0` (both project DUTs), and is what actually owns the `in_reset→halted` transition bin on those DUTs | 1 (`hart_state_transition.in_reset_to_halted`) | P1 |
-| TC-RST-002 | `hartreset` selected-hart reset | Write `dmcontrol.hartreset=1` for the currently selected hart(s), then `0` | Only currently selected hart(s) reset (implementation may reset more; discover via `anyhavereset`/`allhavereset` on other harts) | 3 (`hartreset=1`, `halted→in_reset` transition, `dmcontrol` read-back/WARL discovery) | P1 |
-| TC-RST-003 | `havereset` set regardless of reset cause | Trigger reset via each cause the DUT supports (`ndmreset`, `hartreset`, external reset if present) | `dmstatus.anyhavereset`/`allhavereset` becomes set after each, regardless of which cause was used | 4 (`all/anyhavereset=1`, `havereset_x_ackhavereset=noack_when_set` — proves stickiness) | P1 |
-| TC-RST-004 | `ackhavereset` clears the sticky bit | After a reset, write `dmcontrol.ackhavereset=1` for the selected hart(s) | `dmstatus.anyhavereset`/`allhavereset` clears for those harts | 5 (`ackhavereset=1`, `all/anyhavereset=0`, `havereset_x_ackhavereset=ack_when_set`) | P0 |
-| TC-RST-005 | DMI access restrictions while reset is asserted | While `ndmreset` (or external reset) is asserted, attempt DMI operations other than `dmcontrol` read/write and `ndmresetpending` read | Behavior for other accesses is UNSPECIFIED per spec — check does not hang/crash the DM, not a specific value | 0 (UNSPECIFIED by spec; see Uncertain bucket) | P2 |
-| TC-RST-006 | `ackhavereset` when `havereset` is already clear (no-op) | Write `dmcontrol.ackhavereset=1` for a hart whose `havereset` is already 0 | No effect — must be a harmless no-op, not an error | 1 (`havereset_x_ackhavereset=ack_when_clear`) | P2 |
-
-### Halt-on-reset (Ch.3 op 6, #3.5, optional) — prefix `HOR`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-HOR-001 | Discover halt-on-reset support | Read `dmstatus.hasresethaltreq` | If 0, mechanism not implemented — remaining `HOR` cases are N/A for this DUT, not failures | 2 (`hasresethaltreq=0/1` — the gate itself) | P0 (gate) |
-| TC-HOR-002 | `setresethaltreq` causes halt-on-reset | Write `dmcontrol.setresethaltreq=1` for selected hart, then assert/deassert reset (any cause). The write itself now always happens (2026-07-25), gated only for the functional halt assertion, so `setresethaltreq=1` write-coverage and the `ndmreset_x_reset_haltreq=assert_rhr1`/`deassert_rhr1` bins close on every DUT regardless of `hasresethaltreq` | Hart enters Debug Mode immediately on reset deassertion, regardless of reset cause — checked only when `hasresethaltreq=1`; on both project DUTs (`hasresethaltreq=0`) the write still happens but the functional check is N/A, and `in_reset→halted` is instead owned by `TC-RST-001 (cont'd)`'s universally-supported `haltreq`-during-reset path | 3 (`setresethaltreq=1`, `ndmreset_x_reset_haltreq=assert_rhr1`/`deassert_rhr1`; `in_reset→halted` moved to `TC-RST-001 (cont'd)`) | P1 |
-| TC-HOR-003 | `clrresethaltreq` clears the request | After `setresethaltreq=1`, write `clrresethaltreq=1` before the next reset. Same "always write, gate only the functional check" pattern as `TC-HOR-002` (2026-07-25) | Hart does *not* halt on the next reset deassertion — checked only when `hasresethaltreq=1`, N/A otherwise | 2 (`clrresethaltreq=1`, `ndmreset_x_reset_haltreq=deassert_rhr0` — this bin is shared proof that `clrresethaltreq` worked) | P1 |
-| TC-HOR-004 | Per-hart independence | With two harts selected differently (one `setresethaltreq`, one untouched), reset both | Only the configured hart halts on reset; the other's behavior is undisturbed — the specific reason `set`/`clrresethaltreq` are split into two write-only bits | 2 (`hartsel=nonzero`/`max_implemented` — this is the only TC-ID that selects a hart other than 0) | P2 |
-| TC-HOR-005 | Illegal simultaneous bit writes (negative) | Write `dmcontrol` with more than one of `{resumereq, hartreset, ackhavereset, setresethaltreq, clrresethaltreq}` set to 1 at once | Spec requires at most one such bit per write; confirm the DUT's documented/defined handling and that DM state is not corrupted | 1 (`dmcontrol_mutex_bits=multiple`) | P2 |
-
-### Keep-alive (`dmcontrol.setkeepalive`/`clrkeepalive`, #3.14.2, optional) — prefix `KA`
-
-Confirmed present in this project's exact targeted spec tag (`riscv/riscv-debug-spec` **v1.0.0-rc3**, checked directly against that tag's `xml/dm_registers.xml`, 2026-07-25) — resolves the previously-open "was keepalive added after rc3?" question below and in the Uncertain bucket. Same optional, write-only-discovery status as `set`/`clrresethaltreq`: `keepalive` cannot be read back (#3.14.2), and neither `registers.py`/`predictor.py` nor `dmstatus` model/report a `keepalive` hart-state field, so there is no functional golden-model behavior to check beyond "the DM survives the write."
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-KA-001 | `setkeepalive`/`clrkeepalive` discovery probe | Write `dmcontrol.setkeepalive=1`, read back, then write `dmcontrol.clrkeepalive=1`, read back | DM remains alive (`dmactive=1`) throughout both writes — discovery-only, no readable `keepalive` state to assert on (#3.14.2) | 2 (`setkeepalive=1`, `clrkeepalive=1`) | P2 |
-
-### DM Activation (`dmactive`) — prefix `DMA`
-
-Not a Ch.3-numbered operation in its own right, but every other row in this
-document depends on it, and it was a genuine coverage gap: no TC-ID above ever
-writes `dmactive=0` even though #3.14.2 prescribes a specific known-state
-recovery sequence for it.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-DMA-001 | Deactivate resets DM to defaults | Write `dmcontrol.dmactive=0` | All DM state (including authentication) returns to reset values; `dmactive` is the only bit guaranteed writable to something other than reset while inactive | 1 (`dmactive=0`) | P1 |
-| TC-DMA-002 | Known-state reset sequence | Write 0 → poll until 0 → write 1 → poll until 1 (spec's own documented procedure, #3.14.2 dmactive) | DM reaches a known-good state; usable as a shared precondition fixture for every other suite in this document | 0 (procedural; no new bin beyond TC-DMA-001/existing `dmactive=1`) | P1 |
-
-### Hart Selection (`hasel`, `hartsello`, `hartselhi`) — prefix `HS`
-
-Ch.3 op 9's mechanism (`hasel`), tested here at the single-field level; the
-hart-array-mask register content itself (`hawindowsel`/`hawindow`) is a
-separate, not-yet-started slice.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-HS-001 | `HARTSELLEN` discovery (WARL) | Write all-1s across the full 20-bit `hartsello`+`hartselhi` field, read back | Only the implemented low `HARTSELLEN` bits stick — the spec's own documented discovery method | 2 (`hartsel=all_ones`, `hartselhi_nonzero`) | P0 |
-| TC-HS-002 | Nonexistent hart index selected | Write `hartsel` to an index beyond the DUT's implemented hart count | `dmstatus.anynonexistent`/`allnonexistent` set for that selection | 3 (`hartsel=nonexistent`, `all/anynonexistent=1`) | P1 |
-| TC-HS-003 | `hasel` discovery write | Write `hasel=1`, read back | 1 if the hart-array-mask register is implemented, 0 (WARL-tied) otherwise — per spec: "should set this bit and read back to see if the functionality is supported" | 1 (`hasel=1`) | P2 |
-
-### Report hart halt status (Ch.3 op 3, #3.4/#3.14.1) — prefix `DHS`
-
-`allhalted`/`anyhalted`/`allrunning`/`anyrunning` themselves are already exercised as a side effect of every `RC` TC-ID above; this cluster is what's left — the summary/aggregate mechanisms (`haltsum0-3`) and the two states beyond halted/running (`nonexistent`, `unavail`) that `RC` never touches.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-DHS-001 | `haltsum0` reflects the halted-hart bitmap | Halt a known subset of harts (via `RC`'s `TC-RC-001` per hart), read `haltsum0` | Bit `i` of `haltsum0` set iff hart `i` (within the current 32-hart window) is halted, matching `dmstatus.anyhalted` for that same selection | 2 (`haltsum0` all-clear / at-least-one-bit-set) | P1 |
-| TC-DHS-002 | `haltsum1`–`haltsum3` window selection (>32 harts, gated) | Read `dmstatus`-adjacent hart count; if ≤32 harts implemented, mark N/A. Otherwise write `hawindowsel`-equivalent select field and read `haltsum1`/`haltsum2`/`haltsum3` | Each level correctly summarizes the next-lower level's all-zero/any-set state for its window, per #3.14.19–21 | 1 (gate: N/A vs. exercised) | P2 |
-| TC-DHS-003 | `anynonexistent`/`allnonexistent` for an out-of-range hart | Cross-reference: covered by `TC-HS-002` (Hart Selection) — not re-tested here to avoid duplication, since it's the same stimulus and the same bit | n/a | 0 (see `TC-HS-002`) | — |
-| TC-DHS-004 | `anyunavail`/`allunavail` set for an unavailable hart | Drive a hart into an implementation-defined "unavailable" state (DUT-specific — e.g. powered down, held in a non-DM reset domain); read `dmstatus` | `anyunavail`/`allunavail` set for that hart's selection | 2 (`anyunavail`/`allunavail` = 0/1) | P2 — confirmed N/A on both current SoC integrations: `CVA6-fork/corev_apu/tb/ariane_testharness.sv` and `ibex-demo-system/rtl/system/ibex_demo_system.sv` both hardwire the DM's `unavailable_i` input to constant 0 (checked directly against RTL, 2026-07-25), so this state is structurally unreachable via any DMI stimulus on either DUT, not just unimplemented; excluded in `coverage.py`/`covergroups.sv` with this citation |
-| TC-DHS-005 | `stickyunavail` latches through a transient unavailable→available transition | With `stickyunavail=1` (DUT-configurable, #3.14.1), drive a hart unavailable then available again, read `dmstatus.allunavail` before `ackunavail` | `allunavail` remains 1 across the transition — this is what "sticky" means | 1 (`stickyunavail=1` path) | P2 — CVA6 now reports `stickyunavail=1` (`dut_configs/cva6.json`, closed via riscv-dbg-vip#117/#128/#131); Ibex still reports 0. The `stickyunavail=1` capability bit itself is exercised (Pass C, `test_coverage_and_assertions.py`), but the full unavailable→available transition still needs `TC-DHS-004`'s hart-availability drive mechanism, which is N/A on both DUTs per that row — so this remains blocked on the same root cause, not stickyunavail's config value |
-| TC-DHS-006 | `ackunavail` clears only currently-available harts | With one hart unavailable and one available-but-previously-unavailable (sticky bit set), write `dmcontrol.ackunavail=1` for both via a hart-array-mask selection | Sticky bit clears for the now-available hart only; the still-unavailable hart's bit is unaffected (conditional-clear semantics, #3.14.2 `ackunavail`) | 2 (`ack_when_available`, `ack_when_still_unavailable`) | P2 — write-only half (the `ackunavail=1` write itself, DM stays alive) now closed via a discovery probe in `reset_ctrl_sequence.py` (2026-07-25); the full conditional-clear semantics above still needs `TC-DHS-004`'s hart-availability mechanism, which is N/A on both current DUTs — see that row |
-
-### Discover DM/implementation info (Ch.3 op 1, #3.13/#3.14) — prefix `DIS`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-DIS-001 | `confstrptrvalid` gates `confstrptr0-3` | Read `dmstatus.confstrptrvalid` | If 0, `confstrptr0-3` content is meaningless (spec leaves it unspecified) — remaining rows below are N/A for this DUT unless `confstrptrvalid=1` | 1 (gate) | P1 (gate) |
-| TC-DIS-002 | `confstrptr0-3` read (config string pointer), gated by `TC-DIS-001` | With `confstrptrvalid=1`, read all four `confstrptr` registers | Concatenated value is a valid pointer to the DUT's configuration string per #3.14.9–12 — DUT-specific content, check only that the four registers read consistently across repeated reads | 1 (`confstrptrvalid=1` path) | P2 |
-| TC-DIS-003 | `hartinfo.nscratch`/`dataaddr`/`datasize`/`dataaccess` discovery | Read `hartinfo` for the selected hart | Fields report the DUT's actual scratch-register/memory-mapped-`data` configuration (WARL-adjacent, read-only) — used later by Abstract Command TC-IDs that fall back to memory-mapped `data0-11` | 4 (`dataaccess=0` register-backed / `=1` memory-backed, `nscratch=0`/`nonzero`) | P1 |
-| TC-DIS-004 | Per-hart `hartinfo` independence | Read `hartinfo` for two different `hartsel` values (if the DUT implements >1 hart with heterogeneous config) | Each hart's `hartinfo` may legitimately differ — confirm the read tracks `hartsel`, not a single DM-wide value | 1 (`hartinfo` varies across `hartsel`) | P2 |
-
-### Version detection — exact procedure (#3.13, own CAT2 row) — prefix `VER`
-
-Distinct from `TC-DMA-002`'s known-state *reset* sequence: this is the spec's documented procedure for a debugger encountering a DM in an **unknown prior state** (first contact), which must not clobber whatever the DM was already doing.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-VER-001 | Version read without disturbing prior DM state | Read `dmcontrol` first (do not write), then read `dmstatus.version` without ever writing `dmactive` | `version` is readable and non-`custom`/non-`0.11`-for-this-project even before this debugger session ever activates the DM itself — proves version discovery doesn't require a write | 1 (pre-activation `version` read) — same bin as `RC`'s pre-activation baseline step, cited here for the CAT2 row's own traceability | P0 |
-| TC-VER-002 | `version=0` (no DM present) is distinguishable | Point the same read at a DMI address with no DM behind it (if the platform has one) or use the "before first `dmactive` write" window | Reading all-zero / `version=0` is treated as "no Debug Module," not as a valid DM reporting v0.11-equivalent | 1 (`version=0`) | P2 — platform-dependent; see Uncertain if no such address exists on either project DUT |
-
-### JTAG Debug Transport Module (Ch.6, #6.1) — prefix `DTM`
-
-Cheapest, first thing to verify on any new DUT (per `VERIFICATION_STRATEGY.md`'s phased approach) — everything above depends on this layer working. No TC-IDs here touch `dmcontrol`/`dmstatus` content; they only prove the transport carrying those registers is sound.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-DTM-001 | IDCODE read after TAP reset | Force TAP to Test-Logic-Reset, shift IR to select IDCODE, shift out DR | IDCODE read back matches the DUT's known manufacturer/part/version encoding, LSB=1 (#6.1.1) | 1 | P0 |
-| TC-DTM-002 | IR width covers all defined instructions (≥5 bits) | Shift IR through every value 0..2^IRLEN−1 | DTMCS/DMI/BYPASS/IDCODE all remain selectable; no illegal-IR value corrupts DR shift length | 1 (IR width sufficiency) | P0 |
-| TC-DTM-003 | BYPASS mode single-bit shift | Select BYPASS instruction, shift a known bit pattern through DR | DR behaves as exactly one bit of delay — output matches input shifted by one TCK | 1 | P1 |
-| TC-DTM-004 | `dtmcs.version`/`abits` discovery | Select DTMCS instruction, read DR | `version` reports the DTM's spec version (0.11 vs 1.0 encodings differ); `abits` reports the actual DMI address width implemented | 2 (`version`, `abits` values) | P0 |
-| TC-DTM-005 | `dtmcs.idle` — DUT-required idle cycles are honored | Read `dtmcs.idle`, then run exactly that many Run-Test/Idle cycles between DMI scans (not more, not fewer) | DMI operations complete without spurious busy/error, confirming the debugger-side driver actually reads and respects this field rather than hardcoding a guess | 1 | P1 |
-| TC-DTM-006 | `dtmcs.dmireset` clears sticky DMI error | Force a sticky DMI error (see `TC-DMI-004` below), then write `dtmcs.dmireset=1` | Sticky error state clears; subsequent DMI operations proceed normally | 1 | P1 |
-| TC-DTM-007 | `dtmcs.dmihardreset` resets the DTM itself | Write `dtmcs.dmihardreset=1` mid-session (with a pending or stuck DMI operation) | DTM returns to its power-on state; in-flight DMI operation is abandoned rather than silently completed — DM-side state (`dmcontrol`/`dmstatus`) is unaffected, since this resets the DTM, not the DM | 1 | P2 |
-
-### DMI Protocol (#3.1, #6.1.5) — prefix `DMI`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-DMI-001 | `dmi.op=0` (nop) round trip | Issue a DMI nop | No register side effect; `data`/`address` from the previous operation are returned per #6.1.5's documented nop semantics | 1 | P1 |
-| TC-DMI-002 | `dmi.op=1` (read) valid address | Read a known-implemented DMI address (e.g. `dmstatus`) | Correct register content returned, `op` on readback indicates success | 1 | P0 |
-| TC-DMI-003 | `dmi.op=2` (write) valid address round trip | Write then read back a known R/W DMI register (`dmcontrol`) | Written value observed on next read (modulo WARL/W1 fields' own documented behavior, tested per-register above) | 1 | P0 |
-| TC-DMI-004 | Access to an unimplemented DMI address | Issue `dmi.op=1`/`2` at an address the DUT does not implement | Sticky error indicated per #6.1.5 (not silently accepted as a no-op with success status) — this is the fixture `TC-DTM-006` clears | 1 | P1 |
-| TC-DMI-005 | Sticky busy under back-to-back scans with insufficient idle | Issue two DMI operations with fewer than `dtmcs.idle` Run-Test/Idle cycles between them | Second operation reports sticky busy; the *first* operation's result is not corrupted/lost — sticky specifically so a debugger that didn't poll can still tell something needs retrying | 1 | P1 |
-| TC-DMI-006 | Batched-scan-with-injected-failure (named use case, #6.1.5) | Queue a multi-operation batch (e.g. write `progbuf0-3` then issue an abstract command) without checking status after each individual scan, deliberately forcing one intermediate scan to hit busy | The sticky error correctly identifies that *some* operation in the batch failed; the debugger can distinguish "all succeeded" from "one failed" without having polled every step — the specific design intent #6.1.5 documents for making busy/error sticky rather than per-transaction | 1 | P1 |
-| TC-DMI-007 | `nextdm` chaining (multi-DM platform only) | On a platform implementing more than one DM, read the first DM's `nextdm`-equivalent pointer | Value correctly identifies the DMI base address of the next DM in the chain; N/A on a single-DM platform (both project DUTs) | 1 | P3 — mark N/A on single-DM DUTs |
-
-### Multi-hart halt/resume/reset — hart array mask (Ch.3 op 9, #3.3.2) — prefix `HS` (continues from `TC-HS-003`)
-
-`TC-HS-003` already proves `hasel` itself is discoverable; these rows exercise the actual hart-array-mask register content and the simultaneous multi-hart operations it exists for.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-HS-004 | `hawindowsel` selects a 32-hart window | Write `hawindowsel` across its implemented range, read back | Only the DUT's actually-implemented window-select bits stick (WARL, discovery pattern mirrors `TC-HS-001`) | 1 | P1 |
-| TC-HS-005 | `hawindow` bit-to-hart mapping | With `hasel=1` and a given `hawindowsel`, write a single bit of `hawindow`, read back | Bit `i` of `hawindow` maps to hart `(hawindowsel × 32 + i)` per #3.3.2 — confirmed via a walking-one pattern across the register | 1 | P0 |
-| TC-HS-006 | Simultaneous multi-hart halt via mask | Set `hasel=1`, mark two harts in `hawindow`, write a single `haltreq=1` | Both marked harts halt from one request (`dmstatus.allhalted` true for that pair) — the actual value-add over single-hart `hartsel` | 1 | P0 |
-| TC-HS-007 | Simultaneous multi-hart resume via mask | With both harts halted (`TC-HS-006`), write a single `resumereq=1` | Both marked harts resume together | 1 | P0 |
-| TC-HS-008 | Hart outside the mask is undisturbed (independence proof) | Repeat `TC-HS-006` with a third hart deliberately left unmarked in `hawindow` | The unmarked hart's halt/run state is unaffected — the write-isolation discipline this project already applies to Features 4/6 in `VERIFICATION_STRATEGY.md`, here at the register-mask level instead of the constrained-random level | 1 | P1 |
-| TC-HS-009 | `hawindow` write does not disturb `hartsel` | Write `hawindow`, then read `dmcontrol.hartsel` | `hartsel` (the single-hart selector) is unchanged — proves the two selection mechanisms (`hartsel` vs. `hasel`/`hawindow`) are independent registers, not aliased | 1 | P2 |
-
-### Abstract Command: Access Register — GPR + CSR (Ch.3 op 4/7, #3.7.1.1) — prefix `AC`
-
-Baseline assumption stated once here, not per row: hart is halted before every `AC` row below unless the row is itself testing what happens when it isn't (`TC-AC-008`).
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-AC-001 | GPR read via Access Register (mandatory) | Access Register command, `cmdtype=0`, `transfer=1`, `write=0`, `regno`=GPR encoding, for each of `x0`–`x31` | Correct register content returned in `data0` (widened per `aarsize` for `x0`/`ra`/`sp` spot checks); `cmderr=0` | 32 (one per GPR) | P0 |
-| TC-AC-002 | GPR write + read-back (mandatory) | Access Register `write=1` with a known pattern, then `write=0` read-back, for each of `x0`–`x31` | Written value observed on read-back, except `x0` which must read back 0 regardless of what was written (base-ISA invariant, worth its own directed check) | 32 | P0 |
-| TC-AC-003 | `aarsize` WARL discovery | Attempt Access Register at each of the spec's defined `aarsize` encodings (8/16/32/64/128-bit) | Sizes the DUT's XLEN doesn't support report `cmderr=2` (not supported); supported sizes complete with `cmderr=0` | 5 (one per `aarsize` encoding) | P1 |
-| TC-AC-004 | Register write-isolation | Write `x1` via Access Register, then read `x2` | `x2` unchanged — write-isolation discipline for the `data0-11`/`regno`-indexed register group | 1 | P1 |
-| TC-AC-005 | CSR access is optional — discovered by attempting it, not by querying capability | Access Register on a `regno` mapping to a CSR | `cmderr=0` with correct CSR content if implemented; `cmderr=2` if not — either is a pass, per the Design Rationale Notes callout above; only a hang or a wrong value is a failure | 1 (implemented) + 1 (unsupported, `cmderr=2`) | P1 |
-| TC-AC-006 | `cmderr=1` (busy) — new command issued while one is in flight | Issue an Access Register command, then issue a second one before the first's `abstractcs.busy` clears | Second command is rejected with `cmderr=1`; first command's result is not corrupted | 1 | P1 |
-| TC-AC-007 | `cmderr=3` (exception) — the transfer itself traps | Access Register on a `regno`/CSR combination that causes an exception on the hart (e.g. a CSR the current privilege mode cannot access) | `cmderr=3`, hart remains halted in Debug Mode, no side effect beyond the reported error | 1 | P1 |
-| TC-AC-008 | `cmderr=4` (halt/resume) — command issued on a running hart | Resume the hart (`OP8`/`TC-RC-003`), then issue an Access Register command before halting again | `cmderr=4` — Access Register requires the target hart to be halted first | 1 | P1 |
-| TC-AC-009 | `cmderr` is sticky until acknowledged | After forcing any `cmderr≠0` above, issue a fresh valid Access Register command without first clearing `cmderr` | New command is rejected (or `cmderr` remains the stale value) until the debugger explicitly acknowledges/clears it per #3.7.1's documented `cmderr`-clear procedure | 1 | P1 |
-| TC-AC-010 | `postexec` triggers Program Buffer execution after the register transfer | Access Register with `postexec=1`, `progbuf0-N` pre-loaded (forward reference to `PB` cluster below) | Register transfer completes, then the Program Buffer executes immediately afterward, in the same command | 1 (cross-references `TC-PB` cluster) | P1 |
-| TC-AC-011 | `abstractauto.autoexecdata` triggers automatic command re-issue | Set `abstractauto.autoexecdata` bit for `data0`, then perform a plain DMI access to `data0` | The Access Register command automatically re-executes on that `data0` touch — the batch-register-dump acceleration path | 1 | P2 |
-| TC-AC-012 | `aarpostincrement` auto-increments `regno` | Access Register with `aarpostincrement=1`, issue twice in a row without rewriting `regno` | Second transfer targets `regno+1` automatically — confirms the auto-increment sweep path used for bulk GPR dumps | 1 | P2 |
-| TC-AC-013 | `abstractcs.datacount`/`progbufsize`/`impebreak` discovery | Read `abstractcs` | Reports the DUT's actual `data0-11` count and Program Buffer size — every later `PB`/`AC` row that assumes a minimum size must first confirm it here, not hardcode it | 3 (`datacount`, `progbufsize`, `impebreak`) | P0 (gate) |
-
-### Abstract Command: Quick Access (Ch.3 op 8 sibling, #3.7.1.2, Optional) — prefix `QA`
-
-Quick Access is a self-contained implicit halt→command→resume, intended for minimally-intrusive single-command debugging of a running hart — the mechanism `VERIFICATION_STRATEGY.md`'s OP18 composite scenario re-runs alongside `AC` (non-halting) and `SBA`.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-QA-001 | Quick Access on a running hart | With hart running, issue `command` (`cmdtype=1`) | Hart is implicitly halted, the pre-loaded Program Buffer executes, hart implicitly resumes — all without the debugger issuing separate `haltreq`/`resumereq` | 1 | P1 |
-| TC-QA-002 | Quick Access disturbance bound | Time the running hart's execution gap during `TC-QA-001` | Disturbance is within the spec's documented "hundred or less cycles" bound — SVA/cycle-domain check, not meaningful in an untimed model (mirrors `TC-RC-006`'s treatment) | 0 (cycle-domain; SVA-only, see Uncertain) | P2 |
-| TC-QA-003 | Quick Access is unavailable/rejected while `haltreq` is asserted | Assert `haltreq`, then issue Quick Access | `cmderr` reports the documented rejection rather than a corrupted double-halt sequence | 1 | P2 |
-| TC-QA-004 | Quick Access `cmderr=2` when unsupported | On a DUT that doesn't implement Quick Access, issue `command` (`cmdtype=1`) | `cmderr=2` — same discovery-by-attempting discipline as CSR access in `TC-AC-005` | 1 | P1 |
-
-### Abstract Command: Access Memory (Ch.3 op 10, #3.7.1.3, Optional) — prefix `AM`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-AM-001 | Physical memory read via Access Memory | `command` (`cmdtype=2`), `write=0`, address in `arg1`/`data1` | Correct memory content returned in `data0` | 1 | P1 |
-| TC-AM-002 | Memory write + read-back | `write=1` with a known pattern, then `write=0` read-back at the same address | Written value observed on read-back | 1 | P1 |
-| TC-AM-003 | `aamsize` WARL discovery | Attempt Access Memory at each defined `aamsize` encoding | Unsupported widths report `cmderr=2`; supported widths complete with `cmderr=0` — mirrors `TC-AC-003`'s discovery discipline for `aarsize` | 5 | P1 |
-| TC-AM-004 | `aampostincrement` auto-increments the address | Two consecutive Access Memory reads with `aampostincrement=1`, same base address written once | Second transfer targets `address + aamsize` automatically — the bulk-memory-dump acceleration path | 1 | P2 |
-| TC-AM-005 | `aamvirtual` address translation (MMU-present DUTs only) | Access Memory with `aamvirtual=1` at a mapped virtual address vs. `aamvirtual=0` at the equivalent physical address | Both resolve to the same underlying memory content; N/A on an MMU-less DUT | 2 (`virtual`, `physical`) | P2 — mark N/A if no MMU |
-| TC-AM-006 | `cmderr=3` on a bad address | Access Memory at an unmapped or misaligned address | `cmderr=3`, hart remains halted, no side effect beyond the reported error | 1 | P1 |
-| TC-AM-007 | `cmderr=2` on unsupported `aamvirtual`/size combination | Attempt a combination the DUT documents as unsupported | `cmderr=2` — discovery-by-attempting, same discipline as `TC-AC-005`/`TC-AM-003` | 1 | P2 |
-
-### Program Buffer (Ch.3 op 8, #3.8, Optional) — prefix `PB`
-
-`abstractcs.progbufsize`/`impebreak` discovery is `TC-AC-013`'s job, not repeated here — every row below assumes that gate already ran.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-PB-001 | `progbuf0-15` write/read-back | Write a distinct pattern to each implemented `progbufN` (per `TC-AC-013`'s `progbufsize`), read back | Values observed unchanged | `progbufsize` (typically ≤16) | P0 |
-| TC-PB-002 | Register write-isolation across `progbuf0-15` | Write `progbuf0`, then read `progbuf1` | `progbuf1` unchanged — write-isolation, same discipline as `TC-AC-004` | 1 | P1 |
-| TC-PB-003 | Execute a simple instruction sequence via `postexec` | Load a short instruction sequence ending in `ebreak`/`c.ebreak` into the Program Buffer, trigger via Access Register `postexec=1` (`TC-AC-010`) | Sequence executes on the halted hart; hart re-enters Debug Mode at the `ebreak` | 1 | P0 |
-| TC-PB-004 | `progbufsize=1` ⇒ `impebreak=1` minimal configuration | On a DUT reporting `progbufsize=1`, confirm `abstractcs.impebreak=1` and execute a one-instruction sequence with no explicit `ebreak` | Hart returns to Debug Mode correctly even though the single buffer slot held no room for an explicit `ebreak` — the specific accommodation #3.8 documents this field pairing for | 1 | P1 — N/A if `progbufsize>1` |
-| TC-PB-005 | Exception mid-Program-Buffer execution | Load a sequence whose middle instruction traps (e.g. an illegal instruction or a memory access to an unmapped address) | `cmderr=3`, execution stops at the faulting instruction, hart remains halted in Debug Mode with partial-execution state observable — not a hang, not a silent skip | 1 | P1 |
-| TC-PB-006 | `dpc` save/restore discipline around Program Buffer execution | Read `dpc` before triggering Program Buffer execution, execute a sequence, read `dpc` again afterward | `dpc` is restored to its pre-execution value once back in Debug Mode (or is documented UNSPECIFIED during execution itself, per #4.9.2) — a directed check, not just "dpc is readable," per the Design Rationale Notes callout above | 1 | P1 |
-
-### Direct System Bus Access (Ch.3 op 11, #3.10, Optional) — prefix `SBA`
-
-Value proposition over Program Buffer: minimal-impact access to a system that may still be running, plus reaching devices a hart itself cannot address (Design Rationale Notes above) — `TC-SBA-008` is where that's actually proven, not assumed.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-SBA-001 | `sbcs` discovery (`sbversion`/`sbasize`/`sbaccess8-128`) | Read `sbcs` | Reports the DUT's actual SBA version, address width, and supported access widths — gate for every row below | 1 (gate) | P0 (gate) |
-| TC-SBA-002 | Read via `sbaddress`+`sbreadonaddr` | Set `sbcs.sbreadonaddr=1`, write `sbaddress0` | Read auto-triggers; result appears in `sbdata0` without a separate read command | 1 | P0 |
-| TC-SBA-003 | Write via `sbdata` | Write `sbaddress0`, then write `sbdata0` | Value observed at that system-bus address on next read | 1 | P0 |
-| TC-SBA-004 | `sbautoincrement` auto-increments `sbaddress` | Two consecutive accesses with `sbautoincrement=1` | Second access targets `address + access_width` automatically | 1 | P2 |
-| TC-SBA-005 | `sbreadondata` triggers streaming auto-read | Set `sbcs.sbreadondata=1`, read `sbdata0` twice in a row | Second read auto-triggers the next bus read (with autoincrement if also set) — the streaming-read acceleration path | 1 | P2 |
-| TC-SBA-006 | `sberror` sticky error, cleared by write | Attempt an access to an unmapped/misaligned system-bus address | `sbcs.sberror` sets and stays set (sticky) until explicitly cleared; subsequent accesses are held per #3.10's documented recovery procedure | 1 | P1 |
-| TC-SBA-007 | `sbbusy`/`sbbusyerror` — access while busy | Access `sbcs`/`sbdata` while a prior SBA transaction is still in flight (`sbbusy=1`) | `sbbusyerror` sets; the in-flight transaction itself is not corrupted | 1 | P1 |
-| TC-SBA-008 | SBA works while the hart is running | With the target hart left running (not halted), issue an `SBA` read/write to a memory location the hart is not currently touching | Access completes correctly without requiring `haltreq` — the specific value proposition over Program Buffer that #3.10 documents; if this row is skipped, SBA's differentiator over `AC`/`PB` is never actually verified | 1 | P0 |
-| TC-SBA-009 | Multi-word address/data (`sbaddress0-3`/`sbdata0-3`) | On a DUT with `sbasize`/access width wider than one DMI register, exercise the higher-order `sbaddress1-3`/`sbdata1-3` registers | Multi-word value assembled/disassembled correctly across the register set; N/A on a DUT whose `sbasize` fits in `sbaddress0` alone | 1 | P2 — N/A if `sbasize` ≤32 |
-
-### Minimally intrusive debugging (composite) (#3.11) — cross-cutting, no dedicated register — prefix `MID`
-
-Not a new mechanism — the spec explicitly groups non-halting `AC`/`AM` transfers, `QA`, and `SBA` (all already covered above) as jointly answering "how do I debug a hart I can barely afford to stop." This cluster's only job is to prove the *combination* holds, not to re-verify any one of them again.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-MID-001 | Back-to-back non-halting access with disturbance bound | Re-run `TC-AC-001` (non-halting variant, if the DUT supports register transfer without a full halt), `TC-QA-001`, and `TC-SBA-008` back-to-back on a hart running a known instruction stream | The hart's own instruction stream is undisturbed beyond each mechanism's documented bound (zero for non-halting `AC`/SBA, "hundred or less cycles" for Quick Access, per `TC-QA-002`) — checked via an independent monitor on the hart's execution, not just the debug-side transaction status | 1 | P1 |
-
-### Hart grouping — halt group / resume group / external trigger (Ch.3 op 12/13/14, #3.6, Optional) — prefix `HG`
-
-A multi-component system-level scenario, not a RISC-V-only one (Design Rationale Notes above) — several rows below need an External Trigger Agent standing in for a non-RISC-V core or off-chip signal, the same agent `VERIFICATION_STRATEGY.md`'s `OP12` flow uses.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-HG-001 | Halt-group support discovery | Read/write `dmcs2.hgselect`/`grouptype` | Reports whether halt groups are implemented at all — gate for the rest of this cluster | 1 (gate) | P0 (gate) |
-| TC-HG-002 | Assign a hart to a halt group | `hgselect=0` (halt-group addressing), write `group`+`hgwrite=1` for a selected hart | Hart's halt-group membership readable back via `group` | 1 | P1 |
-| TC-HG-003 | Halt-group propagation | With two harts in the same halt group (`TC-HG-002` ×2), halt only one via `haltreq` | The other hart in the same group also halts, without its own `haltreq` ever being written — the actual point of grouping | 1 | P0 |
-| TC-HG-004 | Halt-group isolation (independence proof) | Repeat `TC-HG-003` with a third hart deliberately left in a different group | The third hart is unaffected — same write-isolation discipline as `TC-HS-008` | 1 | P1 |
-| TC-HG-005 | Assign a hart to a resume group | `hgselect=1` (resume-group addressing), write `group`+`hgwrite=1` | Hart's resume-group membership readable back | 1 | P1 |
-| TC-HG-006 | Resume-group propagation | With two harts in the same resume group, all halted, resume only one via `resumereq` | The other hart in the same resume group also resumes | 1 | P0 |
-| TC-HG-007 | External trigger halt-group notify | External Trigger Agent asserts a trigger line assigned (via `dmexttrigger`) to halt group N | Every hart in group N halts in response — the multi-component-sync use case #3.6 documents | 1 | P1 |
-| TC-HG-008 | External trigger resume-group notify | External Trigger Agent asserts a trigger line assigned to resume group N, harts pre-halted | Every hart in resume group N resumes in response | 1 | P1 |
-| TC-HG-009 | Halt-group and resume-group membership are independent | Assign a hart to halt group 1 and resume group 2 (different numbers) | Both memberships hold independently — a hart's halt-group assignment does not imply the same resume-group assignment | 1 | P2 |
-
-### Authentication / DM locking (#3.12, Optional) — prefix `AUTH`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-AUTH-001 | `authenticated=0` blocks DM operations | Before completing the DUT's authentication handshake, attempt `haltreq`/Access Register/any non-authentication DMI operation | Operation is blocked or has no observable effect — the IP-protection intent #3.12 exists for | 1 | P0 |
-| TC-AUTH-002 | `authenticated=0` still permits `dmstatus`/`authdata` access | With `authenticated=0`, read `dmstatus` and read/write `authdata` | Both remain reachable — the two things that must stay accessible in order to authenticate at all | 1 | P0 (gate) |
-| TC-AUTH-003 | Authentication handshake round trip | Drive the DUT's documented challenge/response sequence through `authdata` | `dmstatus.authenticated` transitions 0→1; DM operations blocked by `TC-AUTH-001` now succeed | 1 | P0 |
-| TC-AUTH-004 | `authbusy` during in-progress computation | Read `authdata`/`authenticated` while the DUT's authentication algorithm is still computing a response | `authbusy=1`; debugger is expected to poll rather than treat a mid-computation read as a final answer | 1 | P1 |
-| TC-AUTH-005 | Failed authentication attempt | Drive an incorrect challenge/response | `authenticated` remains 0; DM stays locked; no crash/hang/lockout side effect from the failed attempt itself | 1 | P1 |
-| TC-AUTH-006 | Re-locking (if supported) | On a DUT that supports deasserting authentication after a successful handshake, do so, then retry a blocked operation | Operation is blocked again — confirms locking isn't a one-time gate that's forgotten after the first success | 1 | P2 — N/A if the DUT has no re-lock mechanism |
-
-### Sdext — Debug Mode entry/exit & Core Debug Registers (Ch.4, #4.1–#4.9) — prefix `DCSR`
-
-Both perspectives apply here (per `VERIFICATION_STRATEGY.md`'s Sdext native-debugging strategy section): most of this cluster is reached through the DM's Access Register command (external), but `TC-DCSR-010`/`011` are specifically about what happens *without* a debugger attached at all.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-DCSR-001 | `dcsr.cause` reports the correct Debug Mode entry reason | Enter Debug Mode via each distinct cause the DUT supports (`ebreak`, trigger match, `haltreq`, single-step, halt-on-reset, halt-group) | `dcsr.cause` reports the specific cause each time — a debugger reconstructing "why did I stop" depends entirely on this field being accurate per-cause, not just present | 6 (one per entry cause) | P0 |
-| TC-DCSR-002 | `dpc` holds the correct PC at Debug Mode entry, per cause | Same entry causes as `TC-DCSR-001`, read `dpc` each time | `dpc` matches the expected PC for that specific entry mechanism (e.g. the `ebreak` instruction's own address for the `ebreak` cause) | 6 | P0 |
-| TC-DCSR-003 | `dscratch0-1` are private Debug-Mode scratch registers | Write `dscratch0`/`dscratch1` while halted, resume, re-halt, read back | Values preserved across a resume/halt cycle without disturbing any GPR — the mechanism a debugger uses for temporary storage without corrupting hart state | 2 | P1 |
-| TC-DCSR-004 | `ebreakm`/`s`/`u`/`vs`/`vu` gate `ebreak`'s Debug-Mode-entry behavior, per privilege mode | For each implemented privilege mode X, set `ebreakX=1`, execute `ebreak` in mode X | Hart enters Debug Mode (`dcsr.cause=ebreak`) only for modes with their bit set — re-verified per mode separately, not once generically, since implementations may gate this per-mode differently | 5 (one per mode) | P0 |
-| TC-DCSR-005 | `prv`/`v` save/restore around Debug Mode entry/exit | Enter Debug Mode from each implemented privilege mode / virtualization state, read `dcsr.prv`/`v`, resume | Previous privilege and virtualization state is correctly saved on entry and restored on resume, for every implemented mode | 5 (one per mode) | P0 |
-| TC-DCSR-006 | `stepie` gates interrupts during single-step | Set `stepie=0` vs `1`, single-step (`SSTEP` cluster below) with a pending enabled interrupt | With `stepie=0`, the interrupt is masked for the stepped instruction; with `1`, the interrupt may be taken instead — confirm whichever behavior the DUT implements is internally consistent, not undefined | 2 | P1 |
-| TC-DCSR-007 | `stopcount`/`stoptime` freeze counters/timer while halted | Set `stopcount=1`/`stoptime=1`, halt for a known duration, resume, read the relevant counter/timer CSR | Counter/timer did not advance while halted; with the bits `0`, it did | 2 | P2 |
-| TC-DCSR-008 | `mprven` gates `MPRV` effect during Debug Mode memory access | With `mprven=0` vs `1`, perform a Debug-Mode memory access while `mstatus.mprv=1` | `MPRV`'s effect on the access's effective privilege is applied only when `mprven=1` — DUT-assumption-dependent, per the Design Rationale Notes callout above | 2 | P2 |
-| TC-DCSR-009 | `nmip` visible while halted | Force an NMI-pending condition, halt, read `dcsr.nmip` | Bit correctly reflects the pending NMI without it having actually been taken (hart is halted) | 1 | P2 |
-| TC-DCSR-010 | Debug-Mode-CSR isolation boundary (`NATIVE-OP7`, negative test) | From ordinary (non-Debug-Mode) native code, attempt to read/write `dcsr`/`dpc`/`dscratch0-1` | Illegal instruction exception — these CSRs are genuinely unreachable outside Debug Mode, which is *why* native single-step must route through `icount` instead (`TC-SSTEP-005` below) rather than a DUT-specific implementation detail | 3 (`dcsr`, `dpc`, `dscratch0/1`) | P0 |
-| TC-DCSR-011 | `ebreakX=0` — native breakpoint exception, per mode (`NATIVE-OP1`) | For each implemented mode X with `ebreakX=0`, execute `ebreak` in mode X from native (non-Debug-Mode) code | Ordinary `Breakpoint` exception (`mcause=3`) taken to the mode's own trap handler — Debug Mode is never entered; this is the native side of the same field `TC-DCSR-004` tests from the external side | 5 (one per mode) | P0 |
-
-### Single Step (#4.5, `dcsr.step`, Appendix B.3.1) — prefix `SSTEP`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-SSTEP-001 | External single-step — exactly one instruction | Set `dcsr.step=1`, resume | Hart executes exactly one instruction, then re-halts with `dcsr.cause=step` | 1 | P0 |
-| TC-SSTEP-002 | Single-step across a taken branch/jump | Step onto a taken branch/jump instruction | `dpc` on re-halt is the branch **target**, not the sequential next PC — confirms the step logic tracks actual control flow, not `pc+4`/`pc+2` | 1 | P0 |
-| TC-SSTEP-003 | Single-step onto an instruction that itself traps | Step an instruction that raises an exception (e.g. illegal instruction, page fault) | Trap is taken correctly; `dcsr.cause=step` bookkeeping and the trap handler's own entry do not corrupt each other — this is the scenario the Appendix B.3.1 heuristic (`TC-SSTEP-004`) exists to make safe | 1 | P1 |
-| TC-SSTEP-004 | PC-change-or-side-effect invariant (Appendix B.3.1) | Across a representative instruction mix (arithmetic, load/store, branch/jump, trap-causing), single-step each and classify | Every instruction either changes the PC or has side effects, but never both — the invariant the debugger-side double-step-on-trap-restart logic depends on; a directed test confirming it holds (or documents a DUT where it doesn't), per the Design Rationale Notes callout | 1 | P1 |
-| TC-SSTEP-005 | Native single-step via `icount` (`NATIVE-OP3`) | From native code (no DM attached), configure an `icount` trigger with `count=1` in the current privilege mode, execute one instruction | Trigger fires after exactly one instruction, taken as a trap to the native handler — the documented native-debugger alternative to `dcsr.step`, which `TC-DCSR-010` proves is otherwise unreachable | 1 | P0 |
-| TC-SSTEP-006 | `icount` count>1 sweep (native) | Configure `icount` with `count=2,4,16` | Trigger fires after exactly that many instructions each time, not one-off — boundary-value sweep on the count field rather than a single sampled value | 3 | P1 |
-
-### Sdtrig — Trigger Module, external + native (Ch.5, #5.1–#5.7.18) — prefix `TRIG`
-
-Both perspectives converge on the same registers (per `VERIFICATION_STRATEGY.md`'s Trigger Module strategy sections): `action=1`/`dmode=1` is the external hardware-breakpoint path (Debug Mode entry), `action=0`/`dmode=0` is the native path (ordinary trap to the ISA-level handler) — most rows below are written once and note which `action` value each variant needs, rather than duplicating the whole row per perspective. **Shared baseline unless a row states otherwise**: `tdata1.m/s/u/vs/vu = 1/0/0/0/0` (M-mode only), `tcontrol.mte = 1`.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Bins | Priority |
-|---|---|---|---|---|---|
-| TC-TRIG-001 | `tinfo` enumerates supported trigger types | Read `tinfo` for each `tselect` index | Reports exactly the trigger types this DUT implements (`mcontrol`/`mcontrol6`/`icount`/`itrigger`/`etrigger`/`tmexttrigger`) — gate for every row below that assumes a specific type exists | 6 (one bit per type) | P0 (gate) |
-| TC-TRIG-002 | `tselect` trigger-count discovery | Write `tselect` across its full range, read back (WARL) | Only indices for implemented triggers stick — same discovery discipline as `TC-HS-001`'s `HARTSELLEN` | 1 | P0 |
-| TC-TRIG-003 | Write-0-then-configure sequencing | Reconfigure an already-armed trigger: write `tdata1=0` first, then `tdata2`/`tdata3`, then `tdata1` last | No spurious match fires mid-reconfiguration — a procedural/ordering hazard, not a value-based corner case, called out on its own per the skill's sequencing-hazard discipline | 1 | P0 |
-| TC-TRIG-004 | `tdata1`/`tdata2`/`tdata3` write-isolation | Write `tdata2` for trigger index N, then read `tdata1`/`tdata3` for the same index | Neither is disturbed — write-isolation for the `tselect`-indexed register triple, same discipline as `TC-AC-004`/`TC-PB-002` | 1 | P1 |
-| TC-TRIG-005 | `mcontrol`/`mcontrol6` address match, external (`action=1`, `EXT-TRIG-OP3`) | Configure `execute=1`, `tdata2`=target address, `dmode=1`, `action=1`; execute that address natively | Hart enters Debug Mode, `dcsr.cause=trigger`, `tdata1.hit` set on the matching trigger | 1 | P0 |
-| TC-TRIG-006 | `mcontrol`/`mcontrol6` address match, native (`action=0`, `NATIVE-OP2`) | Same configuration as `TC-TRIG-005` but `dmode=0`, `action=0` | Ordinary `Breakpoint` exception taken to the native trap handler; Debug Mode never entered | 1 | P0 |
-| TC-TRIG-007 | Data watchpoint (`load=1`/`store=1`), both perspectives | Configure a data watchpoint at a target address, both `action=1` and `action=0` variants, trigger via a native load/store to that address | External variant halts into Debug Mode; native variant traps to the handler — same mechanism as `TC-TRIG-005`/`006`, different access type | 2 (`action=0`, `action=1`) | P0 |
-| TC-TRIG-008 | `match` mode sweep with boundary values | For each documented `match` encoding (equal / NAPOT / greater-or-equal / less-than / masked-bits) implemented, sweep `tdata2` at target−1/target/target+1 | Each mode fires exactly on its own documented boundary — a separate TC-ID and boundary sweep per mode, not one test at the reset-default mode | 5 modes × 3 boundary values = 15 | P0 |
-| TC-TRIG-009 | `timing` field — before vs. after the matching instruction | Configure `timing=0` (before) and `timing=1` (after) variants of the same address match | `dpc`/trap PC on entry differs by exactly one instruction between the two — confirms the DUT actually implements the distinction rather than always firing at one fixed point | 2 | P1 |
-| TC-TRIG-010 | `select` field — address vs. data comparison | Configure `select=0` (address) and `select=1` (data value) on an `mcontrol`/`mcontrol6` trigger | Trigger fires on address match in one case, data-value match in the other — confirms `select` actually changes what's compared, not just documented intent | 2 | P1 |
-| TC-TRIG-011 | Trigger chaining (`EXT-TRIG-OP9`, `chain` field) | Configure two adjacent trigger indices with `chain=1`, each matching a different address | Neither fires alone; both firing together (in sequence) is required before Debug Mode entry / the native trap occurs | 1 | P0 |
-| TC-TRIG-012 | `icount` external (`action=1`), `count` boundary sweep | Configure `icount` with `dmode=1`, `action=1`, sweep `count=1,2,4,16` | Debug Mode entered after exactly `count` instructions each time — external counterpart to `TC-SSTEP-006`'s native sweep | 4 | P0 |
-| TC-TRIG-013 | `itrigger` — walk the full enabled-interrupt code space | Configure `itrigger` with `tdata2` selecting each implemented interrupt code individually (not just one sampled value) | Fires exactly when the selected interrupt is taken, for every implemented interrupt code — enumerate-the-space discipline, not sample-one-value | implemented interrupt count | P1 |
-| TC-TRIG-014 | `etrigger` — walk the full enabled-exception code space | Configure `etrigger` with `tdata2` selecting each implemented synchronous exception code individually | Fires exactly when the selected exception occurs, for every implemented exception code | implemented exception count | P1 |
-| TC-TRIG-015 | `tmexttrigger` — external trigger source | Configure `tmexttrigger` with `select` choosing a specific TM external-trigger input line; External Trigger Agent asserts that line | Trigger fires only for the selected input line, not others | 1 per implemented input line | P2 |
-| TC-TRIG-016 | Multi-trigger disambiguation via `hit`/`hit0`/`hit1` (`NATIVE-OP5`) | Configure two triggers to both plausibly match the same instruction (e.g. same address, different `select`), fire the event | `hit` bits identify which specific trigger(s) actually fired — `mcause` alone is ambiguous per #5.3; sweeping `tselect` and reading `hit` is the only way to disambiguate | 1 | P1 |
-| TC-TRIG-017 | Trigger firing priority (#5.3, Table 13) | Configure two triggers of different types that could both fire on the same instruction | The documented priority order determines which is reported/acted on first | 1 | P2 |
-| TC-TRIG-018 | `dmode=1` triggers unreachable from non-Debug-Mode writes | From native (non-Debug-Mode) code, attempt to write `tdata1` for a trigger already configured with `dmode=1` | Write has no effect on a `dmode=1` trigger's configuration — protects an external debugger's trigger setup from being clobbered by the program under test, per #5.2's own intent | 1 | P0 |
-| TC-TRIG-019 | Context-scoped trigger (`EXT-TRIG-OP8`/`NATIVE-OP6`, `mcontext`/`scontext`/`hcontext`/`textra32-64`) | Configure a trigger with a context filter (ASID/VMID or process context via `textra32`/`textra64`), execute the matching address under two different context values | Trigger fires only when the current context matches the configured filter — both as an external hardware breakpoint and as an in-kernel native mechanism (mirrors `EXT-TRIG-OP8`/`NATIVE-OP6` exactly, differing only in who configures/consumes it) | 2 (external, native) | P1 |
-| TC-TRIG-020 | `mcontrol6.uncertain`/`uncertainen` — imprecise-match flag | Trigger a memory access the DUT cannot perfectly observe (e.g. a decomposed vector/push/pop access, if V/Zcmp implemented) | `uncertain` sets appropriately rather than every trigger fire being silently treated as precise — the documented false-positive-risk field, per Design Rationale Notes | 1 | P2 — N/A without V/Zcmp |
-| TC-TRIG-021 | `icount.pending` fires on all traps, not just re-executable ones | Configure `icount`, force a trap on the instruction it would have fired on | `pending`/fire behavior treats all traps uniformly per #5.7.13's documented simplification, rather than distinguishing "trap causes re-execution" from "trap doesn't" | 1 | P1 |
-| TC-TRIG-022 | Reentrancy protection during a native trap handler (`NATIVE-OP4`, #5.4) | Determine which of the two spec-permitted schemes the DUT implements (`tcontrol.mte`/`mpte` context save/restore, or hardware interrupt-disable-in-M-mode) — this can't be a single universal TC-ID per the Design Rationale Notes callout — then: re-enter the trap handler recursively via a second trigger match while already inside the first handler | The DUT's chosen scheme prevents runaway reentrant trigger firing, per whichever mechanism it implements | 2 (one per scheme; only one applies per DUT) | P1 |
-| TC-TRIG-023 | Cross-extension interaction — A-extension decomposition | On an A-extension DUT, configure a data watchpoint (`load`/`store`), execute `lr`/`sc`/an AMO at the watched address | `lr` matches as a load, `sc` matches as a store, the AMO matches as both — "as if it were a load/store" is a standing invitation to check every instruction class that qualifies, not just plain `lw`/`sw` | 3 (`lr`, `sc`, `amo`) | P1 — N/A without A-extension |
-
-### Cross-cutting: Coverage Model — prefix `COV`
-
-Not a register area — these rows verify the verification infrastructure itself (`src/pydebug/model/coverage.py`'s `DebugCoverageModel`, `sv/fcov/covergroups.sv`), the same substrate the **Bins** column above reports against.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Priority |
-|---|---|---|---|---|
-| TC-COV-001 | `assert_slice_complete()` passes per closed feature area | Run the full TC-ID suite for a feature area, call `assert_slice_complete()` | Passes, with any residual bins accounted for in that area's own Intentionally-Not-Tested/Uncertain buckets — no silent gap | P0 |
-| TC-COV-002 | Bins column honesty — measured vs. stated scope | Cross-check this document's **Bins** entries against `coverage.py` for areas with a live model (currently `RC`/`RST`/`HOR`/`DMA`/`HS`) | Numbers match exactly (measured, per the note at the top of Test Cases); for every other area added in this pass, the Bins column is explicitly the *intended* combinatorial scope, not yet a measured count, since no model exists for those registers yet — this is a stated, honest gap, not a silent one | P0 |
-| TC-COV-003 | SV covergroups cross-check the Python model | Run the same stimulus against live RTL with `sv/fcov/covergroups.sv` bound, compare reported bin percentages against the Python model's bins for the same operations | Numbers agree (demonstrated repeatedly for the full `run_control`/`reset_control`/`halt_on_reset`/`dm_activation`/`hart_selection` cluster on CVA6 — see `testplans/results/run_control_cluster_cva6_2026-07-25.md`); any divergence is a VIP bug (as `jtag_monitor.sv`'s TDO-sampling gap and `covergroups.sv`'s DMI read-response pipelining bug already were), not a DUT bug | P1 |
-
-### Cross-cutting: SVA Assertions — prefix `SVA`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Priority |
-|---|---|---|---|---|
-| TC-SVA-001 | Protocol-tier SVA (`dmi_assertions.sv`, bound to `jtag_if`) | Drive illegal `dmi_op` sequences, violate sticky busy/error semantics | Assertions fire on the violation, cycle-accurately, independent of whatever the Python-side scoreboard concludes | P0 |
-| TC-SVA-002 | Register-tier SVA (per-DUT `dm_csrs_assertions.sv`, bound to `dm_csrs` internals) | Drive WARZ/WARL/W1 field writes documented in each register's own TC-IDs above (e.g. `dmcontrol.haltreq` WARZ) | Assertion fires on any DUT that violates its own documented field access type — already proven live against CVA6 RTL (a real `haltreq` WARZ violation, see the same results file) | P0 |
-| TC-SVA-003 | Cycle-domain timing properties | `TC-RC-006`'s <1s halt/resume bound, `TC-QA-002`'s "hundred or less cycles" Quick Access disturbance bound | These live exclusively at the SVA tier — the untimed Python model cannot express either; still open per the Uncertain bucket above | P2 |
-
-### Cross-cutting: Negative / Error-Injection Tests — prefix `NEG`
-
-Most negative-test coverage already lives inside each feature area's own TC-IDs (illegal `dmcontrol` mutex-bit writes: `TC-HOR-005`; DMI access during reset: `TC-RST-005`; abstract-command `cmderr` paths: `TC-AC-006`–`009`; unauthenticated access: `TC-AUTH-001`) — not repeated here. This cluster is only what doesn't already have a home in a specific register area.
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Priority |
-|---|---|---|---|---|
-| TC-NEG-001 | Malformed trigger type configuration | Write `tdata1.type` to an encoding the DUT doesn't implement (per `TC-TRIG-001`'s `tinfo` gate) | Write is rejected/WARL-clamped rather than silently accepted and later mismatching `tinfo` | P1 |
-| TC-NEG-002 | Illegal JTAG IR / truncated DR shift | Shift an IR value outside the DUT's defined instruction set, or terminate a DR shift early | DTM does not lock up or corrupt the next legitimate scan — recoverable via TAP reset at worst | P1 |
-
-### Cross-cutting: Regression Tiers — prefix `REG`
-
-| TC-ID | Test Description | Stimulus / Scenario | Expected Result / Check | Priority |
-|---|---|---|---|---|
-| TC-REG-001 | Smoke tier — one representative test per feature area | Run the `smoke` tier | Every feature area above with at least one TC-ID contributes exactly one representative test; tier completes quickly and green before any deeper run | P0 |
-| TC-REG-002 | Static tier — full suite, max coverage | Run the `static` tier | Every TC-ID in this document that has stimulus implemented executes; `assert_slice_complete()` gates closure per area | P0 |
-| TC-REG-003 | Tier-membership integrity | Run the project's tier-integrity check (already implemented per this project's regression harness) | Every test function is tagged into exactly one tier — a test cannot silently fall out of both `smoke` and `static` by omission | P1 |
-
-## Intentionally Not Tested
-
-Structured like the main tables above but with a **Reason** column instead of
-**Priority** — a permanent, documented scope boundary, not a TODO.
-
-| Coverpoint | Reason |
-|---|---|
-| `dmstatus.all_any.*` where `all=0, any=1` (6 pairs: halted, havereset, nonexistent, resumeack, running, unavail) | Requires a selection split across harts — some in the state, some not. With `hasel` tied to 0 (no hart-array-mask register in scope for this slice), there is exactly one currently selected hart, so `all*` and `any*` are always equal. Reachable only once the Hart Selection slice's `HS` prefix grows to cover `hawindowsel`/`hawindow`. |
-| `dmstatus.all_any.*` where `all=1, any=0` (same 6 pairs) | Architecturally impossible — `all_x` implies `any_x` for any non-empty selection (#3.14.1). This is an invariant (`invariants.py`'s `INV-ALL-IMPLIES-ANY`), not a coverage hole; a DUT that ever reports this combination has a bug, not a missing test. |
-| `dmstatus.authbusy=1`, `dmstatus.authenticated=0`, `dmstatus.confstrptrvalid=1` | Belong to the Authentication (#3.12) and "Discover DM/implementation info" (Ch.3 op 1) feature rows respectively — later slices. Run-control stimulus never touches `authdata` or `confstrptr0-3`. |
-| `dmstatus.impebreak=1` | A Program Buffer property (#3.14.1) — Program Buffer is a later slice; no run-control stimulus executes the program buffer. |
-| `dmstatus.allunavail`/`anyunavail=1` and `all_any.unavail` | Both current SoC integrations (`CVA6-fork/corev_apu/tb/ariane_testharness.sv`, `ibex-demo-system/rtl/system/ibex_demo_system.sv`) hardwire the DM's `unavailable_i` input to constant 0 (confirmed against RTL, 2026-07-25) — `unavail` is structurally unreachable via any DMI stimulus on either DUT regardless of `stickyunavail`'s config value. `stickyunavail` itself is no longer in this bucket: CVA6 now reports `stickyunavail=1` (`dut_configs/cva6.json`, closed via riscv-dbg-vip#117/#128/#131) and that capability-bit coverage is real/hit; only the downstream unavailable-hart bins stay excluded, on this `unavailable_i` root cause, not stickyunavail. See `TC-DHS-004`. |
-| `dmstatus.version` = `v0_11` (1) or `custom` (15) | `v0_11` predates the dmcontrol/dmstatus field layout this model encodes entirely — a 0.11 DM would not have these registers at these addresses. `custom` (15) is "not conforming to any available standard" by definition; no spec-derived stimulus can require a DUT to report it, and neither project DUT does. |
-| `dmi_access.write:dmstatus` | Every `dmstatus` field is R (#3.14.1); a write has no spec-defined behaviour. Registered rather than silently dropped so that if stimulus ever *does* write it, the coverage model's excluded-hit mechanism flags that as a stimulus bug. |
-| TC-RC-006 (halt/resume response latency) | #3.5's "less than one second" bound is a cycle-domain property with no meaning in an untimed Python transaction model. Belongs to the SVA tier exclusively — see Uncertain below for whether that SVA property has been written yet. |
-| TC-RST-005 (DMI access restrictions during reset) | The spec's own text is UNSPECIFIED here ("the only supported DM operations are..."; behavior for others isn't defined) — the check is "does not hang/crash," not a specific value, by design. |
-| `dmcontrol.ackunavail` full conditional-clear semantics (`TC-DHS-006`'s `ack_when_available`/`ack_when_still_unavailable` bins) | Needs `TC-DHS-004`'s hart-availability drive mechanism, which is structurally unreachable on both current SoC integrations (`unavailable_i` hardwired to 0, see the `allunavail`/`anyunavail=1` row above) — the write-only half is closed separately (`TC-DHS-006`'s discovery probe). |
-
-## Uncertain
-
-Conceptually valid coverpoints currently blocked by a tooling/environment gap
-or an unresolved spec-version question — revisit later, not a permanent
-exclusion.
-
-| Coverpoint | Blocker |
-|---|---|
-| TC-RC-006's "under 1 second" bound | Needs a cycle-accurate SVA property (not yet written) measuring `haltreq`-to-`allhalted` and `resumereq`-to-`allrunning` latency directly on the DUT; the Python model cannot express it at all. |
-| `dmcontrol.ackunavail` full conditional-clear semantics (`ack_when_available` vs `ack_when_still_unavailable`), and the `unavail`-state `dmstatus` bins it depends on | **Resolved as N/A, not just blocked** (2026-07-25): the write-only half (`ackunavail=1` write-coverage, DM stays alive) is closed via `TC-DHS-006`'s discovery probe. The full semantics above needs `TC-DHS-004`'s hart-availability drive mechanism first, which is confirmed structurally unreachable on both current SoC integrations (`unavailable_i` hardwired to 0) — moved to Intentionally Not Tested rather than left Uncertain, since the blocker is a permanent RTL-integration fact, not a tooling gap that revisits later. |
-
-## Design Rationale Notes
-
-The spec's own italic "why" call-outs carry design intent that plain register field tables lose. These should drive corner-case and negative-test design once TC-IDs are written for the corresponding row above — captured here so the reasoning isn't rediscovered later:
-
-- **Reset Control**: "There is no general, reliable way for the debugger to know when reset has actually begun" (#3.2) — no timing-assertion tests should be written against reset-start latency.
-- **Halt Groups / External Triggers** (#3.6): exist partly to synchronize halting across non-RISC-V cores in the same platform — a multi-component system-level scenario, not a RISC-V-only one.
-- **Abstract Commands** (#3.7): the `cmderr=2` ("not supported") path is load-bearing — e.g. Access Register on GPRs is mandatory but on CSRs is not, and the debugger discovers this by *attempting* the command, not by querying capability up front. `aarsize`/`aamsize` encodings deliberately match `sbaccess` in `sbcs` — worth a cross-section consistency check once both rows have TC-IDs.
-- **Program Buffer** (#3.8): the `progbufsize=1` ⇒ `impebreak=1` requirement exists specifically to accommodate implementations that stuff instructions directly into the pipeline rather than mapping the Program Buffer into address space — a directed test should exist for exactly this minimal-`progbufsize` configuration.
-- **System Bus Access** (#3.10): its value over Program Buffer is minimal-impact access to a *running* system, plus performance and access to devices a hart can't reach — SBA tests should include at least one scenario with the hart left running, not just halted.
-- **Halt-on-reset** (#3.14.2): `setresethaltreq`/`clrresethaltreq` are split into two write-only bits specifically so per-hart halt-on-reset config can change without disturbing other selected harts — a multi-hart corner case worth its own TC-ID.
-- **Debug Mode / `mprven`** (#4.1): recommended tied to 1; if 0, the external debugger must simulate all MPRV effects itself — this is DUT-assumption-dependent and must be parameterized, not hardcoded.
-- **LR/SC** (#4.2): halting between `lr` and `sc` can lose the reservation, so `sc` may never succeed — a documented, *expected* corner case, not a bug. Negative/error-injection testing should confirm this is tolerated, not flagged as a checker error.
-- **`dpc`** (#4.9.2): may become UNSPECIFIED during Program Buffer execution, by design, to allow implementations with no separate PC register — save/restore discipline around Program Buffer execution needs its own TC-ID, not just a "dpc is readable" test.
-- **Sdtrig actions 8–9** (#5.2): intended for custom event counters but may also drive external logic outputs — implementation-defined, flag as DUT-assumption-dependent rather than universally testable.
-- **Native Triggers reentrancy** (#5.4): two competing solutions exist (disable triggers in M-mode with interrupts disabled, vs. `mte`/`mpte` context save/restore) with different limitations — the test plan must ask which one a DUT implements before writing reentrancy tests; this can't be a single universal TC-ID.
-- **`mcontrol6.uncertain`/`uncertainen`** (#5.7.12): exists for triggers that can't perfectly observe every memory access (e.g. vector/push/pop instructions) — explicitly documented as a false-positive risk, so a dedicated test should confirm `uncertain` is set appropriately rather than assuming every trigger fire is precise.
-- **`icount`/`pending`** (#5.7.13): deliberately fires on *all* traps, not just ones where the instruction won't be re-executed, because distinguishing the two cases was judged too complex — a test verifying this "all traps match, no exceptions" rule is directly spec-mandated.
-- **`dmi` sticky busy/error status** (#6.1.5): sticky specifically to support debuggers that batch multiple scans (e.g. writing then executing a Program Buffer) without checking status after each one — a batched-scan-with-injected-failure scenario is a named use case in the spec text itself, not an edge case to invent.
-- **Single-step PC-change heuristic** (Appendix B.3.1): "every RISC-V instruction either changes the PC or has side effects when repeated, but never both" — this invariant is what makes the debugger-side double-step-on-trap-restart logic safe, worth a test that confirms it holds (or documents a DUT where it doesn't).
-
-## Next pass
-
-Done: every CAT2 row in the Feature Traceability Table now has a TC-ID cluster (161 TC-IDs total, see the honesty note at the top of Test Cases) — this document itself is no longer the gap. The gap moved one layer down, to the model/stimulus/RTL-run columns behind each TC-ID, and that's where the next pass belongs:
-
-1. **Extend `src/pydebug/model/registers.py`/`predictor.py`** for the next-highest-leverage cluster before writing its stimulus — per this project's own discipline, stimulus should self-check against a real prediction, not a hardcoded expected value. Candidates in spec order: `DTM`/`DMI` (cheapest, first thing any new DUT needs — no model exists at all yet, not even a register table), then the rest of `HS` (hart-array-mask), then `AC`/`QA`/`AM`/`PB` (abstract commands + program buffer, the next foundational cluster after run control).
-2. **`TRIG`'s 23 TC-IDs are the richest and most valuable cluster to close next** once the foundational clusters above are stable — it's also the one area with an explicit dedicated `VERIFICATION_STRATEGY.md` operation catalog (`EXT-TRIG-OP1-9`, `NATIVE-OP1-7`) already reasoned through from both the external and native-debugging perspectives, so the design work for its stimulus is already done; only the model/predictor and the actual Python+SV sequences remain.
-3. **Re-walk `VERIFICATION_STRATEGY.md`'s gap matrix** against this expanded table — it currently only reflects the pre-this-pass state (`OP1`/`OP11`/`OP14`/`OP20`/`EXT-TRIG-*`/`NATIVE-*` marked "open, new row"); every one of those rows now has a concrete TC-ID cluster here to point at.
-4. Cross-cutting `COV`/`SVA`/`NEG`/`REG` TC-IDs are process checks on the verification infrastructure itself — they become meaningful incrementally, as each feature cluster above gets real model/stimulus/coverage/assertions behind it, not as a standalone pass.
+| `MUST` | Stimulate, Check, Cover | P1 / P2 / P2 |
+| `MUST_NOT` | Check, Cover | P1 / P2 |
+| `CONDITIONAL` | Stimulate, Check, Cover | P1 / P2 / P2 |
+| `SHOULD` | Stimulate, Check | P2 |
+| `SHOULD_NOT` | Check | P2 |
+| `MAY` | Stimulate, Cover | P2 / P3 |
+| `UNSPECIFIED` | Check only — *does not hang*, no asserted value | P3 |
+
+Weight is effort, not importance: a Cover item over a combination space costs more
+to close than a single directed stimulus.
+
+## Summary
+
+| | Stimulate | Check | Cover | Total |
+|---|---:|---:|---:|---:|
+| Items | 459 | 397 | 423 | 1279 |
+
+| Milestone | Items | | Priority | Items |
+|---|---:|---|---|---:|
+| Main | 295 | | P1 | 295 |
+| Full | 834 | | P2 | 834 |
+| Deferred | 150 | | P3 | 150 |
+
+### Coverage by feature area
+
+| Prefix | Area | Behaviours | Items |
+|---|---|---:|---:|
+| `TRIG` | Triggers (Sdtrig) | 178 | 454 |
+| `AC` | Abstract commands | 53 | 135 |
+| `DCSR` | Debug Mode — dcsr/dpc/dscratch | 50 | 122 |
+| `SBA` | System Bus Access | 32 | 84 |
+| `RC` | Run control — halt/resume | 27 | 71 |
+| `GEN` | Unclassified | 29 | 69 |
+| `DTM` | Debug Transport Module | 26 | 58 |
+| `DIS` | Discovery & version detection | 18 | 49 |
+| `SSTEP` | Single-step | 15 | 40 |
+| `DMI` | DMI protocol | 17 | 40 |
+| `HG` | Halt / resume groups | 13 | 39 |
+| `PB` | Program Buffer | 13 | 35 |
+| `RST` | Reset control | 14 | 35 |
+| `HS` | Hart selection & states | 13 | 26 |
+| `AUTH` | Authentication | 5 | 10 |
+| `AM` | Abstract memory access | 9 | 9 |
+| `QA` | Quick Access | 3 | 3 |
+
+---
+
+## TRIG — Triggers (Sdtrig)
+
+### 4.1.5.2. Icount Trigger
+
+**Debuggers that want to disable interrupts while stepping must disable them by changing mstatus, and specially handle instructions that read mstatus. wfi instructions are not treate**
+
+`MUST` · [Sdext.html#stepicount](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepicount) · obligation `OB-B9A3E98D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Systems that only support M-Mode can use icount as well, but count must be able to count several instructions (depending on the software implementation).**
+
+`MUST` · [Sdext.html#stepicount](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepicount) · obligation `OB-D006BECC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.1. Enumeration
+
+**If this results in an illegal instruction exception, then there are no triggers implemented.**
+
+`CONDITIONAL` · [Sdtrig.html#5-1-1-enumeration](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-1-enumeration) · obligation `OB-811A6EBE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If that caused an exception, the debugger must read tdata1 to discover the type. (If type is 0, this trigger doesn’t exist.**
+
+`MUST` · [Sdtrig.html#5-1-1-enumeration](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-1-enumeration) · obligation `OB-90A1E417`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Each trigger may support a variety of features.**
+
+`MAY` · [Sdtrig.html#5-1-1-enumeration](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-1-enumeration) · obligation `OB-B932B7D6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-005-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-005-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### 5.1.2. Actions
+
+**Table 1. action encoding Value Description 0 Raise a breakpoint exception. (Used when software wants to use the trigger module without an external debugger attached.) xepc must con**
+
+`MUST` · [Sdtrig.html#5-1-2-actions](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-2-actions) · obligation `OB-B9D6932F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Since tdata1 is WARL, hardware must prevent it from containing dmode=0 and action=1.**
+
+`MUST` · [Sdtrig.html#5-1-2-actions](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-2-actions) · obligation `OB-F287152E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.3. Priority
+
+**If this is not implemented, then the hart must enter Debug Mode and ignore the breakpoint exception.**
+
+`MUST` · [Sdtrig.html#5-1-3-priority](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-3-priority) · obligation `OB-1FD807EA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**In the latter case, hit of the trigger whose action is 0 must still be set, giving a debugger an opportunity to handle this case.**
+
+`MUST` · [Sdtrig.html#5-1-3-priority](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-3-priority) · obligation `OB-442235EA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-009-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-009-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If more than one of these triggers has action=0 then tval is updated in accordance with one of them, but which one is UNSPECIFIED .**
+
+`UNSPECIFIED` · [Sdtrig.html#5-1-3-priority](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-3-priority) · obligation `OB-5D9818BC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-010-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**When triggers are chained, the priority is the lowest priority of the triggers in the chain.**
+
+`CONDITIONAL` · [Sdtrig.html#5-1-3-priority](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-3-priority) · obligation `OB-8A4EBAA6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If this table contradicts the table in the Privileged Spec, then the latter takes precedence.**
+
+`CONDITIONAL` · [Sdtrig.html#5-1-3-priority](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-3-priority) · obligation `OB-F7FAC044`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If one of these triggers has the "enter Debug Mode" action (1) and another trigger has the "raise a breakpoint exception" action (0), the preferred behavior is to have both actions**
+
+`CONDITIONAL` · [Sdtrig.html#5-1-3-priority](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-3-priority) · obligation `OB-FA5F4F78`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.5.1. A Extension
+
+**If the A extension is supported, then triggers on loads/stores treat them as follows: lr instructions are loads.**
+
+`CONDITIONAL` · [Sdtrig.html#5-1-5-1-a-extension](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-1-a-extension) · obligation `OB-09F6CC19`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-014-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-014-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the destination register of any load or AMO is zero then it is UNSPECIFIED whether a data load trigger will match.**
+
+`UNSPECIFIED` · [Sdtrig.html#5-1-5-1-a-extension](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-1-a-extension) · obligation `OB-97334823`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-015-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**Whether data store triggers match on AMOs is UNSPECIFIED.**
+
+`UNSPECIFIED` · [Sdtrig.html#5-1-5-1-a-extension](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-1-a-extension) · obligation `OB-A989500A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-016-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**It is UNSPECIFIED whether failing sc instructions are stores or not.**
+
+`UNSPECIFIED` · [Sdtrig.html#5-1-5-1-a-extension](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-1-a-extension) · obligation `OB-DF94CEB9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-017-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+### 5.1.5.2. Combined Accesses
+
+**E.g. a vector load should be treated as if it performed multiple loads of size SEW (selected element width), and cm.push should be treated as if it performed multiple stores of siz**
+
+`SHOULD` · [Sdtrig.html#5-1-5-2-combined-accesses](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-2-combined-accesses) · obligation `OB-33C53BBA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-018-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-018-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The Trigger Module should match such accesses as if they all happened individually.**
+
+`SHOULD` · [Sdtrig.html#5-1-5-2-combined-accesses](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-2-combined-accesses) · obligation `OB-CCDDA3DE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-019-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-019-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### 5.1.5.3. Cache Operations
+
+**For the purposes of debug triggers, two classes of cache operations must match as stores: Cache operations that enable software to maintain coherence between otherwise non-coherent**
+
+`MUST` · [Sdtrig.html#5-1-5-3-cache-operations](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-3-cache-operations) · obligation `OB-03F99DF4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-020-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-020-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-020-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Implementations must implement one of the following options.**
+
+`MUST` · [Sdtrig.html#5-1-5-3-cache-operations](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-3-cache-operations) · obligation `OB-EB4F728A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-021-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-021-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-021-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.5.4.1. Invalid Addresses
+
+**For invalid instruction fetch addresses and load and store effective addresses, the compare value may be changed to a different invalid address.**
+
+`MAY` · [Sdtrig.html#5-1-5-4-1-invalid-addresses](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-1-invalid-addresses) · obligation `OB-23BDABB0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-022-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-022-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If tdata2 can hold any invalid addresses, then writes of an invalid address that can not be represented as-is should be converted to a different invalid address that can be represe**
+
+`SHOULD` · [Sdtrig.html#5-1-5-4-1-invalid-addresses](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-1-invalid-addresses) · obligation `OB-934DD1FC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-023-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-023-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**In addition, an implementation may choose to inhibit all trigger matching against invalid addresses, especially if there is no support for storage of any invalid address values in**
+
+`MAY` · [Sdtrig.html#5-1-5-4-1-invalid-addresses](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-1-invalid-addresses) · obligation `OB-FE32BA11`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-024-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-024-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### 5.1.5.4. Address Matches
+
+**An implementation may be able to optimize the storage required, depending on the widest addresses it supports.**
+
+`MAY` · [Sdtrig.html#5-1-5-4-address-matches](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-address-matches) · obligation `OB-1BEE603C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-025-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-025-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If virtual addresses are less than XLEN bits wide, they are sign-extended. tdata2 must be implemented with enough bits of storage to represent the full range of supported physical**
+
+`MUST` · [Sdtrig.html#5-1-5-4-address-matches](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-address-matches) · obligation `OB-2B14D073`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-026-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-026-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-026-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**For address matches without a mask, tdata2 must be able to hold all valid addresses in all supported translation modes.**
+
+`MUST` · [Sdtrig.html#5-1-5-4-address-matches](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-address-matches) · obligation `OB-52E51B4F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-027-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-027-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-027-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If physical addresses are less than XLEN bits wide, they are zero-extended.**
+
+`CONDITIONAL` · [Sdtrig.html#5-1-5-4-address-matches](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-5-4-address-matches) · obligation `OB-5581CFB4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-028-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-028-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-028-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.7. Trigger Module Registers
+
+**Writes to one tdata register must not modify the contents of other tdata registers, nor the configuration of any trigger besides the one that is currently selected.**
+
+`MUST_NOT` · [Sdtrig.html#5-1-7-trigger-module-registers](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-7-trigger-module-registers) · obligation `OB-8BDD4DD9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-029-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-029-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**This means that a debugger must always read back values it writes to tdata registers, unless it already knows what is supported.**
+
+`MUST` · [Sdtrig.html#5-1-7-trigger-module-registers](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-7-trigger-module-registers) · obligation `OB-9B1EC118`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-030-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-030-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-030-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**Code that restores CSR context of triggers that might be configured to fire in the current privilege mode must use this same sequence to restore the triggers.**
+
+`MUST` · [Sdtrig.html#5-1-7-trigger-module-registers](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-7-trigger-module-registers) · obligation `OB-A7C3DDB5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-031-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-031-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-031-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If a debugger writes an unsupported configuration, the register will read back a value that is supported (which may simply be a disabled trigger).**
+
+`MAY` · [Sdtrig.html#5-1-7-trigger-module-registers](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#5-1-7-trigger-module-registers) · obligation `OB-E13BBA70`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-032-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-032-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Exception Trigger (etrigger, at 0x7a1)
+
+**If the breakpoint trap does not go to a higher privilege mode, this will lose CSR information for the original trap.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-0499428E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-033-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-033-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-033-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bit is not implemented, it is always 0 and writing it has no effect.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-19247AC3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-034-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-034-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-034-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If textra32 or textra64 are implemented for this trigger, it only matches when the conditions set there are satisfied.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-57452DA5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-035-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-035-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-035-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**This trigger may fire on up to XLEN of the Exception Codes defined in mcause (described in the Privileged Spec, with Interrupt=0).**
+
+`MAY` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-6BF0589C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-036-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-036-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Hardware may support only a subset of exceptions.**
+
+`MAY` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-A431FA7B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-037-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-037-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When the trigger matches, it fires after the trap occurs, just before the first instruction of the trap handler is executed.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-C9AD34AA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-038-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-038-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-038-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If action=0, the standard CSRs are updated for taking the breakpoint trap, and zero is written to the relevant tval CSR.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-DB29A6E2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-039-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-039-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-039-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**A debugger must read back tdata2 after writing it to confirm the requested functionality is actually supported.**
+
+`MUST` · [Sdtrig.html#csr-etrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-etrigger) · obligation `OB-EE104FDE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-040-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-040-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-040-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Hypervisor Context (hcontext, at 0x6a8)
+
+**If it is implemented, mcontext must also be implemented.**
+
+`MUST` · [Sdtrig.html#csr-hcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-hcontext) · obligation `OB-730B372D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-041-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-041-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-041-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**This optional register may be implemented only if the H extension is implemented.**
+
+`MAY` · [Sdtrig.html#csr-hcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-hcontext) · obligation `OB-8B59ED72`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-042-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-042-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If Smstateen is implemented, then accessibility of in HS-Mode is controlled by mstateenzero[57].**
+
+`CONDITIONAL` · [Sdtrig.html#csr-hcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-hcontext) · obligation `OB-C35B2B26`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-043-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-043-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-043-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Instruction Count (icount, at 0x7a1)
+
+**If more than one of the above events occur during a single instruction execution, the trigger still only matches once for that instruction.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-08418D43`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-044-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-044-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-044-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bit is not implemented, it is always 0 and writing it has no effect.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-08BE3BCD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-045-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-045-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-045-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When count is greater than 1 and the trigger matches, then count is decremented by 1.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-44126EA0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-046-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-046-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-046-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the trigger fires with action=0 then zero is written to the tval CSR on the breakpoint trap.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-5806ECD8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-047-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-047-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-047-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**For use in single step, icount must match for traps where the instruction will not be reexecuted after the handler, such as illegal instructions that are emulated by privileged sof**
+
+`MUST` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-5F2CFA19`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-048-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-048-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-048-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If textra32 or textra64 are implemented for this trigger, it only matches when the conditions set there are satisfied.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-6E4A7155`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-049-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-049-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-049-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When count is 0 it stays at 0 until explicitly written.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-8DEE01F2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-050-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-050-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-050-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When pending is set, the trigger fires just before any further instructions are executed in a mode where the trigger is enabled.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-AFA85424`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-051-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-051-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-051-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When count is 1 and the trigger matches, then pending becomes set.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-icount](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-icount) · obligation `OB-FD888007`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-052-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-052-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-052-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Interrupt Trigger (itrigger, at 0x7a1)
+
+**Hardware may only support a subset of interrupts for this trigger.**
+
+`MAY` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-1C8CD92F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-053-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-053-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the bit is not implemented, it is always 0 and writing it has no effect.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-5E1F7B80`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-054-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-054-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-054-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If textra32 or textra64 are implemented for this trigger, it only matches when the conditions set there are satisfied.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-5FFE2228`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-055-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-055-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-055-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the trigger matches, it fires after the trap occurs, just before the first instruction of the trap handler is executed.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-77CBC2C2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-056-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-056-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-056-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If XLEN is 32, then it is not possible to set a trigger for interrupts with Exception Code larger than 31.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-9A3DE48A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-057-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-057-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-057-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If action=0, the standard CSRs are updated for taking the breakpoint trap, and zero is written to the relevant tval CSR.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-AFE39A9C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-058-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-058-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-058-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**A debugger must read back tdata2 after writing it to confirm the requested functionality is actually supported.**
+
+`MUST` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-BD3D2338`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-059-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-059-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-059-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the breakpoint trap does not go to a higher privilege mode, this will lose CSR information for the original trap.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-itrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-itrigger) · obligation `OB-C501790D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-060-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-060-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-060-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Machine Context (mcontext, at 0x7a8)
+
+**This register must be implemented if hcontext is implemented, and is optional otherwise.**
+
+`MUST` · [Sdtrig.html#csr-mcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontext) · obligation `OB-128AD42B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-061-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-061-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-061-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**An implementation may tie any number of upper bits in this field to 0.**
+
+`MAY` · [Sdtrig.html#csr-mcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontext) · obligation `OB-900643C1`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-062-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-062-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the H extension is implemented, it’s recommended to implement 7 bits on RV32 and 14 bits on RV64.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontext) · obligation `OB-AA5FF870`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-063-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-063-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-063-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the H extension is not implemented, it’s recommended to implement 6 bits on RV32 and 13 bits on RV64 (as visible through the mcontext register).**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontext) · obligation `OB-CE90F8DD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-064-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-064-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-064-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Match Control (mcontrol, at 0x7a1)
+
+**When an implementation supports data value triggers (select=1), it is recommended that those triggers support every access size up to XLEN that the hart supports, as well as for ev**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-017981C2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-065-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-065-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**It is undefined when exactly such a chain fires.**
+
+`UNSPECIFIED` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-10D251F5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-066-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**Debuggers must avoid the latter case by checking chain on the previous trigger if they’re writing mcontrol.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-1F89A3BD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-067-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-067-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-067-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**In addition hardware should ignore writes to mcontrol that set dmode to 1 if the previous trigger has both dmode of 0 and chain of 1.**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-32D66181`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-068-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-068-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**Debuggers should consider this when setting such breakpoints on, for example, memory-mapped I/O addresses.**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-3598F677`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-069-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-069-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**An implementation must support the value of 0, but all other values are optional.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-3CE2B935`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-070-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-070-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-070-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When select=1 and access size is N, this is further reduced, and comparisons only look at the lower N bits of the compare values and of tdata2.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-40C96667`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-071-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-071-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-071-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debuggers should not terminate a chain with a trigger with a different type.**
+
+`SHOULD_NOT` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-4DEC4559`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-072-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Debuggers should only write values to tdata2 such that M + maskmax ≥ XLEN and M > 0, otherwise it’s undefined on what conditions the trigger will match. 2 (ge): Matches when any co**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-54FE9A68`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-073-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-073-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Custom extensions may also support instructions that are wider than XLEN.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-62CDF75E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-074-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-074-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If multiple mcontrol triggers are chained then the faulting virtual address is the address which caused any of the chained triggers to fire.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-63A2C8AF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-075-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-075-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-075-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Hardware may implement the bit fully writable, in which case the debugger has a little more control.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-6F7EAA7A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-076-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-076-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If an instruction matches this trigger and the instruction performs multiple memory accesses, it is UNSPECIFIED which memory accesses have completed before the trigger fires. 1 (af**
+
+`UNSPECIFIED` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-7FACBC59`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-077-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**If this is combined with load and select=1 then a memory access will be performed (including any side effects of performing such an access) even though the load will not update its**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-86F2FD32`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-078-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-078-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-078-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**It is recommended that there are additional compare values for the other accessed virtual addresses. (E.g. on a 32-bit read from 0x4000, the lowest address is 0x4000 and the other**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-89717419`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-079-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-079-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Because chain affects the next trigger, hardware must zero it in writes to mcontrol that set dmode to 0 if the next trigger has dmode of 1.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-99DCB478`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-080-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-080-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-080-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**To accommodate various implementations, execute, load, and store address/data triggers may fire at whatever point in time is most convenient for the implementation.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-9EBF2B70`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-081-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-081-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**For data load triggers, debuggers must first attempt to set the breakpoint with timing of 1.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-A3468DC8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-082-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-082-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-082-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bit is not implemented, it is always 0 and writing it has no effect.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-A8D1452C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-083-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-083-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-083-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Implementations that wish to limit the maximum length of a trigger chain (eg. to meet timing requirements) may do so by zeroing chain in writes to mcontrol that would make the chai**
+
+`MAY` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-B82496D0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-084-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-084-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**WARL 0 timing 0 (before): The action for this trigger will be taken just before the instruction that triggered it is retired, but after all preceding instructions are retired. xepc**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-B8A95BEA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-085-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-085-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-085-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If textra32 or textra64 are implemented for this trigger, it only matches when the conditions set there are satisfied.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-BE5AAD05`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-086-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-086-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-086-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When an implementation supports address triggers (select=0), it is recommended that those triggers support every access size that the hart supports, as well as for every instructio**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-C0E3DB5B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-087-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-087-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**It should be taken before the next instruction is retired, but it is better to implement triggers imprecisely than to not implement them at all. xepc or dpc (depending on action) m**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-CA052A69`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-088-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-088-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-088-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The debugger may request specific timings as described in timing.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-DC9F205D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-089-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-089-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**WARL 0 hit If this bit is implemented then it must become set when this trigger fires and may become set when this trigger matches.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-DF177553`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-090-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-090-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-090-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**That means to implement the suggestions in Table 4, both timings should be supported on load address triggers that can be chained with a load data trigger.**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-E6A338DF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-091-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-091-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If a trigger with timing of 0 matches, it is implementation-dependent whether that prevents a trigger with timing of 1 matching as well.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol) · obligation `OB-F2150C32`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-092-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-092-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-092-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Match Control Type 6 (mcontrol6, at 0x7a1)
+
+**In addition hardware should ignore writes to mcontrol6 that set dmode to 1 if the previous trigger has both dmode of 0 and chain of 1.**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-01DC3821`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-093-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-093-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**An implementation must support the value of 0, but all other values are optional.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-02698A9C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-094-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-094-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-094-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If either of the bits is not implemented, the unimplemented bits will be read-only 0. 0 (false): The trigger did not fire. 1 (before): The trigger fired before the instruction that**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-06C64E07`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-095-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-095-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-095-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**In implementations that support match mode 1 (NAPOT), not all NAPOT ranges may be supported.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-0DC5D424`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-096-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-096-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When an implementation supports address triggers (select=0), it is recommended that those triggers support every access size that the hart supports, as well as for every instructio**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-1132158B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-097-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-097-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If the instruction performed multiple memory accesses, all of them have been completed.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-1698F3A3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-098-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-098-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-098-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Implementations that wish to limit the maximum length of a trigger chain (eg. to meet timing requirements) may do so by zeroing chain in writes to mcontrol6 that would make the cha**
+
+`MAY` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-1ED3D947`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-099-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-099-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**Custom extensions may also support instructions that are wider than XLEN.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-4D3A997B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-100-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-100-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If textra32 or textra64 are implemented for this trigger, it only matches when the conditions set there are satisfied. uncertain and uncertainen exist to accommodate systems where**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-51D2FA20`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-101-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-101-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-101-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debuggers should not terminate a chain with a trigger with a different type.**
+
+`SHOULD_NOT` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-637C9969`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-102-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**While the uncertain mechanism exists to deal with these situations, it can lead to an unusable number of false positives.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-641C3117`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-103-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-103-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-103-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debuggers must avoid the latter case by checking chain on the previous trigger if they’re writing mcontrol6.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-6888F4EE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-104-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-104-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-104-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**In addition, it is recommended that there are additional compare values for the other accessed virtual addresses match. (E.g. on a 32-bit read from 0x4000, the lowest address is 0x**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-8DD1659F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-105-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-105-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Multiple State Change Instructions. xepc or dpc (depending on action) must be set to the virtual address of the instruction that matched. 2 (after): The trigger fired after the ins**
+
+`MUST` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-92A6C8BF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-106-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-106-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-106-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Because chain affects the next trigger, hardware must zero it in writes to mcontrol6 that set dmode to 0 if the next trigger has dmode of 1.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-9AA78A6E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-107-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-107-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-107-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**To accommodate various implementations, execute, load, and store address/data triggers may fire at whatever point in time is most convenient for the implementation.**
+
+`MAY` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-A49F0FED`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-108-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-108-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When an implementation supports data value triggers (select=1), it is recommended that those triggers support every access size up to XLEN that the hart supports, as well as for ev**
+
+`SHOULD` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-B8651EBD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-109-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-109-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If it is not 1 then NAPOT matching is not supported.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-BA42D32B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-110-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-110-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-110-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When select=1 and access size is N, this is further reduced, and comparisons only look at the lower N bits of the compare values and of tdata2.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-BC0EA380`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-111-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-111-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-111-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Implementing this trigger as described here requires that version is 1 or higher, which in turn means tinfo must be implemented.**
+
+`MUST` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-D898401F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-112-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-112-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-112-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**It is undefined when exactly such a chain fires.**
+
+`UNSPECIFIED` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-E61FF669`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-113-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**Suggested Trigger Timings Match Type Suggested Trigger Timing Execute Address Before Execute Instruction Before Execute Address+Instruction Before Load Address Before Load Data Aft**
+
+`MUST` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-E843D8C4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-114-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-114-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-114-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If multiple mcontrol6 triggers are chained then the faulting virtual address is the address which caused any of the chained triggers to fire.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-F416713B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-115-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-115-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-115-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**M is XLEN-1 minus the index of the least-significant bit containing 0 in tdata2. tdata2 is WARL and if bits maskmax6-1:0 are written with all ones then bit maskmax6-1 will be set t**
+
+`UNSPECIFIED` · [Sdtrig.html#csr-mcontrol6](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-mcontrol6) · obligation `OB-FE9F0537`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-116-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+### Supervisor Context (scontext, at 0x5a8)
+
+**An implementation may tie any number of high bits in this field to 0.**
+
+`MAY` · [Sdtrig.html#csr-scontext](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-scontext) · obligation `OB-D6E5BD74`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-117-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-117-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Trigger Control (tcontrol, at 0x7a5)
+
+**When mret is executed, mte is set to the value of mpte.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tcontrol) · obligation `OB-02213F12`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-118-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-118-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-118-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When any trap into M-mode is taken, mte is set to 0.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tcontrol) · obligation `OB-76B6FD7E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-119-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-119-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-119-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When any trap into M-mode is taken, mpte is set to the value of mte.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tcontrol](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tcontrol) · obligation `OB-80D43B2B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-120-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-120-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-120-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Trigger Data 1 (tdata1, at 0x7a1)
+
+**Writing 0 to this register must result in a trigger that is disabled.**
+
+`MUST` · [Sdtrig.html#csr-tdata1](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata1) · obligation `OB-3482D902`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-121-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-121-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-121-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**This is similar to a type 2 trigger, but provides additional functionality and should be used instead of type 2 in newer implementations. 7 (tmexttrigger): The trigger is a trigger**
+
+`SHOULD` · [Sdtrig.html#csr-tdata1](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata1) · obligation `OB-57F58162`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-122-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-122-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**These should not be implemented and aren’t further documented here. 2 (mcontrol): The trigger is an address/data match trigger.**
+
+`SHOULD_NOT` · [Sdtrig.html#csr-tdata1](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata1) · obligation `OB-7268188E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-123-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If this trigger supports multiple types, then the hardware should disable it by changing type to 15.**
+
+`SHOULD` · [Sdtrig.html#csr-tdata1](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata1) · obligation `OB-A01C0FEE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-124-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-124-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**When clearing this bit, debuggers should also set the action field (whose location depends on type) to something other than 1.**
+
+`SHOULD` · [Sdtrig.html#csr-tdata1](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata1) · obligation `OB-BC7D4ECD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-125-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-125-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### Trigger Data 2 (tdata2, at 0x7a2)
+
+**If the trigger is disabled, then this register can be written with any value supported by any of the trigger types supported by this trigger.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tdata2](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata2) · obligation `OB-06A5C122`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-126-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-126-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-126-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If XLEN is less than DXLEN, writes to this register are sign-extended.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tdata2](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata2) · obligation `OB-894F5BEF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-127-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-127-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-127-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+### Trigger Data 3 (tdata3, at 0x7a3)
+
+**If the trigger is disabled, then this register can be written with any value supported by any of the trigger types supported by this trigger.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tdata3](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata3) · obligation `OB-27CAFF80`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-128-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-128-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-128-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If XLEN is less than DXLEN, writes to this register are sign-extended.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tdata3](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tdata3) · obligation `OB-C32A3527`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-129-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-129-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-129-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+### Trigger Extra (RV32) (textra32, at 0x7a3)
+
+**If DXLEN >= 64, then this register provides access to the low bits of each field defined in textra64.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-textra32](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra32) · obligation `OB-0B121B4E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-130-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-130-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-130-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the H extension is not supported, the only legal values are 0 and 4.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-textra32](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra32) · obligation `OB-0C6D659A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-131-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-131-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-131-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If desired, debuggers can use a trigger’s mode filtering bits to restrict the matching to modes where it considers ASID/VMID/scontext/hcontext to be active.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-textra32](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra32) · obligation `OB-3C49DBE0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-132-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-132-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-132-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the next most significant bit of this field is 1, it causes bits 15:8 to be ignored in the comparison, when sselect=1.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-textra32](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra32) · obligation `OB-40D7929B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-133-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-133-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-133-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**This field should be tied to 0 when S-mode is not supported.**
+
+`SHOULD` · [Sdtrig.html#csr-textra32](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra32) · obligation `OB-6FCBFC58`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-134-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-134-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-135-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-135-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Any number of upper bits of mhvalue and svalue may be tied to 0. mhselect and sselect may only support 0 (ignore).**
+
+`MAY` · [Sdtrig.html#csr-textra32](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra32) · obligation `OB-AC832F1C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-136-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-136-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Trigger Extra (RV64) (textra64, at 0x7a3)
+
+**When XLEN=32 some of the bits can be accessed through textra32.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-textra64](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-textra64) · obligation `OB-E70E4574`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-137-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-137-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-137-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Trigger Info (tinfo, at 0x7a4)
+
+**If the currently selected trigger doesn’t exist, this field contains 1.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tinfo](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tinfo) · obligation `OB-E0FCE46E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-138-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-138-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-138-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bit is set, then that type is supported by the currently selected trigger.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tinfo](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tinfo) · obligation `OB-EECB6BC2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-139-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-139-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-139-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Trigger Select (tselect, at 0x7a0)
+
+**Writes of values greater than or equal to the number of supported triggers may result in a different value in this register than what was written or may point to a trigger where ty**
+
+`MAY` · [Sdtrig.html#csr-tselect](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tselect) · obligation `OB-0DE691B9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-140-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-140-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The set of accessible triggers must start at 0, and be contiguous.**
+
+`MUST` · [Sdtrig.html#csr-tselect](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tselect) · obligation `OB-573DC225`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-141-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-141-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-141-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Since triggers can be used both by Debug Mode and M-mode, the external debugger must restore this register if it modifies it.**
+
+`MUST` · [Sdtrig.html#csr-tselect](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tselect) · obligation `OB-AA652C80`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-142-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-142-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-142-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.6. Multiple State Change Instructions
+
+**When they resume execution, they will execute the same instruction once more.**
+
+`CONDITIONAL` · [Sdtrig.html#multistate](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#multistate) · obligation `OB-BC3EEA7F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-143-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-143-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-143-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Alternatively, it may state that partial execution is not allowed, implying that a mid-execution trigger must prevent any architectural state changes from occurring.**
+
+`MUST` · [Sdtrig.html#multistate](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#multistate) · obligation `OB-CBBF5EB9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-144-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-144-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-144-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 5.1.4. Native Triggers
+
+**Debuggers should use other mechanisms to debug these cases, such as patching the handler or setting a breakpoint on the instruction after MIE is cleared.**
+
+`SHOULD` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-0C4BDCDC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-145-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-145-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If etrigger/itrigger is set to trigger on exception/interrupt X and if X is delegated to mode Y then the trigger will cause a breakpoint exception that is taken from mode Y to mode**
+
+`MAY` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-65B84BD6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-146-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-146-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If medeleg [3]=1 and hedeleg [3]=1 then it prevents triggers with action=0 from matching or firing while in VS-mode and while SIE in vstatus is 0. mte and mpte in tcontrol is imple**
+
+`CONDITIONAL` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-72667843`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-147-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-147-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-147-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If medeleg [3]=1 then it prevents triggers with action=0 from matching or firing while in S-mode and while SIE in sstatus is 0.**
+
+`CONDITIONAL` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-779B3232`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-148-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-148-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-148-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**In these cases such a trigger may cause a breakpoint exception while already in a trap handler.**
+
+`MAY` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-B7C020E6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-149-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-149-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Harts that support triggers with action=0 should implement one of the following two solutions to solve the problem of reentrancy: The hardware prevents triggers with action=0 from**
+
+`SHOULD` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-E421E9E5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-150-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-150-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If supported by the hart and desired by the debugger, triggers will often be programmed to have m=0 so that when they fire they cause a breakpoint exception to trap to a more privi**
+
+`CONDITIONAL` · [Sdtrig.html#nativetrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#nativetrigger) · obligation `OB-EBE53751`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-151-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-151-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-151-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Module Control (dmcontrol, at 0x10)
+
+**No other mechanism should exist that may result in resetting the Debug Module after power up.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-01315BF7`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-152-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-152-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Writes to this bit should be ignored while an abstract command is executing.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-07399E10`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-153-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-153-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-154-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-154-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-155-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-155-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-156-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-156-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-157-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-157-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**To place the Debug Module into a known state, a debugger should write 0 to dmactive, poll until dmactive is observed 0, write 1 to dmactive, and poll until dmactive is observed 1.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-2E8AAD38`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-158-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-158-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**When it is set, it suggests that the hardware should attempt to keep the hart available for the debugger, e.g. by keeping it from entering a low-power state once powered on.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-3144B345`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-159-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-159-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The others must be written 0.**
+
+`MUST` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-387C8D06`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-160-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-160-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-160-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**An implementation which does not implement the hart array mask register must tie this field to 0.**
+
+`MUST` · `rtl-unsupported` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-4268BEC1`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-161-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**It must be at least 0 and at most 20.**
+
+`MUST` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-45A50BE4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-162-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-162-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-162-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**While this bit is 1, the debugger must not change which harts are selected.**
+
+`MUST_NOT` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-50A5BF54`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-163-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-163-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**Any accesses to the module may fail.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-59621783`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-164-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-164-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When this value is written, the DM may ignore any other bits written to `dmcontrol` in the same write. 1 (active): The module functions normally.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-60AFAED8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-165-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-165-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**While the spec allows for 20 `hartsel` bits, an implementation may choose to implement fewer than that.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-634284F6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-166-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-166-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**This may cancel outstanding halt requests for those harts.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-6941FBAA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-167-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-167-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The signal should reset every part of the hardware platform, including every hart, except for the DM and any logic required to access the DM.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-7429F88E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-168-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-168-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**On any given write, a debugger may only write 1 to at most one of the following bits: resumereq, hartreset, ackhavereset, setresethaltreq, and clrresethaltreq.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-78B09A4C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-169-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-169-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**W1 - hasel Selects the definition of currently selected harts. 0 (single): There is a single currently selected hart, that is selected by `hartsel`. 1 (multiple): There may be mult**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-7C245867`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-170-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**A debugger which wishes to use the hart array mask register feature should set this bit and read back to see if the functionality is supported.**
+
+`SHOULD` · `rtl-unsupported` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-7DCFCB55`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-171-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**When set to 1, each selected hart will halt upon the next deassertion of its reset.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-8C7C97F1`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-172-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-172-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-172-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Hardware should enforce this by ignoring changes to `hartsel` while busy is set.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-9678E673`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-173-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-173-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**A debugger should discover HARTSELLEN by writing all ones to `hartsel` (assuming the maximum size) and reading back the value to see which bits were actually set.**
+
+`SHOULD` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-A6B5A53C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-174-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-174-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Implementations may pay attention to this bit to further aid debugging, for example by preventing the Debug Module from being power gated while debugging is active.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-AC404D1B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-175-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-175-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**After changing the value of this bit, the debugger must poll dmcontrol until dmactive has taken the requested value before performing any action that assumes the requested dmactive**
+
+`MUST` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-B10A0637`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-176-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-176-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-176-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**During this time, the DM may ignore any register writes. 0 (inactive): The module’s state, including authentication mechanism, takes its reset values (the dmactive bit is the only**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-C9F7A1E5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-177-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-177-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If this feature is not implemented, the bit always stays 0, so after writing 1 the debugger can read the register back to see if the feature is supported.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-E9BB65A9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-178-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-178-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-178-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The debugger must write to clrresethaltreq to clear it.**
+
+`MUST` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-ECF4D772`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-179-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-179-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-179-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debuggers must not change `hartsel` while an abstract command is executing.**
+
+`MUST_NOT` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-F2586FCE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-180-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-180-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**If hasresethaltreq is 0, this field is not implemented.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-F29C40A3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-181-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-181-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-181-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Hardware may take an arbitrarily long time to complete activation or deactivation and will indicate completion by setting dmactive to the requested value.**
+
+`MAY` · [debug_module.html#dm-dmcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcontrol) · obligation `OB-F9D15BA0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-182-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-182-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Triggers
+
+**When a debugger wants to set a trigger, it writes the desired configuration, and then reads back to see if that configuration is supported.**
+
+`CONDITIONAL` · [debugger_implementation.html#triggers](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#triggers) · obligation `OB-F823F66C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-TRIG-183-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-TRIG-183-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-TRIG-183-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## AC — Abstract commands
+
+### 3.1.7. Abstract Commands
+
+**If an abstract command does not complete in the expected time and appears to be hung, the debugger can try to reset the hart (using hartreset or ndmreset).**
+
+`CONDITIONAL` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-0100569D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Commands may fail because a hart is not halted, not running, unavailable, or because they encounter an error during execution.**
+
+`MAY` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-1019002E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-002-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-002-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Example: Every DM must support the Access Register command, but might not support accessing CSRs.**
+
+`MUST` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-2F51C0F3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the command takes arguments, the debugger must write them to the data registers before writing to command.**
+
+`MUST` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-36C3D0F5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**While an abstract command is executing (busy in abstractcs is high), a debugger must not change `hartsel`, and must not write 1 to haltreq, resumereq, ackhavereset, setresethaltreq**
+
+`MUST_NOT` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-3A6DC444`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-005-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-005-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**If an abstract command is started while the selected hart is unavailable or if a hart becomes unavailable while executing an abstract command, then the Debug Module may terminate t**
+
+`MAY` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-4DABD08C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-006-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-006-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the debugger starts a new command while busy is set, cmderr becomes 1 (busy), the currently executing command still gets to run to completion, but any error generated by the cur**
+
+`CONDITIONAL` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-55B5756E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If there is a failure, the interface ensures that no commands execute after the failing one.**
+
+`CONDITIONAL` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-675A96C8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Commands may be supported with some options set, but not with other options set.**
+
+`MAY` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-8698F4F0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-009-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-009-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The hardware should not rely on this debugger behavior, but should enforce it by ignoring writes to these bits while busy is high.**
+
+`SHOULD_NOT` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-88264FCA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**If a command returns results, the Debug Module must ensure they are placed in the data registers before busy is cleared.**
+
+`MUST` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-8EDEE401`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the debugger requests to read a CSR in that case, the command will return "not supported".**
+
+`CONDITIONAL` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-B6DC9B48`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If that doesn’t clear busy, then it can try resetting the Debug Module (using dmactive).**
+
+`CONDITIONAL` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-C0D042EA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Depending on the implementation, the debugger may be able to perform some abstract commands even when the selected hart is not halted.**
+
+`MAY` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-F4A656CF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-014-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-014-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If a command has unsupported options set or if bits that are defined as 0 aren’t 0, then the DM must set cmderr to 2 (not supported).**
+
+`MUST` · [debug_module.html#abstractcommands](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#abstractcommands) · obligation `OB-F6C94C6E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-015-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-015-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-015-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Access Register
+
+**If the failure is that the requested register does not exist in the hart, cmderr must be set to 3 (exception).**
+
+`MUST` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-07AAC19F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-016-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-016-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-016-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If a register is accessible, then reads of aarsize less than or equal to the register’s actual size must be supported.**
+
+`MUST` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-0A06EFC6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-017-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-017-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**It is undefined whether the increment happens when transfer is 0. postexec 0 (disabled): No effect.**
+
+`UNSPECIFIED` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-0B567414`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-018-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**This variant must be supported, and is the only supported one if progbufsize is 0. 1 (enabled): Execute the program in the Program Buffer exactly once after performing the transfer**
+
+`MUST` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-11DBEB47`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-019-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-019-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-019-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debug Modules must implement this command and must support read and write access to all GPRs when the selected hart is halted.**
+
+`MUST` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-2DAF5030`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-020-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-020-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-020-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If any of these operations fail, cmderr is set and none of the remaining steps are executed.**
+
+`CONDITIONAL` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-3FFC5310`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-021-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-021-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-021-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**This bit can be used to just execute the Program Buffer without having to worry about placing valid values into aarsize or regno. write When transfer is set: 0 (arg0): Copy data fr**
+
+`MAY` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-4E06FCE7`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-022-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-022-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**It is recommended that if one register in a group is accessible, then all registers in that group are accessible, but each individual register (aside from GPRs) may be supported di**
+
+`SHOULD` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-7E09022C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-023-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-023-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Debug Modules may optionally support accessing other registers, or accessing registers when the hart is running.**
+
+`MAY` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-9E69165C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-024-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-024-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If write is set and transfer is set, then copy data from the arg0 region of data into the register specified by regno, and perform any side effects that occur when this register is**
+
+`CONDITIONAL` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-A343AEA1`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-025-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-025-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-025-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The Core Debug Registers ([debreg]) should be accessible if abstract CSR access is implemented.**
+
+`SHOULD` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-B08205DE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-026-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-026-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Writing less than the full register may be supported, but what happens to the high bits in that case is UNSPECIFIED.**
+
+`MAY` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-B237B93F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-027-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-027-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Incrementing past the highest supported value causes regno to become UNSPECIFIED.**
+
+`UNSPECIFIED` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-B52071A0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-028-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**This variant must be supported. 1 (enabled): After a successful register access, regno is incremented.**
+
+`MUST` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-E14C5C30`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-029-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-029-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-029-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If aarpostincrement and transfer are set, increment regno. regno may also be incremented if aarpostincrement is set and transfer is clear.**
+
+`MAY` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-E9456F4D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-030-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-030-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**An implementation may detect an upcoming failure early, and fail the overall command before it reaches the step that would cause failure.**
+
+`MAY` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-EA02F0C0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-031-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-031-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If aarsize specifies a size larger than the register’s actual size, then the access must fail.**
+
+`MUST` · [debug_module.html#ac-accessregister](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessregister) · obligation `OB-EB9DDE05`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-032-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-032-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-032-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Abstract Command Autoexec (abstractauto, at 0x18)
+
+**Other bits must be hard-wired to 0.**
+
+`MUST` · [debug_module.html#dm-abstractauto](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-abstractauto) · obligation `OB-2393302C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-033-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-033-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-033-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If this register is written while an abstract command is executing then the write is ignored and cmderr becomes 1 (busy) once the command completes (busy becomes 0).**
+
+`CONDITIONAL` · [debug_module.html#dm-abstractauto](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-abstractauto) · obligation `OB-505C0BEA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-034-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-034-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-034-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If this register is implemented then bits corresponding to implemented progbuf and data registers must be writable.**
+
+`MUST` · [debug_module.html#dm-abstractauto](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-abstractauto) · obligation `OB-A560EA93`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-035-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-035-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-035-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Abstract Control and Status (abstractcs, at 0x16)
+
+**It may be supported with different options set, but it will not be supported at a later time when the hart or system state are different. 3 (exception): An exception occurred while**
+
+`MAY` · [debug_module.html#dm-abstractcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-abstractcs) · obligation `OB-584D4C25`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-036-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-036-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The details of the latter are implementation-specific. 0 (full checks): Full permission checks apply. 1 (relaxed checks): Relaxed permission checks apply.**
+
+`UNSPECIFIED` · [debug_module.html#dm-abstractcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-abstractcs) · obligation `OB-BA502A14`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-037-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**Writing this register while an abstract command is executing causes cmderr to become 1 (busy) once the command completes (busy becomes 0). datacount must be at least 1 to support R**
+
+`MUST` · [debug_module.html#dm-abstractcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-abstractcs) · obligation `OB-C7143C1D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-038-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-038-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-038-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Abstract Command (command, at 0x17)
+
+**If cmderr is non-zero, writes to this register are ignored. cmderr inhibits starting a new command to accommodate debuggers that, for performance reasons, send several commands to**
+
+`CONDITIONAL` · [debug_module.html#dm-command](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-command) · obligation `OB-6AC00D11`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-039-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-039-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-039-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+### Handling Exceptions
+
+**If there was an exception, it’s left to the debugger to know what must have caused it.**
+
+`MUST` · [debugger_implementation.html#handling-exceptions](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#handling-exceptions) · obligation `OB-3136B540`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-040-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-040-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-040-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**A typical debugger will not know enough about the hardware platform to know what’s going to happen, and must attempt the access to determine the outcome.**
+
+`MUST` · [debugger_implementation.html#handling-exceptions](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#handling-exceptions) · obligation `OB-77AB89C4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-041-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-041-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-041-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When an exception occurs while executing the Program Buffer, command becomes set.**
+
+`CONDITIONAL` · [debugger_implementation.html#handling-exceptions](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#handling-exceptions) · obligation `OB-C00B3FF2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-042-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-042-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-042-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Execution Based
+
+**When ebreak is executed (indicating the end of the Program Buffer code) the hart returns to its park loop.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-3B16A732`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-043-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-043-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-043-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If an exception is encountered, the hart jumps to an address within the Debug Module.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-40CE5B27`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-044-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-044-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-044-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The PMP must not disallow fetches, loads, or stores in the address range associated with the Debug Module when the hart is in Debug Mode, regardless of how the PMP is configured.**
+
+`MUST_NOT` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-411DA6FF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-045-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-045-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**Accesses to this memory should be uncached to avoid side effects from debugging operations.**
+
+`SHOULD` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-60831DD0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-046-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-046-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**When transfer is set, the DM populates these words with lw <gpr>, 0x400(zero) or sw <gpr>, 0x400(zero). 64- and 128-bit accesses use ld/sd and lq/sq respectively.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-69C228E5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-047-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-047-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-047-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the halt request bit is set, the Debug Module raises a special interrupt to the selected harts.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-80DC4913`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-048-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-048-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-048-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The exact address is an implementation detail that a debugger must not rely on.**
+
+`MUST_NOT` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-985839B9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-049-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-049-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**If transfer is not set, the DM populates these instructions as nop’s.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-9DAFE72E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-050-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-050-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-050-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If postexec is set, execution continues to the debugger-controlled Program Buffer, otherwise the DM causes an ebreak to execute immediately.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-E205A8B9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-051-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-051-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-051-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When dret is executed, pc is restored from dpc and normal execution resumes at the privilege set by prv and v, and the ELP state set by pelp. data0 etc. are mapped into regular mem**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-EC50056B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-052-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-052-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-052-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When taking this jump, pc is saved to dpc and cause is updated in dcsr.**
+
+`CONDITIONAL` · [implementations.html#execution_based](https://docs.riscv.org/reference/debug/v1.0/implementations.html#execution_based) · obligation `OB-F0C212AA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AC-053-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AC-053-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AC-053-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## DCSR — Debug Mode — dcsr/dpc/dscratch
+
+### 4.1.2. Load-Reserved/Store-Conditional Instructions
+
+**This is a behavior that debug users must be aware of.**
+
+`MUST` · [Sdext.html#4-1-2-load-reservedstore-conditional-instructions](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-2-load-reservedstore-conditional-instructions) · obligation `OB-0623EC9D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**A higher level debugger may choose to automate this.**
+
+`MAY` · [Sdext.html#4-1-2-load-reservedstore-conditional-instructions](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-2-load-reservedstore-conditional-instructions) · obligation `OB-2A19CE5B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-002-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-002-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The reservation registered by an lr instruction on a memory address may be lost when entering Debug Mode or while in Debug Mode.**
+
+`MAY` · [Sdext.html#4-1-2-load-reservedstore-conditional-instructions](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-2-load-reservedstore-conditional-instructions) · obligation `OB-6CD8999A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-003-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-003-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**This means that there may be no forward progress if Debug Mode is entered between lr and sc pairs.**
+
+`MAY` · [Sdext.html#4-1-2-load-reservedstore-conditional-instructions](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-2-load-reservedstore-conditional-instructions) · obligation `OB-8CC4C274`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-004-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-004-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If they have a breakpoint set between a lr and sc pair, or are stepping through such code, the sc may never succeed.**
+
+`MUST_NOT` · [Sdext.html#4-1-2-load-reservedstore-conditional-instructions](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-2-load-reservedstore-conditional-instructions) · obligation `OB-E4C7F69B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-005-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-005-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Control and Status (dcsr, at 0x7b0)
+
+**While all harts have stoptime=1 and are in Debug Mode, mtime is allowed to stop incrementing.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-2F1A125F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-006-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-006-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When leaving Debug Mode, time will reflect the latest value of mtime again.**
+
+`CONDITIONAL` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-664DCB83`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**On single-hart cores cycle should be stopped, but on multi-hart cores it must keep incrementing.**
+
+`MUST` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-6FA6FEB5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**It may be tied to either 0 or 1.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-8A95398D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-009-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-009-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Harts may report 3 for this cause instead. 7 (other): The hart halted for a reason other than the ones mentioned above. extcause may contain a more specific reason.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-A2A3A8FA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-010-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-010-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Since an NMI can indicate a hardware error condition, reliable debugging may no longer be possible once this bit becomes set.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-A780F203`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-011-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-011-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the encoding written is not supported or the debugger is not allowed to change to it, the hart may change to any supported privilege mode.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-A9E0D915`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-012-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-012-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When cetrig is 1, resuming from Debug Mode following an entry due to a critical error will result in an immediate re-entry into Debug Mode due to the critical error.**
+
+`CONDITIONAL` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-B4F931A6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The debugger may resume with cetrig set to 0 to allow the platform defined actions on critical-error signal to occur.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-B54F3500`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-014-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-014-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Implementations should implement priorities as shown in the table.**
+
+`SHOULD` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-C20B338E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-015-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-015-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**When there are multiple reasons to enter Debug Mode in a single cycle, hardware should set cause to the cause with the highest priority.**
+
+`SHOULD` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-D1081042`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-016-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-016-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**This value should be supported. 1 (interrupts enabled): Interrupts (including NMI) are enabled during single stepping with step set.**
+
+`SHOULD` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-DD6EE835`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-017-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The debugger must not change the value of this bit while the hart is running.**
+
+`MUST_NOT` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-DFD65C76`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-018-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-018-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+| `TC-DCSR-019-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-019-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**Implementations may hard wire this bit to 0.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-E4613D8E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-020-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-020-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**An implementation may hardwire this bit to 0 or 1.**
+
+`MAY` · [Sdext.html#csr-dcsr](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dcsr) · obligation `OB-F8CA9178`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-021-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-021-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+| `TC-DCSR-022-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-022-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Debug PC (dpc, at 0x7b1)
+
+**Allowing dpc to become UNSPECIFIED upon Program Buffer execution allows for direct implementations that don’t have a separate PC register, and do need to use the PC when executing**
+
+`UNSPECIFIED` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-117BA64A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-023-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**If the trigger is mcontrol and timing is 0 or if the trigger is mcontrol6 and hit1 is 0, this corresponds to the address of the instruction which caused the trigger to fire. halt r**
+
+`CONDITIONAL` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-447B9D84`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-024-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-024-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-024-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the Access Register abstract command supports reading dpc while the hart is running, then the value read should be the address of a recently executed instruction.**
+
+`SHOULD` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-5F5F139D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-025-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-025-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Executing the Program Buffer may cause the value of dpc to become UNSPECIFIED.**
+
+`MAY` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-7C25B377`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-026-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-026-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the Access Register abstract command supports writing dpc while the hart is running, then the executing program should jump to the written address shortly after the write occurs**
+
+`SHOULD` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-8A224D0A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-027-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-027-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**A debugger may write dpc to change where the hart resumes.**
+
+`MAY` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-C89C1926`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-028-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-028-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**In particular, dpc must be able to hold all valid virtual addresses and the writability of the low bits depends on IALIGN.**
+
+`MUST` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-CFF92650`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-029-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-029-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-029-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If that is the case, it must be possible to read/write dpc using an abstract command with postexec not set.**
+
+`MUST` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-DAC9C9EE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-030-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-030-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-030-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When resuming, the hart’s PC is updated to the virtual address stored in dpc.**
+
+`CONDITIONAL` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-DDD43814`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-031-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-031-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-031-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The debugger must attempt to save dpc between halting and executing a Program Buffer, and then restore dpc before leaving Debug Mode.**
+
+`MUST` · [Sdext.html#csr-dpc](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dpc) · obligation `OB-E745032F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-032-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-032-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-032-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Scratch Register 0 (dscratch0, at 0x7b2)
+
+**A debugger must not write to this register unless hartinfo explicitly mentions it (the Debug Module may use this register internally).**
+
+`MUST_NOT` · [Sdext.html#csr-dscratch0](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dscratch0) · obligation `OB-E9D6A299`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-033-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-033-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Scratch Register 1 (dscratch1, at 0x7b3)
+
+**A debugger must not write to this register unless hartinfo explicitly mentions it (the Debug Module may use this register internally).**
+
+`MUST_NOT` · [Sdext.html#csr-dscratch1](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#csr-dscratch1) · obligation `OB-266A72BB`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-034-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-034-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+### 4.1.1. Debug Mode
+
+**All control transfer instructions may act as illegal instructions if their destination is outside the Program Buffer.**
+
+`MAY` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-08232C1C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-035-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-035-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When executing code due to an abstract command, the hart stays in Debug Mode and the following apply: All implemented instructions operate just as they do in M-mode, unless an exce**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-20BDED99`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-036-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-036-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-036-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If hardware ties mprven to 0 then the external debugger is expected to simulate all the effects of MPRV, including any extensions that affect memory accesses.**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-309768D3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-037-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-037-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-037-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Registers that may be updated as part of execution before the exception are allowed to be updated.**
+
+`MAY` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-364C1261`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-038-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-038-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Almost all instructions that change the privilege mode have UNSPECIFIED behavior.**
+
+`UNSPECIFIED` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-36576034`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-039-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**If stoptime is 0 then time continues to update.**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-3910CF96`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-040-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-040-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-040-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**How Debug Mode is implemented is not specified here.**
+
+`UNSPECIFIED` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-417BBC79`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-041-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**If stopcount is 0 then counters continue.**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-497CE61E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-042-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-042-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-042-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**All control transfer instructions may act as illegal instructions if their destination is in the Program Buffer.**
+
+`MAY` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-69FD1205`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-043-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-043-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**For example, vector load/store instructions which raise exceptions may partially update the destination register and set vstart appropriately.**
+
+`MAY` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-6D4B3094`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-044-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-044-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**All operations are executed with machine mode privilege, except that additional Debug Mode CSRs are accessible and mprv in mstatus may be ignored according to mprven.**
+
+`MAY` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-8FD1FA4F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-045-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-045-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If it is 1 then time will not update.**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-9F36F03C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-046-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-046-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-046-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When mprven, the external debugger can set MPRV and MPP appropriately to have hardware perform memory accesses with the appropriate endianness, address translation, permission chec**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-AE7B5FB7`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-047-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-047-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-047-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Instructions that depend on the value of the PC (e.g. auipc) may act as illegal instructions.**
+
+`MAY` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-C112BA4F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-048-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-048-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**For these reasons it is recommended to tie mprven to 1.**
+
+`SHOULD` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-DBC18B0D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-049-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-049-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If one such instruction acts as an illegal instruction, all such instructions must act as illegal instructions.**
+
+`MUST` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-F8CC43C7`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-050-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-050-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-050-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+| `TC-DCSR-051-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-051-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-051-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If it is 1 then counters are stopped.**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-FE2974F0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-052-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-052-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-052-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the Zicfilp extension is implemented, the ELP state is NO_LP_EXPECTED and is not updated by any instructions.**
+
+`CONDITIONAL` · [Sdext.html#debugmode](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debugmode) · obligation `OB-FEA5186F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DCSR-053-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DCSR-053-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DCSR-053-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## SBA — System Bus Access
+
+### System Bus Address 31:0 (sbaddress0, at 0x39)
+
+**If sbasize is 0, then this register is not present.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress0) · obligation `OB-1D4ECB8E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the read succeeded and sbautoincrement is set, increment sbaddress.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress0) · obligation `OB-39E5E336`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If sberror is 0, sbbusyerror is 0, and sbreadonaddr is set then writes to this register start the following: Set sbbusy.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress0) · obligation `OB-4B3A25CB`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**When the system bus manager is busy, writes to this register will set sbbusyerror and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress0) · obligation `OB-91F031CC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+### System Bus Address 63:32 (sbaddress1, at 0x3a)
+
+**If sbasize is less than 33, then this register is not present.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress1](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress1) · obligation `OB-12820A89`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-005-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-005-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the system bus manager is busy, writes to this register will set sbbusyerror and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress1](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress1) · obligation `OB-E7FCEE52`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+### System Bus Address 95:64 (sbaddress2, at 0x3b)
+
+**If sbasize is less than 65, then this register is not present.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress2) · obligation `OB-6D94A52F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the system bus manager is busy, writes to this register will set sbbusyerror and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress2) · obligation `OB-B341DF22`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+### System Bus Address 127:96 (sbaddress3, at 0x37)
+
+**When the system bus manager is busy, writes to this register will set sbbusyerror and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress3](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress3) · obligation `OB-A0ED4DE3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-009-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-009-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+> ⚠ Requirement text may be truncated by an empty cross-reference in the published HTML -- verify against the AsciiDoc source.
+
+**If sbasize is less than 97, then this register is not present.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbaddress3](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbaddress3) · obligation `OB-B10553EA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### System Bus Access Control and Status (sbcs, at 0x38)
+
+**While this field is set, no more system bus accesses can be initiated by the Debug Module.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbcs) · obligation `OB-057E5897`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**While this field is non-zero, no more system bus accesses can be initiated by the Debug Module.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbcs) · obligation `OB-2B0490C7`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Writes to sbcs while sbbusy is high result in undefined behavior.**
+
+`UNSPECIFIED` · [debug_module.html#dm-sbcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbcs) · obligation `OB-65EAE27E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-013-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**A debugger must not write to sbcs until it reads sbbusy as 0.**
+
+`MUST_NOT` · [debug_module.html#dm-sbcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbcs) · obligation `OB-94F5A044`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-014-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-014-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**An implementation may report ``Other'' (7) for any error condition. 0 (none): There was no bus error. 1 (timeout): There was a timeout. 2 (address): A bad address was accessed. 3 (**
+
+`MAY` · [debug_module.html#dm-sbcs](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbcs) · obligation `OB-A5194D4F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-015-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-015-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### System Bus Data 31:0 (sbdata0, at 0x3c)
+
+**If sbautoincrement is set and the read was successful, increment sbaddress.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-20CBEE7D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-016-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-016-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-016-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**On systems that have buses wider than 32 bits, a debugger should access sbdata0 after accessing the other sbdata registers.**
+
+`SHOULD` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-3857257F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-017-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If the write succeeded and sbautoincrement is set, increment sbaddress.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-676C626B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-018-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-018-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-018-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If either sberror or sbbusyerror isn’t 0 then accesses do nothing.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-69647D83`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-019-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-019-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-019-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bus manager is busy then accesses set sbbusyerror, and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-8ECFAB58`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-020-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-020-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-020-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the width of the read access is less than the width of sbdata, the contents of the remaining high bits may take on any value.**
+
+`MAY` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-EFA20AFE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-021-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-021-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If sbreadondata is set: Perform a system bus read from the address contained in sbaddress, placing the result in sbdata.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-F92A60E7`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-022-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-022-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-022-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If all of the sbaccess bits in sbcs are 0, then this register is not present.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata0) · obligation `OB-FA15770A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-023-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-023-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-023-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### System Bus Data 63:32 (sbdata1, at 0x3d)
+
+**If sbaccess64 and sbaccess128 are 0, then this register is not present.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata1](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata1) · obligation `OB-95214F7D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-024-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-024-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-024-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bus manager is busy then accesses set sbbusyerror, and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata1](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata1) · obligation `OB-BACE5E9D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-025-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-025-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-025-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### System Bus Data 95:64 (sbdata2, at 0x3e)
+
+**If the bus manager is busy then accesses set sbbusyerror, and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata2) · obligation `OB-2DC1C314`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-026-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-026-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-026-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### System Bus Data 127:96 (sbdata3, at 0x3f)
+
+**If the bus manager is busy then accesses set sbbusyerror, and don’t do anything else.**
+
+`CONDITIONAL` · [debug_module.html#dm-sbdata3](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-sbdata3) · obligation `OB-3966132C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-027-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SBA-027-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-027-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 3.1.10. System Bus Access
+
+**Second, it may improve performance when accessing memory.**
+
+`MAY` · [debug_module.html#systembusaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#systembusaccess) · obligation `OB-0016C84C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-028-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-028-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The System Bus Access block may support 8-, 16-, 32-, 64-, and 128-bit accesses.**
+
+`MAY` · [debug_module.html#systembusaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#systembusaccess) · obligation `OB-2D7FF24A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-029-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-029-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Third, it may provide access to devices that a hart does not have access to.**
+
+`MAY` · [debug_module.html#systembusaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#systembusaccess) · obligation `OB-820B57A9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-030-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-030-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Possibilities may include writing to special memory-mapped locations, or executing special instructions via the Program Buffer.**
+
+`MAY` · [debug_module.html#systembusaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#systembusaccess) · obligation `OB-C5807841`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-031-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SBA-031-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**A debugger can access memory from a hart’s point of view using a Program Buffer or the Abstract Access Memory command. (Both these features are optional.) A Debug Module may also i**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#systembusaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#systembusaccess) · obligation `OB-E4E58F04`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SBA-032-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+## RC — Run control — halt/resume
+
+### 4.1.7. Halt
+
+**When a hart halts: cause is updated. prv and v are set to reflect current privilege mode and virtualization mode.**
+
+`CONDITIONAL` · [Sdext.html#4-1-7-halt](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-7-halt) · obligation `OB-0E658809`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the current instruction can be partially executed and should be restarted to complete, then the relevant state for that is updated.**
+
+`SHOULD` · [Sdext.html#4-1-7-halt](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-7-halt) · obligation `OB-DAEC5018`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-002-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If the Zicfilp extension is implemented, pelp is set to the current ELP state and ELP is set to NO_LP_EXPECTED dpc is set to the next instruction that should be executed.**
+
+`SHOULD` · [Sdext.html#4-1-7-halt](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-7-halt) · obligation `OB-DED87815`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-003-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### 4.1.8. Resume
+
+**When a hart resumes: pc changes to the value stored in dpc.**
+
+`CONDITIONAL` · [Sdext.html#4-1-8-resume](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-8-resume) · obligation `OB-22F8CCE2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the Ssdbltrp extension is implemented and the new privilege mode is U, VS, or VU, then sstatus.SDT is set to 0.**
+
+`CONDITIONAL` · [Sdext.html#4-1-8-resume](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-8-resume) · obligation `OB-4ABB0B8F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-005-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-005-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the Zicfilp extension is enabled at the new privilege mode, the current ELP state is changed to that specified by pelp else it is set to NO_LP_EXPECTED. pelp is set to NO_LP_EXP**
+
+`CONDITIONAL` · [Sdext.html#4-1-8-resume](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-8-resume) · obligation `OB-C632BA74`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the new privilege mode is less privileged than M-mode, MPRV in mstatus is cleared.**
+
+`CONDITIONAL` · [Sdext.html#4-1-8-resume](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-8-resume) · obligation `OB-D33286E8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the Smdbltrp extension is implemented and the new privilege mode is not M, then the MDT bit is set to 0.**
+
+`CONDITIONAL` · [Sdext.html#4-1-8-resume](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-8-resume) · obligation `OB-FE6F2704`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Module Control and Status 2 (dmcs2, at 0x32)
+
+**If groups aren’t implemented, then this entire field is 0.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-04805E69`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-009-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-009-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If halt groups are not implemented, then group will always be 0 when grouptype is 0.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-12247C16`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Implementations may also change the group of a minimal set of unselected harts in the same way, if that is necessary due to a hardware limitation.**
+
+`MAY` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-2189F35B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-011-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-011-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Debuggers should read back this field after writing to confirm they are using a hart group that is supported.**
+
+`SHOULD` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-488DD661`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-012-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The DM external triggers available to add to halt groups may be the same as or distinct from the DM external triggers available to add to resume groups.**
+
+`MAY` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-801BF5E9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-013-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-013-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When 1 is written and hgselect is 1, the DM will change the group of the DM external trigger selected by dmexttrigger to the value written to group, if the hardware supports that g**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-98097CE3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-014-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-014-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If there are no DM external triggers, this field must be tied to 0.**
+
+`MUST` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-A43F9589`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-015-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-015-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-015-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If a non-existent trigger value is written here, the hardware will change it to a valid one or 0 if no DM external triggers exist.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-ACDAE456`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-016-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-016-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-016-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If resume groups are not implemented, then grouptype will remain 0 even after 1 is written there.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-B2AA28A5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-017-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-017-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When hgselect is 1, contains the group of the DM external trigger selected by dmexttrigger.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmcs2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmcs2) · obligation `OB-B91C10EF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-018-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-018-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-018-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 3.1.5. Run Control
+
+**When a debugger writes 1 to resumereq, each selected hart’s resume ack bit is cleared and each selected, halted hart is sent a resume request.**
+
+`CONDITIONAL` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-374E382F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-019-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-019-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-019-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When halt or resume is requested, a hart must respond in less than one second, unless it is unavailable. (How this is implemented is not further specified.**
+
+`MUST` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-4C89EE63`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-020-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-020-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-020-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When a hart’s halt-on-reset request bit is set, the hart will immediately enter debug mode on the next deassertion of its reset.**
+
+`CONDITIONAL` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-B94D3BEB`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-021-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-021-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-021-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the DM is reset while a hart is halted, it is UNSPECIFIED whether that hart resumes.**
+
+`UNSPECIFIED` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-C71E58C5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-022-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**When a debugger writes 1 to haltreq, each selected hart’s halt request bit is set.**
+
+`CONDITIONAL` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-C87DB74D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-023-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-023-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-023-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When a running hart, or a hart just coming out of reset, sees its halt request bit high, it responds by halting, deasserting its running signal, and asserting its halted signal.**
+
+`CONDITIONAL` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-E5C9DC7C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-024-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RC-024-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-024-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debuggers should use resumereq to explicitly resume harts before clearing dmactive and disconnecting.**
+
+`SHOULD` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-EAD61D48`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-025-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-025-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**For every hart, the Debug Module tracks 4 conceptual bits of state: halt request, resume ack, halt-on-reset request, and hart reset. (The hart reset and halt-on-reset request bits**
+
+`MAY` · [debug_module.html#runcontrol](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#runcontrol) · obligation `OB-F61B8B4B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-026-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-026-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Checking for Halted Harts
+
+**Depending on how many harts exist, the process should start at one of the lower haltsum registers.**
+
+`SHOULD` · [debugger_implementation.html#checking-for-halted-harts](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#checking-for-halted-harts) · obligation `OB-FA75264B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RC-027-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RC-027-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+## GEN — Unclassified
+
+### 4.1.3. Wait for Interrupt Instruction
+
+**If halt is requested while wfi is executing, then the hart must leave the stalled state, completing this instruction’s execution, and then enter Debug Mode.**
+
+`MUST` · [Sdext.html#4-1-3-wait-for-interrupt-instruction](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-3-wait-for-interrupt-instruction) · obligation `OB-41B6439E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 4.1.4. Wait-on-Reservation-Set Instructions
+
+**If halt is requested while wrs.sto or wrs.nto is executing, then the hart must leave the stalled state, completing this instruction’s execution, and then enter Debug Mode.**
+
+`MUST` · `rtl-unsupported` · [Sdext.html#4-1-4-wait-on-reservation-set-instructions](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-4-wait-on-reservation-set-instructions) · obligation `OB-3C2F3C6F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-002-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> zawrs is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+### 4.1.6. Reset
+
+**If the halt signal (driven by the hart’s halt request bit in the Debug Module) or hasresethaltreq are asserted when a hart comes out of reset, the hart must enter Debug Mode before**
+
+`MUST` · [Sdext.html#4-1-6-reset](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#4-1-6-reset) · obligation `OB-0C42DDA8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 4.1.9. Core Debug Registers
+
+**The supported Core Debug Registers must be implemented for each hart that can be debugged.**
+
+`MUST` · [Sdext.html#debreg](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#debreg) · obligation `OB-FC557430`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Privilege Mode (priv, at virtual)
+
+**The user should not access dcsr directly, because doing so might interfere with the debugger.**
+
+`SHOULD_NOT` · [Sdext.html#virt-priv](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#virt-priv) · obligation `OB-091C0ADE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### 4.1.10. Virtual Debug Registers
+
+**Debug software should implement them, but hardware can skip this section.**
+
+`SHOULD` · [Sdext.html#virtreg](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#virtreg) · obligation `OB-82F9818A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-006-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### 3.1.11. Minimally Intrusive Debugging
+
+**First, an implementation may allow some abstract commands to execute without halting the hart.**
+
+`MAY` · [debug_module.html#3-1-11-minimally-intrusive-debugging](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-11-minimally-intrusive-debugging) · obligation `OB-0C163BA1`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-007-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-007-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### 3.1.3.1. Selecting a Single Hart
+
+**All debug modules must support selecting a single hart.**
+
+`MUST` · [debug_module.html#3-1-3-1-selecting-a-single-hart](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-3-1-selecting-a-single-hart) · obligation `OB-4A63EC3E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 3.1. Debug Module (DM) (non-ISA extension)
+
+**When any hart in the group halts, they all halt. (Optional) Respond to external triggers by halting each hart in a configured group. (Optional) Signal an external trigger when a ha**
+
+`MUST` · [debug_module.html#dm](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm) · obligation `OB-881C3791`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-009-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-009-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Custom Features (custom, at 0x1f)
+
+**This optional register may be used for non-standard features.**
+
+`MAY` · [debug_module.html#dm-custom](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-custom) · obligation `OB-E8964912`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-010-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-010-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Custom Features 0 (custom0, at 0x70)
+
+**The optional custom0 through custom15 registers may be used for non-standard features.**
+
+`MAY` · [debug_module.html#dm-custom0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-custom0) · obligation `OB-83F72B6A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-011-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-011-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Abstract Data 0 (data0, at 0x04)
+
+**If the command fails, no assumptions can be made about the contents of these registers.**
+
+`CONDITIONAL` · [debug_module.html#dm-data0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-data0) · obligation `OB-72E1861A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**data0 through data11 are registers that may be read or changed by abstract commands. datacount indicates how many of them are implemented, starting at data0, counting up.**
+
+`MAY` · [debug_module.html#dm-data0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-data0) · obligation `OB-B082EA41`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-013-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-013-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Next Debug Module (nextdm, at 0x1d)
+
+**If there is more than one DM accessible on this DMI, this register contains the base address of the next one in the chain, or 0 if this is the last one in the chain.**
+
+`CONDITIONAL` · [debug_module.html#dm-nextdm](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-nextdm) · obligation `OB-F9B0D91E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-014-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-014-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Using Abstract Memory Access
+
+**Abstract memory accesses act as if they are performed by the hart, although the actual implementation may differ.**
+
+`MAY` · [debugger_implementation.html#deb:mrabstract](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#deb:mrabstract) · obligation `OB-F0AB699A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-015-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-015-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Abstract memory accesses act as if they are performed by the hart, although the actual implementation may differ.**
+
+`MAY` · [debugger_implementation.html#deb:mwabstract](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#deb:mwabstract) · obligation `OB-49511D4C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-016-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-016-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### Running
+
+**Once allresumeack is set, the debugger knows the selected harts have resumed.**
+
+`CONDITIONAL` · [debugger_implementation.html#running](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#running) · obligation `OB-8DF53D9D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-017-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-017-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**First, the debugger should restore any registers that it has overwritten.**
+
+`SHOULD` · [debugger_implementation.html#running](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#running) · obligation `OB-EFF04B65`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-018-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-018-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### Debug Module Interface Signals
+
+**When this is the case REQ_OP can be set to 1 for a read or 2 for a write request.**
+
+`CONDITIONAL` · [implementations.html#dmi_signals](https://docs.riscv.org/reference/debug/v1.0/implementations.html#dmi_signals) · obligation `OB-2F449452`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-019-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-019-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-019-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The DM must respond to a request from the DTM when RSP_READY is high.**
+
+`MUST` · [implementations.html#dmi_signals](https://docs.riscv.org/reference/debug/v1.0/implementations.html#dmi_signals) · obligation `OB-9EBAAE8B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-020-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-020-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-020-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 1.1.2.1.3. Minor Changes from 0.13 to 1.0
+
+**Technically backwards incompatible, but unlikely to be noticeable: stopcount only applies to hart-local counters. #405 version may be invalid when dmactive=0. #414 Address triggers**
+
+`SHOULD` · `rtl-unsupported` · [introduction.html#1-1-2-1-3-minor-changes-from-0-13-to-1-0](https://docs.riscv.org/reference/debug/v1.0/introduction.html#1-1-2-1-3-minor-changes-from-0-13-to-1-0) · obligation `OB-7387CD43`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-021-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> quick_access is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+### 1.1.2.1.4. New Features from 0.13 to 1.0
+
+**See custom, and custom0 through custom15. #406 Reserve trigger type values for non-standard use. #417 Add nmi bit to itrigger. #408 and #709 Recommend matching on every accessed ad**
+
+`MUST` · [introduction.html#1-1-2-1-4-new-features-from-0-13-to-1-0](https://docs.riscv.org/reference/debug/v1.0/introduction.html#1-1-2-1-4-new-features-from-0-13-to-1-0) · obligation `OB-AA3E9B6B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-022-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-022-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-022-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 1.1.2.1.5. Incompatible Changes During 1.0 Stable
+
+**It may not be possible to read the contents of the Program Buffer using the progbuf registers. #731 tcontrol fields apply to all traps, not just breakpoint traps.**
+
+`MAY` · [introduction.html#1-1-2-1-5-incompatible-changes-during-1-0-stable](https://docs.riscv.org/reference/debug/v1.0/introduction.html#1-1-2-1-5-incompatible-changes-during-1-0-stable) · obligation `OB-FF80860E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-023-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-023-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### 1.1.3.3. Register Definition Format
+
+**Hardware must return 0 when those fields are read, and ignore the value written to them.**
+
+`MUST` · [introduction.html#1-1-3-3-register-definition-format](https://docs.riscv.org/reference/debug/v1.0/introduction.html#1-1-3-3-register-definition-format) · obligation `OB-7695BA34`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-024-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-024-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-024-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Software must only write 0 to those fields, and ignore their value while reading.**
+
+`MUST` · [introduction.html#1-1-3-3-register-definition-format](https://docs.riscv.org/reference/debug/v1.0/introduction.html#1-1-3-3-register-definition-format) · obligation `OB-8C432E52`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-025-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-025-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-025-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The reset value is either a constant or "Preset." The latter means it is an implementation-specific legal value.**
+
+`UNSPECIFIED` · [introduction.html#1-1-3-3-register-definition-format](https://docs.riscv.org/reference/debug/v1.0/introduction.html#1-1-3-3-register-definition-format) · obligation `OB-A0A86388`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-026-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+### 1.1. Introduction
+
+**When a design progresses from simulation to hardware implementation, a user’s control and understanding of the system’s current state drops dramatically.**
+
+`CONDITIONAL` · [introduction.html#intro](https://docs.riscv.org/reference/debug/v1.0/introduction.html#intro) · obligation `OB-2BC5A5AF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-027-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-027-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-027-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**System designers may choose to add additional hardware debug support, but this specification defines a standard interface for common functionality.**
+
+`MAY` · [introduction.html#intro](https://docs.riscv.org/reference/debug/v1.0/introduction.html#intro) · obligation `OB-36EEBE64`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-028-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-028-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When a robust OS is running on a core, software can handle many debugging tasks.**
+
+`CONDITIONAL` · [introduction.html#intro](https://docs.riscv.org/reference/debug/v1.0/introduction.html#intro) · obligation `OB-5B68FD10`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-GEN-029-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-GEN-029-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-GEN-029-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## DTM — Debug Transport Module
+
+### 6.1.1.2. JTAG DTM Registers
+
+**JTAG TAPs used as a DTM must have an IR of at least 5 bits.**
+
+`MUST` · [dtm.html#6-1-1-2-jtag-dtm-registers](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-2-jtag-dtm-registers) · obligation `OB-0273DDE1`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the IR actually has more than 5 bits, then the encodings in Table 1 should be extended with 0’s in their most significant bits, except for the 0x1f encoding of BYPASS, which mus**
+
+`MUST` · [dtm.html#6-1-1-2-jtag-dtm-registers](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-2-jtag-dtm-registers) · obligation `OB-1AAC7474`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the TAP is reset, IR must default to 00001, selecting the IDCODE instruction.**
+
+`MUST` · [dtm.html#6-1-1-2-jtag-dtm-registers](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-2-jtag-dtm-registers) · obligation `OB-69EADA5F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Unimplemented instructions must select the BYPASS register.**
+
+`MUST` · [dtm.html#6-1-1-2-jtag-dtm-registers](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-2-jtag-dtm-registers) · obligation `OB-C82CFCE2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 6.1.1.3.2. Alternate JTAG Connector
+
+**Pins whose functionality isn’t needed may be left unconnected.**
+
+`MAY` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-1A650D65`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-005-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-005-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**This signal should only be used to support legacy components that rely on this functionality. nTRST_PD Test reset pull-down, driven by the debug adapter.**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-264C72EE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-006-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**This signal should only be used to support legacy components that rely on this functionality.**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-30495D6E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-007-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**KEY This pin may be cut on the male and plugged on the female header to ensure the header is always plugged in correctly.**
+
+`MAY` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-4EBB9AFF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-008-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-008-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**A target may relay the TCK signal here once it has processed it, allowing a debugger to adjust its TCK frequency in response.**
+
+`MAY` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-5C7970C0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-009-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-009-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Asserting reset should reset any RISC-V cores as well as any other peripherals on the PCB.**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-79B338B8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-010-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**It should not reset the debug logic.**
+
+`SHOULD_NOT` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-89715BB2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**A shrouded connector should be used to prevent the cable from being plugged in incorrectly.**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-979715B3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-012-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The MIPI-10 connector should provide plenty of signals for all modern hardware.**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-B5A0374F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-013-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**This pin is optional but strongly encouraged. nRESET should never be connected to the TAP reset, otherwise the debugger might not be able to debug through a reset to discover the c**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-C2D3D7FB`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-014-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The signal may be used bi-directional to drive or sense the target reset signal.**
+
+`MAY` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-C9753D1E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-015-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-015-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If a design does need legacy JTAG signals, then the MIPI-20 connector should be used.**
+
+`SHOULD` · [dtm.html#6-1-1-3-2-alternate-jtag-connector](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-3-2-alternate-jtag-connector) · obligation `OB-D4554185`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-016-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-016-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### 6.1.1.4. cJTAG
+
+**Pins whose functionality isn’t needed may be left unconnected.**
+
+`MAY` · [dtm.html#6-1-1-4-cjtag](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-4-cjtag) · obligation `OB-5153C8AA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-017-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-017-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**When implementing cJTAG access to a JTAG DTM, the MIPI 10-pin Narrow JTAG connector should be used.**
+
+`SHOULD` · [dtm.html#6-1-1-4-cjtag](https://docs.riscv.org/reference/debug/v1.0/dtm.html#6-1-1-4-cjtag) · obligation `OB-E8221643`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-018-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-018-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### 6.1. Debug Transport Module (DTM) (non-ISA extension)
+
+**In that case it must be advertised as conforming to "RISC-V Debug Specification, with custom DTM." If the JTAG DTM described here is implemented, it must be advertised as conformin**
+
+`MUST` · [dtm.html#dtm](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm) · obligation `OB-1BC5D4F2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-019-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-019-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-019-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**There may be multiple DTMs in a single hardware platform.**
+
+`MAY` · [dtm.html#dtm](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm) · obligation `OB-54813EE5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-020-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-020-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Additional DTMs may be added in future versions of this specification.**
+
+`MAY` · [dtm.html#dtm](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm) · obligation `OB-772A3799`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-021-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-021-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### DTM Control and Status (dtmcs, at 0x10)
+
+**In general this should only be used when the Debugger has reason to expect that the outstanding DMI transaction will never complete (e.g. a reset condition caused an inflight DMI t**
+
+`SHOULD` · [dtm.html#dtm-dtmcs](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dtmcs) · obligation `OB-05D1BDB8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-022-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-022-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**A debugger must still check dmistat when necessary. 0: It is not necessary to enter Run-Test/Idle at all. 1: Enter Run-Test/Idle and leave it immediately. 2: Enter Run-Test/Idle an**
+
+`MUST` · [dtm.html#dtm-dtmcs](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dtmcs) · obligation `OB-4EFDFF24`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-023-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-023-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-023-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**W1 - idle This is a hint to the debugger of the minimum number of cycles a debugger should spend in Run-Test/Idle after every DMI scan to avoid a `busy' return code (dmistat of 3).**
+
+`SHOULD` · [dtm.html#dtm-dtmcs](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dtmcs) · obligation `OB-DE3C95F0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-024-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-024-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Field Description Access Reset errinfo This optional field may provide additional detail about an error that occurred when communicating with a DM.**
+
+`MAY` · [dtm.html#dtm-dtmcs](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dtmcs) · obligation `OB-DFC7E0AC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-025-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-025-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+### IDCODE (at 0x01)
+
+**Bits 6:0 must be bits 6:0 of the designer/manufacturer’s Identification Code as assigned by JEDEC Standard JEP106.**
+
+`MUST` · [dtm.html#dtm-idcode](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-idcode) · obligation `OB-BD58176C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DTM-026-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DTM-026-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DTM-026-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## DIS — Discovery & version detection
+
+### 3.1.13. Version Detection
+
+**If it was necessary to clear ndmreset, this might have the following side effects: haltreq is cleared, potentially preventing a halt request made by a previous debugger from taking**
+
+`CONDITIONAL` · [debug_module.html#3-1-13-version-detection](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-13-version-detection) · obligation `OB-3A5A1CDE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If dmactive is 0 or ndmreset is 1: Write dmcontrol, preserving hartreset, hasel, hartsello, and hartselhi from the value that was read, setting dmactive, and clearing all the other**
+
+`CONDITIONAL` · `rtl-unsupported` · [debug_module.html#3-1-13-version-detection](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-13-version-detection) · obligation `OB-DD957B93`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-002-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+### Configuration Structure Pointer 0 (confstrptr0, at 0x19)
+
+**Otherwise, this must be an address that can be used to access the configuration structure from the hart with ID 0.**
+
+`MUST` · [debug_module.html#dm-confstrptr0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr0) · obligation `OB-934D84D3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When confstrptrvalid is set, reading this register returns bits 31:0 of the configuration structure pointer.**
+
+`CONDITIONAL` · [debug_module.html#dm-confstrptr0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr0) · obligation `OB-99F62644`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If confstrptrvalid is 0, then the confstrptr registers hold identifier information which is not further specified in this document.**
+
+`CONDITIONAL` · [debug_module.html#dm-confstrptr0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr0) · obligation `OB-A7559BE4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-005-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-005-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When system bus access is implemented, this must be an address that can be used with the System Bus Access module.**
+
+`MUST` · [debug_module.html#dm-confstrptr0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr0) · obligation `OB-F4F62B81`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Configuration Structure Pointer 1 (confstrptr1, at 0x1a)
+
+**When confstrptrvalid is set, reading this register returns bits 63:32 of the configuration structure pointer.**
+
+`CONDITIONAL` · [debug_module.html#dm-confstrptr1](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr1) · obligation `OB-0BE457D5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Configuration Structure Pointer 2 (confstrptr2, at 0x1b)
+
+**When confstrptrvalid is set, reading this register returns bits 95:64 of the configuration structure pointer.**
+
+`CONDITIONAL` · [debug_module.html#dm-confstrptr2](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr2) · obligation `OB-5A152AE4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Configuration Structure Pointer 3 (confstrptr3, at 0x1c)
+
+**When confstrptrvalid is set, reading this register returns bits 127:96 of the configuration structure pointer.**
+
+`CONDITIONAL` · [debug_module.html#dm-confstrptr3](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-confstrptr3) · obligation `OB-1666B3BD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-009-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-009-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Module Status (dmstatus, at 0x11)
+
+**Accessing authdata results in unspecified behavior. authbusy only becomes set in immediate response to an access to authdata.**
+
+`UNSPECIFIED` · [debug_module.html#dm-dmstatus](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmstatus) · obligation `OB-66712737`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-010-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**This must be 1 when progbufsize is 1.**
+
+`MUST` · [debug_module.html#dm-dmstatus](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmstatus) · obligation `OB-BC2186F3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Once they are set, they will not clear until the debugger acknowledges them using ackunavail.**
+
+`CONDITIONAL` · [debug_module.html#dm-dmstatus](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmstatus) · obligation `OB-D6A08D5A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**On components that don’t implement authentication, this bit must be preset as 1.**
+
+`MUST` · [debug_module.html#dm-dmstatus](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-dmstatus) · obligation `OB-D9BC6E5C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Hart Info (hartinfo, at 0x12)
+
+**If this register is included, the debugger can do more with the Program Buffer by writing programs which explicitly access the data and/or dscratch registers.**
+
+`CONDITIONAL` · [debug_module.html#dm-hartinfo](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hartinfo) · obligation `OB-32A61DFD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-014-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-014-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If dataaccess is 1: Address of RAM where the data registers are shadowed.**
+
+`CONDITIONAL` · [debug_module.html#dm-hartinfo](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hartinfo) · obligation `OB-713A614B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-015-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-015-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-015-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If it is not present it should read all-zero.**
+
+`SHOULD` · [debug_module.html#dm-hartinfo](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hartinfo) · obligation `OB-9A89C487`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-016-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-016-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Since there are at most 12 data registers, the value in this register must be 12 or smaller.**
+
+`MUST` · [debug_module.html#dm-hartinfo](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hartinfo) · obligation `OB-C432B15B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-017-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-017-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If dataaccess is 1: Number of 32-bit words in the memory map dedicated to shadowing the data registers.**
+
+`CONDITIONAL` · [debug_module.html#dm-hartinfo](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hartinfo) · obligation `OB-FAECE020`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DIS-018-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DIS-018-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DIS-018-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## SSTEP — Single-step
+
+### 4.1.5.1. Step Bit In Dcsr
+
+**If control is transferred to a trap handler while executing the instruction, then Debug Mode is re-entered immediately after the PC is changed to the trap handler, and the appropri**
+
+`CONDITIONAL` · [Sdext.html#stepbit](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepbit) · obligation `OB-21432296`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If executing or fetching the instruction causes a trigger to fire with action=1, Debug Mode is re-entered immediately after that trigger has fired.**
+
+`CONDITIONAL` · [Sdext.html#stepbit](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepbit) · obligation `OB-458FEB4A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the instruction that is executed causes the PC to change to an address where an instruction fetch causes an exception, that exception does not occur until the next time the hart**
+
+`CONDITIONAL` · [Sdext.html#stepbit](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepbit) · obligation `OB-84D439AC`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the instruction being stepped over would normally stall the hart, then instead the instruction is treated as a nop.**
+
+`CONDITIONAL` · [Sdext.html#stepbit](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepbit) · obligation `OB-8D727FC3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If step is set when a hart resumes then it will single step, regardless of the reason for resuming.**
+
+`CONDITIONAL` · [Sdext.html#stepbit](https://docs.riscv.org/reference/debug/v1.0/Sdext.html#stepbit) · obligation `OB-94557B58`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-005-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-005-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Single Step
+
+**To help users out, debuggers should detect when a single step restarted an instruction, and then step again.**
+
+`SHOULD` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-1C54EC01`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-006-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If neither of these features exist, then single step is doable, but tricky to get right.**
+
+`CONDITIONAL` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-2BBF0054`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The debugger should perform this extra step when the PC doesn’t change during a regular step.**
+
+`SHOULD` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-333EB526`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-008-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**An instruction may cause an exception into a more privileged mode where the trigger is not enabled.**
+
+`MAY` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-687501FB`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-009-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-009-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If hardware implements mpte and mte, then stepping through non-trap code which doesn’t allow for nested interrupts is also straightforward.**
+
+`CONDITIONAL` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-90E3569C`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If hardware automatically prevents action=0 triggers from matching when entering a trap handler as described in Sdtrig.adoc#nativetrigger, then a carefully written trap handler can**
+
+`MUST_NOT` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-93B92434`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-011-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-011-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**To avoid an infinite loop if the exception handler does not address the cause of the exception, the debugger must execute no more than a single extra step.**
+
+`MUST` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-BC4993CF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When a user is single stepping through such code, they will have to step twice to get past the restarted instruction.**
+
+`CONDITIONAL` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-DFAFCCCE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When a step is required, the OS or debug stub writes count=1, action=0, m=0 before returning control to the lower user program with an mret instruction.**
+
+`CONDITIONAL` · [debugger_implementation.html#nativestep](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#nativestep) · obligation `OB-E2067229`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-014-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-014-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The hart behaves exactly as in the running case, except that interrupts may be disabled (depending on stepie) and it only fetches and executes a single instruction before re-enteri**
+
+`MAY` · [debugger_implementation.html#single-step](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#single-step) · obligation `OB-235FC342`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-SSTEP-015-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-SSTEP-015-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+## DMI — DMI protocol
+
+### 3.1.1. Debug Module Interface (DMI)
+
+**If there are additional DMs on this DMI, the base address of the next DM in the DMI address space is given in nextdm.**
+
+`CONDITIONAL` · [debug_module.html#dmi](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dmi) · obligation `OB-44B48B91`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Module Interface Access
+
+**This process must be repeated until op returns 0.**
+
+`MUST` · [debugger_implementation.html#dmiaccess](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#dmiaccess) · obligation `OB-173862A8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**It should almost never be necessary to scan IR, avoiding a big part of the inefficiency in typical JTAG use.**
+
+`SHOULD` · [debugger_implementation.html#dmiaccess](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#dmiaccess) · obligation `OB-40E5C5BF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-003-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The busy condition must be cleared by writing dmireset in dtmcs, and then the second scan scan must be performed again.**
+
+`MUST` · [debugger_implementation.html#dmiaccess](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#dmiaccess) · obligation `OB-69E787E6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**In later operations the debugger should allow for more time between Update-DR and Capture-DR.**
+
+`SHOULD` · [debugger_implementation.html#dmiaccess](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#dmiaccess) · obligation `OB-7AECBFE5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-005-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**If the operation didn’t complete in time, op will be 3 and the value in data must be ignored.**
+
+`MUST` · [debugger_implementation.html#dmiaccess](https://docs.riscv.org/reference/debug/v1.0/debugger_implementation.html#dmiaccess) · obligation `OB-DB14A7D2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### Debug Module Interface Access (dmi, at 0x11)
+
+**This operation leaves the values in address and data UNSPECIFIED. 1 (read): Read from address.**
+
+`UNSPECIFIED` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-0C7BEBF9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-007-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**When this operation succeeds, address contains the address that was read from, and data contains the value that was read. 2 (write): Write data to address.**
+
+`CONDITIONAL` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-1853C145`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The still-in-progress status is sticky to accommodate debuggers that batch together a number of scans, which must all be executed or stop as soon as there’s a problem.**
+
+`MUST` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-2F8D0289`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-009-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-009-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If a debugger sees this status, it needs to give the target more TCK edges between Update-DR and Capture-DR.**
+
+`CONDITIONAL` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-3CE8C55D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If a debugger sees this status, there might be additional information in errinfo. 3 (busy): A DMI operation was attempted while a prior DMI operation was still in progress.**
+
+`CONDITIONAL` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-4D7C060E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the debugger reads this field, it means the following: 0 (success): The previous operation completed successfully. 1 (reserved): Reserved. 2 (failed): A previous operation fai**
+
+`CONDITIONAL` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-713437CA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-DMI-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**This operation leaves the values in address and data UNSPECIFIED. 3 (reserved): Reserved.**
+
+`UNSPECIFIED` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-765F059B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-013-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**For instance a series of scans may write a Debug Program and execute it.**
+
+`MAY` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-895941E6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-014-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-014-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If one of the writes fails but the execution continues, then the Debug Program may hang or have other unexpected side effects.**
+
+`MAY` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-AA0F5B7A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-015-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-015-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The address and data reported in the following Capture-DR are undefined.**
+
+`UNSPECIFIED` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-AEDFF545`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-016-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**This operation should never affect DMI busy or error status.**
+
+`SHOULD` · [dtm.html#dtm-dmi](https://docs.riscv.org/reference/debug/v1.0/dtm.html#dtm-dmi) · obligation `OB-DE0342C3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-DMI-017-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-DMI-017-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+## HG — Halt / resume groups
+
+### External Trigger (tmexttrigger, at 0x7a1)
+
+**Hardware may support none or just a few TM external trigger inputs (starting with TM external trigger input 0 and continuing sequentially).**
+
+`MAY` · [Sdtrig.html#csr-tmexttrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tmexttrigger) · obligation `OB-75E8DBC5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-001-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-001-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**An implementation may either ignore the signal altogether when it cannot fire (dropping the trigger event) or it may hold the action as pending and fire the trigger once it is lega**
+
+`MAY` · [Sdtrig.html#csr-tmexttrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tmexttrigger) · obligation `OB-8BBB0165`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-002-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-002-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the trigger fires with action=0 then zero is written to the tval CSR on the breakpoint trap.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tmexttrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tmexttrigger) · obligation `OB-C7DF8E9B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bit is not implemented, it is always 0 and writing it has no effect.**
+
+`CONDITIONAL` · [Sdtrig.html#csr-tmexttrigger](https://docs.riscv.org/reference/debug/v1.0/Sdtrig.html#csr-tmexttrigger) · obligation `OB-FD764B83`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 3.1.6. Halt Groups, Resume Groups, and External Triggers
+
+**When an external trigger that’s a member of the resume group fires: All the harts in that group that are halted will quickly resume as soon as any currently executing abstract comm**
+
+`CONDITIONAL` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-0EEA3282`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-005-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-005-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When any hart in a resume group resumes: All the other harts in that group that are halted will quickly resume as soon as any currently executing abstract commands have completed.**
+
+`CONDITIONAL` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-2C7135A4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When the DM is reset, all harts must be placed in the lowest-numbered halt and resume groups that they can be in. (This will usually be group 0.) Some designs may choose to hardcod**
+
+`MUST` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-2D73E1EE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When an external trigger that’s a member of the halt group fires: All the harts in the halt group that are running will quickly halt. cause for those harts should be set to 6, but**
+
+`SHOULD` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-6FE51F06`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-008-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**All the other harts in the halt group that are running will quickly halt. cause for those harts should be set to 6, but may be set to 3.**
+
+`SHOULD` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-AE674FDB`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-009-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-009-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**Other harts in the halt group that are halted but have started the process of resuming must also quickly become halted, even if they do resume briefly.**
+
+`MUST` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-B8D6518D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+| `TC-HG-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When any hart in a halt group halts: That hart halts normally, with cause reflecting the original cause of the halt.**
+
+`CONDITIONAL` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-BB0D78DF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Harts that are in the process of halting should complete that process and stay halted.**
+
+`SHOULD` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-BB705A10`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-013-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-014-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-014-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**In that case it must be possible to discover the groups by using dmcs2 even if it’s not possible to change the configuration.**
+
+`MUST` · [debug_module.html#hrgroups](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hrgroups) · obligation `OB-F85DDCA8`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HG-015-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HG-015-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HG-015-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## PB — Program Buffer
+
+### Program Buffer 0 (progbuf0, at 0x20)
+
+**It may also be possible for the debugger to read from the program buffer through these registers.**
+
+`MAY` · [debug_module.html#dm-progbuf0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-progbuf0) · obligation `OB-3BB9820E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-001-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-001-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**progbuf0 through progbuf15 must provide write access to the optional program buffer.**
+
+`MUST` · [debug_module.html#dm-progbuf0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-progbuf0) · obligation `OB-78D05CBF`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If reading is not supported, then all reads return 0. progbufsize indicates how many progbuf registers are implemented starting at progbuf0, counting up.**
+
+`CONDITIONAL` · [debug_module.html#dm-progbuf0](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-progbuf0) · obligation `OB-96A4A892`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 3.1.8. Program Buffer
+
+**If the debugger executes a program that doesn’t terminate with an ebreak instruction, the hart will remain in Debug Mode and the debugger will lose control of the hart.**
+
+`CONDITIONAL` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-05B47EDA`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-004-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-004-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**DMs that support all necessary functionality using abstract commands only may choose to omit the Program Buffer.**
+
+`MAY` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-107E0AB3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-005-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-005-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If the debugger writes a compressed instruction into the Program Buffer, it must be placed into the lower 16 bits and accompanied by a compressed nop in the upper 16 bits.**
+
+`MUST` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-46F168A6`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If an exception is encountered during execution of the Program Buffer, no more instructions are executed, the hart remains in Debug Mode, and cmderr is set to 3 (exception error).**
+
+`CONDITIONAL` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-6F0BB28B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-007-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-007-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**An implementation may support an implicit ebreak that is executed when a hart runs off the end of the Program Buffer.**
+
+`MAY` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-8C5B1904`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-008-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-008-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**The Program Buffer may be implemented as RAM which is accessible to the hart.**
+
+`MAY` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-9074ADA2`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-009-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-009-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**If so, the debugger has more flexibility in what it can do with the program buffer.**
+
+`CONDITIONAL` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-954248D0`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**While these programs are executed, the hart does not leave Debug Mode (see Sdext.adoc#debugmode).**
+
+`CONDITIONAL` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-9D5EA091`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If progbufsize is 1 then the following apply: impebreak must be 1.**
+
+`MUST` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-BE895C5E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The debugger can write whatever program it likes (including jumps out of the Program Buffer), but the program must end with ebreak or c.ebreak.**
+
+`MUST` · [debug_module.html#programbuffer](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#programbuffer) · obligation `OB-FBD55F90`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-PB-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-PB-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-PB-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## RST — Reset control
+
+### 3.1.2. Reset Control
+
+**While ndmreset or any external reset is asserted, the only supported DM operations are reading/writing dmcontrol and reading ndmresetpending.**
+
+`CONDITIONAL` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-02126F63`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If there is another mechanism to reset the DM, this mechanism must also reset all the harts accessible to the DM.**
+
+`MUST` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-376EA57A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-002-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-002-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-002-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**While the reset is on-going, harts are either in the running state, indicating it’s possible to perform some abstract commands during this time, or in the unavailable state, indica**
+
+`CONDITIONAL` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-4E491BF3`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-003-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-003-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-003-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The Debug Module’s own state and registers should only be reset at power-up and while dmactive in dmcontrol is 0.**
+
+`SHOULD` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-512F79E4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-004-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**The reset itself may also take an arbitrarily long time.**
+
+`MAY` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-55353F21`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-005-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-005-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Once a hart’s reset is complete, havereset becomes set.**
+
+`CONDITIONAL` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-6E938BEE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-006-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-006-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Otherwise, if the hart was initially running it will execute normally (running state) and if the hart was initially halted it should now be running but may be halted.**
+
+`SHOULD` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-891C5A28`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-007-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-007-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**When a hart comes out of reset and haltreq or resethaltreq are set, the hart will immediately enter Debug Mode (halted state).**
+
+`CONDITIONAL` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-927ACB75`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-008-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-008-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-008-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The behavior of other accesses is undefined.**
+
+`UNSPECIFIED` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-B3B5EA02`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-009-C` | Check | P3 | 0.10 | Deferred | Not started | 0 | — | 1 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**Exactly what is affected by this reset is implementation dependent, but it must be possible to debug programs from the first instruction executed. hartreset resets all the currentl**
+
+`MUST` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-B845B423`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-010-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-010-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-010-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**When harts have been reset, they must set a sticky havereset state bit.**
+
+`MUST` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-B8A26943`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**These bits must be set regardless of the cause of the reset.**
+
+`MUST` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-C5923002`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-RST-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**The actual reset may start as soon as the bit is asserted, but may start an arbitrarily long time after the bit is deasserted.**
+
+`MAY` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-C860E223`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-013-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-013-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**In this case an implementation may reset more harts than just the ones that are selected.**
+
+`MAY` · [debug_module.html#reset](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#reset) · obligation `OB-FF62EF3E`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-RST-014-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-RST-014-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+## HS — Hart selection & states
+
+### 3.1.4. Hart DM States
+
+**In order to let the debugger discover all harts, they must show up as unavailable even if there is no chance of them ever becoming available.**
+
+`MUST` · [debug_module.html#3-1-4-hart-dm-states](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-4-hart-dm-states) · obligation `OB-2CC037E5`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-001-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HS-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-001-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**Debuggers may assume that a hardware platform has no harts with indexes higher than the first nonexistent one.**
+
+`MAY` · [debug_module.html#3-1-4-hart-dm-states](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-4-hart-dm-states) · obligation `OB-6D10A122`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-002-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-002-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Hardware platforms with very large number of harts may permanently disable some during manufacturing, leaving holes in the otherwise continuous hart index space.**
+
+`MAY` · [debug_module.html#3-1-4-hart-dm-states](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-4-hart-dm-states) · obligation `OB-8F42D686`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-003-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-003-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Harts may be unavailable for a variety of reasons including being reset, temporarily powered down, and not being plugged into the hardware platform.**
+
+`MAY` · [debug_module.html#3-1-4-hart-dm-states](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-4-hart-dm-states) · obligation `OB-AAB99703`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-004-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-004-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Harts may be unavailable while reset is asserted, and some time after reset is deasserted.**
+
+`MAY` · [debug_module.html#3-1-4-hart-dm-states](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-4-hart-dm-states) · obligation `OB-CE92313B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-005-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-005-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**That means harts might become available or unavailable at any time, although these events should be rare in hardware platforms built to be easily debugged.**
+
+`SHOULD` · [debug_module.html#3-1-4-hart-dm-states](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-4-hart-dm-states) · obligation `OB-D166808B`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-006-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-006-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### Hart Array Window (hawindow, at 0x15)
+
+**Since some bits in the hart array mask register may be constant 0, some bits in this register may be constant 0, depending on the current value of hawindowsel.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#dm-hawindow](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hawindow) · obligation `OB-135336B9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-007-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+### Hart Array Window Select (hawindowsel, at 0x14)
+
+**Field Description Access Reset hawindowsel The high bits of this field may be tied to 0, depending on how large the array mask register is.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#dm-hawindowsel](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hawindowsel) · obligation `OB-25C68870`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-008-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**E.g. on a hardware platform with 48 harts only bit 0 of this field may actually be writable.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#dm-hawindowsel](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-hawindowsel) · obligation `OB-98C38078`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-009-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+### 3.1.3.2. Selecting Multiple Harts
+
+**Debug Modules may implement a Hart Array Mask register to allow selecting multiple harts at once.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#hartarraymask](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hartarraymask) · obligation `OB-6969F74F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-010-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> hart_array is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**If this feature is supported, multiple harts can be halted, resumed, and reset simultaneously.**
+
+`CONDITIONAL` · [debug_module.html#hartarraymask](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hartarraymask) · obligation `OB-76553A0D`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-011-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HS-011-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-011-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+**If the bit is 1 then the hart is selected.**
+
+`CONDITIONAL` · [debug_module.html#hartarraymask](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#hartarraymask) · obligation `OB-A28E8B3F`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-012-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HS-012-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-012-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+### 3.1.3. Selecting Harts
+
+**To enumerate all the harts, a debugger must first determine HARTSELLEN by writing all ones to `hartsel` (assuming the maximum size) and reading back the value to see which bits wer**
+
+`MUST` · [debug_module.html#selectingharts](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#selectingharts) · obligation `OB-71273439`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-HS-013-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-HS-013-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-HS-013-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## AUTH — Authentication
+
+### 3.1.12. Security
+
+**All DM registers should read 0, while writes should be ignored, with the following mandatory exceptions: authenticated in dmstatus is readable. authbusy in dmstatus is readable. ve**
+
+`SHOULD` · [debug_module.html#3-1-12-security](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-12-security) · obligation `OB-41CC6045`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AUTH-001-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AUTH-001-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+**When authenticated is clear, the DM must not interact with the rest of the hardware platform, nor expose details about the harts connected to the DM.**
+
+`MUST_NOT` · [debug_module.html#3-1-12-security](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-12-security) · obligation `OB-4463B604`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AUTH-002-C` | Check | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AUTH-002-C` | Cover | P2 | 0.10 | Full | Not started | 0 | — | 2 | — |
+
+**To protect intellectual property it may be desirable to lock access to the Debug Module.**
+
+`MAY` · [debug_module.html#3-1-12-security](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-12-security) · obligation `OB-A398E5DE`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AUTH-003-S` | Stimulate | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AUTH-003-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+**Implementations where it’s not possible to unlock the DM by using authdata should not implement that register.**
+
+`SHOULD_NOT` · [debug_module.html#3-1-12-security](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#3-1-12-security) · obligation `OB-E4BE0A83`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AUTH-004-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+
+### Authentication Data (authdata, at 0x30)
+
+**When authbusy is clear, the debugger can communicate with the authentication module by reading or writing this register.**
+
+`CONDITIONAL` · [debug_module.html#dm-authdata](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#dm-authdata) · obligation `OB-82610EE4`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AUTH-005-S` | Stimulate | P1 | 0.10 | Main | Not started | 0 | — | 1 | — |
+| `TC-AUTH-005-C` | Check | P2 | 0.10 | Full | Not started | 0 | — | 1 | — |
+| `TC-AUTH-005-C` | Cover | P2 | 0.25 | Full | Not started | 0 | — | 2 | — |
+
+## AM — Abstract memory access
+
+### Access Memory
+
+**An implementation may detect an upcoming failure early, and fail the overall command before it reaches the step that would cause failure.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-1A54AF66`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-001-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**If this command supports memory accesses while the hart is running, it must also support memory accesses while the hart is halted.**
+
+`MUST` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-88FF7056`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-002-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**An access may only fail if the hart, running M-mode code, might encounter that same failure when it attempts the same access.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-93CCD089`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-003-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**Debug Modules may optionally implement this command and may support read and write access to memory locations when the selected hart is running or halted.**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-9B06478A`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-004-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**The value of the remaining bits of arg0 are UNSPECIFIED. 1 (memory): Copy data from the low bits of arg0 into the memory location specified in arg1. target-specific These bits are**
+
+`UNSPECIFIED` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-A2378959`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-005-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> Spec says UNSPECIFIED -- check the DM does not hang; do not assert a value.
+
+**Debug Modules on systems without address translation (i.e. virtual addresses equal physical) may optionally allow aamvirtual set to 1, which would produce the same result as that s**
+
+`MAY` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-D636CFDD`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-006-C` | Cover | P3 | 0.10 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**Field Description cmdtype This is 2 to indicate Access Memory Command. aamvirtual An implementation does not have to implement both virtual and physical accesses, but it must fail**
+
+`MUST` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-DE0E1893`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-007-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**If aampostincrement is set, increment arg1.**
+
+`CONDITIONAL` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-EFD4A7B9`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-008-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**If any of these operations fail, cmderr is set and none of the remaining steps are executed.**
+
+`CONDITIONAL` · `rtl-unsupported` · [debug_module.html#ac-accessmemory](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-accessmemory) · obligation `OB-F50B7C68`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-AM-009-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> abstract_access_memory is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+## QA — Quick Access
+
+### Quick Access
+
+**If the hart halts for some other reason (e.g. breakpoint), the command sets cmderr to ``halt/resume'' and does not continue.**
+
+`CONDITIONAL` · `rtl-unsupported` · [debug_module.html#ac-quickaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-quickaccess) · obligation `OB-4D7EB531`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-QA-001-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> quick_access is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**If an exception occurs, cmderr is set to ``exception,'' the Program Buffer execution ends, and the hart is halted with cause set to 3.**
+
+`CONDITIONAL` · `rtl-unsupported` · [debug_module.html#ac-quickaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-quickaccess) · obligation `OB-8D06AC44`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-QA-002-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> quick_access is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
+**If the Program Buffer executed without an exception, then resume the hart.**
+
+`CONDITIONAL` · `rtl-unsupported` · [debug_module.html#ac-quickaccess](https://docs.riscv.org/reference/debug/v1.0/debug_module.html#ac-quickaccess) · obligation `OB-E7002892`
+
+| Test Item | Type | Pri | Wt | Milestone | Status | % | Assignee | ETA | Final Remarks |
+|---|---|---|---:|---|---|---:|---|---:|---|
+| `TC-QA-003-C` | Cover | P3 | 0.25 | Deferred | Not started | 0 | — | 2 | — |
+
+> quick_access is absent on this DUT (dut-profile absent[]); the row would pass for the wrong reason or be unreachable.
+
