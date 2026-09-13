@@ -183,7 +183,7 @@ class jtag_monitor extends uvm_monitor;
 
     `uvm_info("JTAG_MON",
       $sformatf("DMI txn: addr=0x%02h op=%02b wdata=0x%08h  (prev-op result: status=%02b rdata=0x%08h)",
-                txn.dmi_addr, txn.dmi_op, txn.dmi_wdata, txn.dmi_status, txn.dmi_rdata), UVM_MEDIUM)
+                txn.dmi_addr, txn.dmi_op, txn.dmi_wdata, txn.dmi_status, txn.dmi_rdata), UVM_HIGH)
 
     analysis_port.write(txn);
   endfunction

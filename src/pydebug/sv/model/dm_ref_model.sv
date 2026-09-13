@@ -76,6 +76,17 @@ class dm_ref_model;
 
   // ── DM-wide state ──────────────────────────────────────────────────────────
   hart_state_s harts[];
+  // Write-tracked state for registers whose read-back the spec fully
+  // determines. Each is named for its spec field.
+  bit [31:0]         abstractauto;     // 0x18, WARL, reset 0
+  bit [14:0]         hawindowsel;      // 0x14, WARL, reset 0
+  bit [31:0]         authdata;         // 0x30, R/W, reset 0
+  bit                sbreadonaddr;     // 0x38 fields, all R/W
+  bit [2:0]          sbaccess;         // reset 2 per spec
+  bit                sbautoincrement;
+  bit                sbreadondata;
+  bit                relaxedpriv;      // 0x16, WARL, reset = Preset
+
   bit                dmactive;
   bit                ndmreset;
   bit [19:0]         hartsel;
@@ -105,6 +116,28 @@ class dm_ref_model;
   local bit [31:0]   sbdata0_pending_value;
 
   // ── Construction ───────────────────────────────────────────────────────────
+  // Declared configuration. The positional constructor below stays for the
+  // fields that predate the schema; set_config() supplies the rest and is how
+  // a new implementation is described to the model.
+  dm_defines_pkg::dm_cfg_t cfg;
+  bit                      cfg_valid;
+
+  function void set_config(dm_defines_pkg::dm_cfg_t c);
+    cfg       = c;
+    cfg_valid = 1'b1;
+    num_harts          = c.num_harts;
+    version            = c.version;
+    authenticated      = c.authenticated;
+    impebreak          = c.impebreak;
+    hasresethaltreq    = c.hasresethaltreq;
+    supports_hartreset = c.supports_hartreset;
+    supports_hasel     = c.supports_hasel;
+    resumeack_reset    = c.resumeack_reset;
+    stickyunavail      = c.stickyunavail;
+    havereset_poweron  = c.havereset_poweron;
+    reset_dm(1'b1);
+  endfunction
+
   function new(
     int unsigned num_harts_        = 1,
     bit [3:0]    version_          = 4'd2,  // 0.13; both current DUTs (dm_defines_pkg.sv)
@@ -144,8 +177,22 @@ class dm_ref_model;
   // reset (only on power_on) — spec #3.5: "If the DM is reset while a hart is
   // halted, it is UNSPECIFIED whether that hart resumes," so this model keeps
   // the hart where it was, same as predictor.py's reset_dm().
+  // Spec reset values (dm_registers.xml): abstractauto 0, hawindowsel 0,
+  // sbaccess 2, relaxedpriv Preset, everything else 0.
+  local function void reset_declared_regs();
+    abstractauto    = '0;
+    hawindowsel     = '0;
+    authdata        = '0;
+    sbreadonaddr    = 1'b0;
+    sbaccess        = 3'd2;
+    sbautoincrement = 1'b0;
+    sbreadondata    = 1'b0;
+    relaxedpriv     = cfg.relaxedpriv_reset;
+  endfunction
+
   function void reset_dm(bit power_on = 1'b0);
     hart_state_s prev[];
+    reset_declared_regs();
     prev = harts;
 
     dmactive        = 1'b0;
@@ -205,6 +252,11 @@ class dm_ref_model;
       dm_defines_pkg::DM_ADDR_SBCS:       write_sbcs(value);
       dm_defines_pkg::DM_ADDR_SBADDRESS0: write_sbaddress0(value);
       dm_defines_pkg::DM_ADDR_SBDATA0:    write_sbdata0(value);
+      // Write-tracked registers whose read-back the spec determines exactly.
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: abstractauto = value;
+      dm_defines_pkg::DM_ADDR_HAWINDOWSEL:  hawindowsel  = value[14:0];
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS:   relaxedpriv  = value[11];
+
       default: ; // unmodeled address -- ignored, not an error
     endcase
   endfunction
@@ -442,6 +494,13 @@ class dm_ref_model;
   // read_mem32()/write_mem32(): sbcs[20]=sbreadonaddr)
   local function void write_sbcs(bit [31:0] value);
     sbcs_read_on_addr_armed = value[20];
+    // The R/W fields, tracked so sbcs reads back what was written
+    // (dm_registers.xml 0x38). sbbusy/sberror/sbbusyerror are dynamic and
+    // excluded from prediction -- see predict_mask().
+    sbreadonaddr    = value[20];
+    sbaccess        = value[19:17];
+    sbautoincrement = value[16];
+    sbreadondata    = value[15];
   endfunction
 
   local function void write_sbaddress0(bit [31:0] value);
@@ -472,7 +531,22 @@ class dm_ref_model;
       dm_defines_pkg::DM_ADDR_DMCONTROL: return 1'b1;
       dm_defines_pkg::DM_ADDR_DMSTATUS:  return 1'b1;
       dm_defines_pkg::DM_ADDR_DATA0:     return data0_pending_valid;
-      dm_defines_pkg::DM_ADDR_SBDATA0:   return sbdata0_pending_valid;
+      dm_defines_pkg::DM_ADDR_SBDATA0:   return cfg.sba_enable && sbdata0_pending_valid;
+      // Modelled only once the implementation has been declared: every one of
+      // these carries at least one Preset field, and guessing a Preset would
+      // turn a missing config into a false failure.
+      dm_defines_pkg::DM_ADDR_HARTINFO,
+      dm_defines_pkg::DM_ADDR_HALTSUM0,
+      dm_defines_pkg::DM_ADDR_COMMAND,
+      dm_defines_pkg::DM_ADDR_NEXTDM:    return cfg_valid;
+      // Optional features: claimed only when the implementation declares them.
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return cfg_valid && cfg.abstractauto_enable;
+      dm_defines_pkg::DM_ADDR_HAWINDOWSEL:  return cfg_valid && cfg.hartarray_enable;
+      // abstractcs and sbcs carry dynamic bits (busy, sberror) this untimed
+      // model does not predict; predict() returns the static picture and the
+      // caller masks. See predict_mask().
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS: return cfg_valid;
+      dm_defines_pkg::DM_ADDR_SBCS:       return cfg_valid && cfg.sba_enable;
       default:                           return 1'b0;
     endcase
   endfunction
@@ -483,6 +557,21 @@ class dm_ref_model;
       dm_defines_pkg::DM_ADDR_DMSTATUS:  return expect_dmstatus();
       dm_defines_pkg::DM_ADDR_DATA0:     return data0_pending_value;
       dm_defines_pkg::DM_ADDR_SBDATA0:   return sbdata0_pending_value;
+      dm_defines_pkg::DM_ADDR_HARTINFO:  return expect_hartinfo();
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS: return expect_abstractcs();
+      // command (0x17): cmdtype and control are both WARZ -- "Write any, read
+      // zero. A debugger may write any value. When read this field returns 0."
+      // (riscv/riscv-debug-spec introduction.adoc). That governs the value a
+      // DMI read returns, which is what this predicts. It says nothing about
+      // what the DM stores internally -- it must keep the command to execute
+      // it -- so this is a front-door expectation only; see dm_checker's
+      // backdoor list.
+      dm_defines_pkg::DM_ADDR_COMMAND:   return 32'h0;
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return expect_abstractauto();
+      dm_defines_pkg::DM_ADDR_SBCS:      return expect_sbcs();
+      dm_defines_pkg::DM_ADDR_HALTSUM0:  return expect_haltsum0();
+      dm_defines_pkg::DM_ADDR_HAWINDOWSEL: return {17'h0, hawindowsel};
+      dm_defines_pkg::DM_ADDR_NEXTDM:    return cfg.nextdm;
       default:                           return 32'h0; // caller must check has_model()
     endcase
   endfunction
@@ -568,6 +657,80 @@ class dm_ref_model;
     word[15:6]  = hartsel[19:10]; // hartselhi
     word[25:16] = hartsel[9:0];   // hartsello
     return word;
+  endfunction
+
+  // ── Registers the spec fully determines from declared Presets ───────────
+
+  // hartinfo (0x12): every field is R/Preset, so the whole word is declared.
+  local function bit [31:0] expect_hartinfo();
+    bit [31:0] w = '0;
+    w[23:20] = cfg.nscratch;
+    w[16]    = cfg.dataaccess;
+    w[15:12] = cfg.datasize;
+    w[11:0]  = cfg.dataaddr;
+    return w;
+  endfunction
+
+  // abstractcs (0x16). busy is dynamic and deliberately left 0 here -- see
+  // predict_mask(); cmderr is R/W1C and tracked front-door by the checker.
+  local function bit [31:0] expect_abstractcs();
+    bit [31:0] w = '0;
+    w[28:24] = cfg.progbufsize;
+    w[11]    = relaxedpriv;
+    w[3:0]   = cfg.datacount;
+    return w;
+  endfunction
+
+  // abstractauto (0x18): WARL. autoexecprogbuf bits above progbufsize and
+  // autoexecdata bits above datacount have no register behind them, so a
+  // conforming implementation reads them back as zero.
+  local function bit [31:0] expect_abstractauto();
+    bit [31:0] w = '0;
+    w[31:16] = abstractauto[31:16] & ((1 << cfg.progbufsize) - 1);
+    w[11:0]  = abstractauto[11:0]  & ((1 << cfg.datacount) - 1);
+    return w;
+  endfunction
+
+  // sbcs (0x38). sbbusy/sberror/sbbusyerror are dynamic; masked out.
+  local function bit [31:0] expect_sbcs();
+    bit [31:0] w = '0;
+    w[31:29] = cfg.sbversion;
+    w[20]    = sbreadonaddr;
+    w[19:17] = sbaccess;
+    w[16]    = sbautoincrement;
+    w[15]    = sbreadondata;
+    w[11:5]  = cfg.sbasize;
+    w[4]     = cfg.sbaccess128;
+    w[3]     = cfg.sbaccess64;
+    w[2]     = cfg.sbaccess32;
+    w[1]     = cfg.sbaccess16;
+    w[0]     = cfg.sbaccess8;
+    return w;
+  endfunction
+
+  // haltsum0 (0x40): bit per hart, set while that hart is halted.
+  local function bit [31:0] expect_haltsum0();
+    bit [31:0] w = '0;
+    for (int i = 0; i < num_harts && i < 32; i++)
+      if (harts[i].halted.get()) w[i] = 1'b1;
+    return w;
+  endfunction
+
+  // Which bits of predict() are actually predicted. Everything not set here is
+  // dynamic state an untimed model cannot know -- an in-flight abstract command
+  // or system bus access -- and must be checked front-door, against the
+  // response the DM itself returns, rather than against this model.
+  function bit [31:0] predict_mask(bit [6:0] addr);
+    case (addr)
+      // busy (12) and cmderr (10:8) excluded.
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS: return 32'h1F00_080F;
+      // sbbusyerror (22), sbbusy (21) and sberror (14:12) excluded; everything
+      // else is predicted. E01F_8FFF = sbversion 31:29, sbreadonaddr 20,
+      // sbaccess 19:17, sbautoincrement 16, sbreadondata 15, sbasize 11:5,
+      // sbaccess128..8 4:0.
+      dm_defines_pkg::DM_ADDR_SBCS:       return 32'hE01F_8FFF;
+      default:                            return 32'hFFFF_FFFF;
+    endcase
   endfunction
 
 endclass : dm_ref_model

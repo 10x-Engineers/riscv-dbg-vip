@@ -30,7 +30,7 @@ class jtag_driver extends uvm_driver #(jtag_txn_c);
     void'(uvm_config_db #(int unsigned)::get(this, "", "tck_half_ns", tck_half_ns));
     `uvm_info("JTAG_DRV",
       $sformatf("TCK half-period = %0d ns  (JTAG ~%0d MHz)",
-                tck_half_ns, 500/tck_half_ns), UVM_MEDIUM)
+                tck_half_ns, 500/tck_half_ns), UVM_HIGH)
   endfunction
 
   task run_phase(uvm_phase phase);
@@ -100,7 +100,7 @@ class jtag_driver extends uvm_driver #(jtag_txn_c);
   task drive_ir(jtag_txn_c txn);
     `uvm_info("JTAG_DRV",
       $sformatf("IR shift: ir=%05b (%0d bits)", txn.ir_val, txn.ir_len),
-      UVM_MEDIUM)
+      UVM_HIGH)
     drive_bit_notdo(1'b1, 1'b0);   // Select-DR-Scan
     drive_bit_notdo(1'b1, 1'b0);   // Select-IR-Scan
     drive_bit_notdo(1'b0, 1'b0);   // Capture-IR
@@ -122,7 +122,7 @@ class jtag_driver extends uvm_driver #(jtag_txn_c);
     logic tdo_bit;
     `uvm_info("JTAG_DRV",
       $sformatf("DR shift: data_in=0x%0h (%0d bits)", txn.dr_data_in, txn.dr_len),
-      UVM_MEDIUM)
+      UVM_HIGH)
 
     txn.dr_data_out = '0;
 

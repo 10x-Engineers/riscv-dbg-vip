@@ -79,6 +79,26 @@ class dut_config_reader;
     return val;
   endfunction
 
+  // Integer field, decimal or 0x-prefixed hex. Fatal when missing, like every
+  // other accessor here: these are declared facts about the DUT, never
+  // silently defaulted.
+  function int unsigned get_int(string key);
+    string v = raw_value(key);
+    int unsigned r = 0;
+    if (v.len() >= 2 && v[0] == "\"") v = v.substr(1, v.len() - 2);
+    if (v.len() > 2 && v[0] == "0" && (v[1] == "x" || v[1] == "X")) begin
+      for (int i = 2; i < v.len(); i++) begin
+        byte c = v[i];
+        if      (c >= "0" && c <= "9") r = (r << 4) + (c - "0");
+        else if (c >= "a" && c <= "f") r = (r << 4) + (c - "a" + 10);
+        else if (c >= "A" && c <= "F") r = (r << 4) + (c - "A" + 10);
+        else break;
+      end
+      return r;
+    end
+    return v.atoi();
+  endfunction
+
   function bit get_bool(string key);
     string v = raw_value(key);
     if (v == "true") return 1'b1;

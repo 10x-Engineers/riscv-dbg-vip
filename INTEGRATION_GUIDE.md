@@ -117,6 +117,49 @@ pip install -e .                      # from this repo's root
 git submodule update --init --recursive   # pulls CVA6-fork / ibex-demo-system
 ```
 
+### B.1a Choosing a simulator (Questa or Xcelium)
+
+Both SoC Makefiles run on either simulator. The tool invocation lives in
+`mk/simulator.mk`; the Makefiles themselves only name sources.
+
+```bash
+make sim_info            # which simulator was picked, and where its headers are
+make soc_test            # auto-detect: Questa if vsim is on PATH, else Xcelium
+make soc_test SIM=xcelium
+make soc_test SIM=questa
+```
+
+Auto-detection prefers Questa, so a machine with Questa keeps behaving exactly
+as before; a machine with only Xcelium needs no override. Run `make sim_info`
+first whenever a build fails oddly — it prints the resolved simulator, the DPI
+header directory, and whether the header was actually found.
+
+Nothing about the DUT or the stimulus changes with the simulator. The pydebug
+DPI `.so` is rebuilt against whichever tool's `svdpi.h` is in use, which is why
+`DPI_INC` is derived from the tool rather than written down.
+
+**Xcelium specifics**, each of which cost a debugging session to find:
+
+- Xcelium does *not* search the including file's own directory for
+  `` `include ``, the way Questa does. The kit's packages include their
+  siblings by bare name, so `mk/simulator.mk` puts the kit's `agents/jtag`
+  and `env` directories on `+incdir+`. Without them you get 17
+  `*E,COFILX cannot open include file` errors that look like a broken
+  checkout.
+- `soc_compile` builds a snapshot with `xrun -elaborate`; each `soc_test`
+  reruns it with `xrun -R` and fresh plusargs. That is the same two-phase
+  shape as Questa's `vlog` then `vsim`, so scenario turnaround stays fast.
+- Coverage is collected with `-coverage all` into `-covworkdir`, but merging
+  and reporting need `imc`, which ships with **vManager** and is licensed
+  separately from Xcelium. `make coverage_regress` therefore works while
+  `make coverage_merge` may not; the databases are still valid and can be
+  reported on a machine that has a licensed `imc`, or via
+  `make coverage_merge IMC=/path/to/vmanager/bin/imc`.
+
+**CVA6 under Xcelium: elaborates and runs, with one open functional gap.**
+Ibex is fully working. For CVA6, see B.5 for the four portability fixes and
+B.6 for what still fails.
+
 ### B.2 CVA6 (`cva6_sim/`)
 
 ```bash
@@ -139,14 +182,82 @@ make soc_test
 make soc_openocd
 make clean
 ```
-Same pattern; `flist_ibex.f` and `prim_shims/` are generic Questa RTL glue
-needed to compile `ibex-demo-system` standalone (not pydebug-specific — any
-Questa-based integration of this SoC needs them regardless of `pydebug`).
+Same pattern; `flist_ibex.f` and `prim_shims/` are generic RTL glue needed to
+compile `ibex-demo-system` standalone (not pydebug-specific — any simulator
+integration of this SoC needs them regardless of `pydebug`).
 
 ### B.4 What "passing" looks like
 
 A full pass prints `Session complete - N/N passed, Errors=0` from the
-Python side, inside the Questa transcript / the `sim_outputs/*.log` file.
+Python side, inside the simulator transcript / the `sim_outputs/*.log` file.
+
+One scenario is *expected* to report a mismatch on both DUTs and both
+simulators: `hart_selection`, where selecting a nonexistent hart leaves
+`allrunning`/`anyrunning` set alongside `allnonexistent`/`anynonexistent`
+(Ibex returns `0x0000cc82` against a predicted `0x0000c082`). That is the
+known `dm_csrs.sv` defect documented in the paper, not a regression — and it
+reproduces identically under Xcelium, which is the useful cross-check.
+
+### B.5 Portability fixes this cost (Questa was being permissive)
+
+Three of the four problems found when adding Xcelium were real
+LRM-conformance issues that Questa accepts silently. They are worth knowing
+about because they are the shape of thing any second simulator will find:
+
+| Where | Problem | Fix |
+|---|---|---|
+| `src/pydebug/sv/agents/jtag/jtag_bitbang.sv` | `rbs_done()[0]` — bit-select of a DPI call's return value (`*E,DPIFCS`) | Land the result in a `byte` first, as the other DPI outputs in that file already do |
+| `cva6_sim/Makefile` | `config_pkg.sv` passed explicitly *and* present in the flattened flist, compiling it twice (`*E,DLCIRD` circular dependency) | Dropped from the explicit list; the flist provides it |
+| `CVA6-fork` `corev_apu/riscv-dbg/src/dm_csrs.sv` | `dm_csr_addr` used at line 241, declared at 261 (`*E,UNDIDN`, IEEE 12.5) | Declaration and its continuous assign moved above first use |
+| `CVA6-fork` `vendor/pulp-platform/axi_riscv_atomics/src/axi_riscv_amos.sv` | Streaming concatenation as a ternary operand, illegal outside an assignment context (`*E,SCXALC`, LRM 11.4.14) | Byte-swap into named intermediates, then select |
+
+A fifth was an Xcelium **code-generator crash**, not a source error:
+`xmvlog_cg` died with an internal exception (SIGSEGV) on
+`CVA6-fork/core/cva6_mmu/cva6_tlb.sv`, on both Xcelium 20.09 and 23.03, at
+every optimisation level including `-O0`, and with `-noassert`,
+`-mce_serial_mc_codegen` and `-mcmaxcores 1`. Bisecting the module by cutting
+regions localised it to three lines in the sequential block:
+
+```systemverilog
+    tags_q      <= '{default: 0};   // crashes xmvlog_cg
+    tags_q      <= '0;              // elaborates cleanly
+```
+
+`tags_q` and `content_q` are *packed* arrays of anonymous packed structs, so
+`'0` and `'{default: 0}` mean the same thing (all bits zero) — `'0` is also
+the more idiomatic spelling for a packed type. Worth knowing generally: an
+assignment pattern applied to a packed array of anonymous packed structs is
+the construct to suspect if Xcelium's code generator crashes elsewhere.
+
+The `dm_csrs.sv` fix is in the **nested `10x-Engineers/riscv-dbg` submodule**;
+the `axi_riscv_amos.sv` and `cva6_tlb.sv` fixes are in
+**`10x-Engineers/CVA6-fork`**. All three belong in PRs against those
+repositories rather than this one.
+
+### B.6 CVA6 under Xcelium: what works and what does not
+
+With those fixes CVA6 elaborates, simulates, and drives the DM register
+interface correctly — but abstract commands hang.
+
+| Scenario | Result |
+|---|---|
+| `discovery`, `read_dmstatus`, `dm_activation`, `report_halt_status` | pass, `UVM_ERROR=0` |
+| `halt`, `gpr_write` (anything issuing an abstract command) | hang at the abstract-command step |
+
+The failure is `abstractcs.busy` never clearing (`abstractcs = 0x08001002`,
+`cmderr = 0`). The hart *is* halted when it happens — `dmstatus` reads
+`allhalted`/`anyhalted` set — and the DM accepts the command; it simply never
+completes.
+
+Two things it is **not**. It is not the 2 s wall-clock poll timeout in
+`riscv_dm.py`: raising it to 30 s ran 12.5x longer in simulated time
+(877 ms, 750 scoreboard transactions) and `busy` still never cleared. And it
+is not the abstract-command mechanism in general, because Ibex's
+`gpr_write`, `program_buffer` and `csr_access` scenarios all pass under
+Xcelium. It is specific to CVA6, and the likely area is the hart not
+executing the debug ROM — X-propagation on instruction fetch or a memory
+initialisation difference between the two simulators is the first thing to
+check.
 
 ---
 

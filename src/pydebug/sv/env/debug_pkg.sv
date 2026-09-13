@@ -6,6 +6,8 @@ package debug_pkg;
 
   import uvm_pkg::*;
   import jtag_pkg::*;
+  import dbg_axi_pkg::*;
+  import dbg_dmi_pkg::*;
   `include "uvm_macros.svh"
 
   `include "../sequences/dmi_read_seq.sv"
@@ -27,6 +29,7 @@ package debug_pkg;
   `include "dm_checker.sv"
   `include "env.sv"
   `include "py_bridge.sv"
+  `include "dbg_report_server.sv"
   `include "rv_dbg_base_test.sv"
 
 endpackage : debug_pkg

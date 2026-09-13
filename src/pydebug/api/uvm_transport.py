@@ -95,11 +95,23 @@ class UVMTransport(DebugTransport):
         self._connected = False
         log.info("[UVMTransport] disconnected")
 
+    def set_session_result(self, failed_steps: int) -> None:
+        """
+        Record how many steps failed, so shutdown can tell the simulator.
+
+        Without this the two halves disagree about the verdict: the client
+        exits non-zero, while the UVM side sees an ordinary shutdown and
+        reports UVM_ERROR: 0. A scenario that failed then looks green in the
+        simulation log, which is the one place people check.
+        """
+        self._failed_steps = failed_steps
+
     def _send_shutdown(self) -> None:
         """Send shutdown command so UVM drops its objection and simulation ends."""
         try:
             tx_id = self._next_id()
-            msg = json.dumps({"id": tx_id, "op": "shutdown"}) + "\n"
+            msg = json.dumps({"id": tx_id, "op": "shutdown",
+                              "data": getattr(self, "_failed_steps", 0)}) + "\n"
             self._sock.sendall(msg.encode())
             raw = self._file.readline()
             if raw:
@@ -108,6 +120,37 @@ class UVMTransport(DebugTransport):
         except Exception as e:
             log.debug("[UVMTransport] shutdown send failed (ok if sim already stopped): %s", e)
 
+    # ── Log forwarding ────────────────────────────────────────────────────────
+
+    def emit_log(self, text: str, verbosity: int = 200) -> None:
+        """
+        Send one line to the simulator, which prints it via `uvm_info`.
+
+        Printed by UVM rather than by this process so that it carries the
+        simulator's own $time and is ordered against the DMI traffic around it.
+        Python and the simulator are separate processes sharing one stdout, so
+        anything printed here races with UVM's own output and can be torn in
+        half mid-line; routing it through the bridge makes the simulator the
+        single writer.
+
+        Only UVMTransport does this. OpenOCDTransport keeps printing to stdout,
+        because on real hardware there is no simulator and no $time to align to.
+        Sequences are untouched either way -- they never print, they return
+        StepResults -- so the same scenario runs unchanged in both.
+
+        verbosity is a UVM verbosity level (UVM_MEDIUM = 200).
+        """
+        if not self._connected:
+            return
+        for chunk in text.splitlines() or [""]:
+            try:
+                self._transact({"op": "log", "text": chunk, "data": verbosity})
+            except Exception:
+                # Never let logging break a run: a debug session that dies
+                # because a log line could not be delivered is worse than one
+                # that loses the line.
+                return
+
     # ── Core ops ──────────────────────────────────────────────────────────────
 
     def read(self, addr: int) -> int:
@@ -115,12 +158,12 @@ class UVMTransport(DebugTransport):
         if "data" not in resp:
             raise TransportError(f"UVMTransport read: no data in response: {resp}")
         val = resp["data"]
-        log.debug("[UVMTransport] read  addr=0x%02x → 0x%08x", addr, val)
+        log.debug("[UVMTransport] read  addr=0x%02x -> 0x%08x", addr, val)
         return val
 
     def write(self, addr: int, data: int) -> None:
         self._transact({"op": "write", "addr": addr, "data": data})
-        log.debug("[UVMTransport] write addr=0x%02x ← 0x%08x", addr, data)
+        log.debug("[UVMTransport] write addr=0x%02x <- 0x%08x", addr, data)
 
     def reset(self) -> None:
         self._transact({"op": "reset"})
