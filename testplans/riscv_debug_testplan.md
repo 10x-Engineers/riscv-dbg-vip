@@ -504,9 +504,11 @@ it explicitly rather than assuming it.
 | SSTEP-012-C | Check | Hart runs freely; no autonomous re-halt | `debug_module.html#dmstatus` | P0 | Pass | |
 | SSTEP-013-S | Stimulate | Step 14 consecutive instructions | `Sdext.html#stepbit` | P1 | Pass | Observed clean |
 | SSTEP-013-C | Check | `dpc` advances monotonically; `dcsr.cause=4` every time; no drift | `Sdext.html#csr-dpc` | P1 | Pass | |
-| SSTEP-014-V | Cover | Stepped instruction class = {ordinary, compressed, taken branch, not-taken branch, `wfi`, trapping, privilege-changing, load, store} | P1 | Not started | |
-| SSTEP-015-V | Cover | `stepie` × interrupt-pending = {0,0}, {0,1}, {1,0}, {1,1} | P1 | Not started | |
-| SSTEP-016-V | Cover | Privilege at step = {M, S, U} | P1 | Not started | |
+| SSTEP-015-S | Stimulate | Step a load and a store to a mapped address | `Sdext.html#stepbit` | P1 | Not started | Coverage hole: `SSTEP-014-V` listed load/store as a cover bin with no item able to reach it |
+| SSTEP-015-C | Check | The access completes before Debug Mode is re-entered — destination register updated for the load, memory updated for the store; `dcsr.cause=4` | `Sdext.html#stepbit` | P1 | Not started | |
+| SSTEP-014-V | Cover | Stepped instruction class = {ordinary, compressed, taken branch, not-taken branch, `wfi`, trapping, privilege-changing, load, store} | P1 | Not started | Owned by `cg_step.cp_stepped_class` |
+| SSTEP-017-V | Cover | `stepie` × interrupt-pending = {0,0}, {0,1}, {1,0}, {1,1} | P1 | Not started | |
+| SSTEP-018-V | Cover | Privilege at step = {M, S, U} | P1 | Not started | |
 
 ## 3.10 Single-step — native, via the `icount` trigger
 
@@ -564,7 +566,10 @@ behaviour:
 | DM-008-C | Check | The hart parks in the Debug ROM loop and stays responsive indefinitely | `debug_module.html` | P0 | Pass | A stride bug here hung every abstract command — fixed in riscv-dbg PR #4 `7c4155f` |
 | DM-009-C | Check | Debug ROM `HALTED`/`GOING`/`RESUMING`/`EXCEPTION` addresses agree with `dm_mem`'s decode | `debug_module.html` | P0 | Pass | The defect above: ROM used an 8-byte stride, `dm_mem` decoded 4 |
 | DM-010-V | Cover | `dcsr.cause` = {1 ebreak, 2 trigger, 3 haltreq, 4 step, 5 resethaltreq} | `Sdext.html#csr-dcsr` | P0 | Not started | Every cause reachable — the real coverage goal |
-| DM-011-V | Cover | Entry privilege `dcsr.prv` = {M, S, U} | `Sdext.html#csr-dcsr` | P1 | Not started | |
+| DM-011-V | Cover | Entry privilege `dcsr.prv` = {M, S, U} | `Sdext.html#csr-dcsr` | P1 | Not started | Owned by `cg_debug_entry.cp_prv` |
+| DM-012-S | Stimulate | Enter Debug Mode by each cause from each privilege the cause can occur in: `ebreak` from M/S/U with the matching `ebreak*` bit set, `haltreq` from M/S/U, step from M/S/U | `Sdext.html#csr-dcsr` | P1 | Not started | Coverage hole: no item drove the cause × privilege combination |
+| DM-012-C | Check | `dcsr.cause` and `dcsr.prv` are both correct for every combination reached | `Sdext.html#csr-dcsr` | P1 | Not started | `ebreak` gating is per-privilege, so this cross is where a wrongly-gated `ebreak` shows up — neither coverpoint alone finds it |
+| DM-013-V | Cover | `dcsr.cause` × `dcsr.prv`, excluding `resethaltreq` × {S, U} — reset-halt entry always reports the post-reset privilege, which is M by definition | `Sdext.html#csr-dcsr` | P1 | Not started | Owned by `cg_debug_entry.x_cause_x_prv` |
 
 ## 3.12 Triggers (Sdtrig)
 
@@ -658,6 +663,31 @@ requirement**.
 | `allrunning=1` for a nonexistent hart | HS-002-C2 | Issue #130; reproduces on both DUTs |
 | `dmstatus` mismatch on hart selection | HS-001 | `hart_selection_uvm` aborts before verdict |
 | `dscratch0/1` clobbered by the DM | RAP-023 | **Testplan expectation is wrong** — `nscratch=2`. Re-specify, do not file |
+
+### Functional coverage gap found on review
+
+The implemented model (`src/pydebug/sv/fcov/covergroups.sv`, 14 covergroups)
+samples **only DMI-visible Debug Module registers**. `dcsr` and `dpc` are hart
+CSRs reached through an abstract command, and nothing samples them — so there
+is no `cp_cause`, no `cp_prv`, no `stepie` coverpoint, and no stepped-
+instruction class anywhere in the model.
+
+The consequence is concrete: **the `wfi` single-step defect could not have
+appeared as a coverage hole**, because no bin represents "a step over a
+stalling instruction". It was found by a directed test that someone thought to
+write, which is not a repeatable way to find the next one.
+
+Two covergroups are needed, and the rows above now own their bins:
+
+| Covergroup | Coverpoints | Owning rows |
+|---|---|---|
+| `cg_debug_entry` | `cp_cause`, `cp_prv`, `x_cause_x_prv` | DM-001-C, HALT-001-C2, SSTEP-001-C2, TRIG-003-C, DM-011-V, DM-013-V |
+| `cg_step` | `cp_stepped_class`, `cp_stepie_x_irq`, `cp_step_transition` | SSTEP-001…015, SSTEP-014-V, SSTEP-017-V |
+
+`cp_step_transition` should carry `DEBUG => RUNNING [* 2]` as an **illegal**
+bin: two consecutive samples in RUNNING after a step means the hart never
+re-entered Debug Mode, which is exactly the deadlock. That makes the defect a
+coverage failure rather than a directed-test coincidence.
 
 ### Rows marked `N/A`
 
