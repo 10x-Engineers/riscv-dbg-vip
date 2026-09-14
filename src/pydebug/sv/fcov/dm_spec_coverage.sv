@@ -374,12 +374,61 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
     end
   endfunction
 
+  // Per-coverpoint, not just per-covergroup. imc is the usual way to see which
+  // bins are short, and it is licence-blocked on this machine -- so without
+  // this the only visible number is an aggregate that says coverage is low
+  // without saying where. Closing coverage against an aggregate is guesswork.
   function void report_phase(uvm_phase phase);
-    `uvm_info("SPECCOV", $sformatf(
-      "spec coverage: debug_entry=%0.2f%% step=%0.2f%% hart_mode=%0.2f%% dtm=%0.2f%% abstract=%0.2f%% sba=%0.2f%%",
-      cg_debug_entry.get_inst_coverage(), cg_step_external.get_inst_coverage(),
-      cg_hart_mode.get_inst_coverage(), cg_dtm_dmi.get_inst_coverage(),
-      cg_abstract_cmd.get_inst_coverage(), cg_sba.get_inst_coverage()), UVM_NONE)
+    `uvm_info("SPECCOV", "── functional coverage, per coverpoint ──", UVM_NONE)
+
+    report_cg("cg_debug_entry", cg_debug_entry.get_inst_coverage());
+    report_cp("  cp_cause",        cg_debug_entry.cp_cause.get_inst_coverage());
+    report_cp("  cp_prv",          cg_debug_entry.cp_prv.get_inst_coverage());
+    report_cp("  cp_dpc_origin",   cg_debug_entry.cp_dpc_origin.get_inst_coverage());
+    report_cp("  x_cause_x_prv",   cg_debug_entry.x_cause_x_prv.get_inst_coverage());
+    report_cp("  x_cause_x_dpc",   cg_debug_entry.x_cause_x_dpc.get_inst_coverage());
+
+    report_cg("cg_step_external", cg_step_external.get_inst_coverage());
+    report_cp("  cp_stepped_class",      cg_step_external.cp_stepped_class.get_inst_coverage());
+    report_cp("  cp_stepie_irq",         cg_step_external.cp_stepie_irq.get_inst_coverage());
+    report_cp("  cp_prv_at_step",        cg_step_external.cp_prv_at_step.get_inst_coverage());
+    report_cp("  cp_consecutive",        cg_step_external.cp_consecutive.get_inst_coverage());
+    report_cp("  x_class_x_stepie",      cg_step_external.x_class_x_stepie.get_inst_coverage());
+    report_cp("  x_class_x_prv",         cg_step_external.x_class_x_prv.get_inst_coverage());
+    report_cp("  x_class_x_consecutive", cg_step_external.x_class_x_consecutive.get_inst_coverage());
+
+    report_cg("cg_hart_mode", cg_hart_mode.get_inst_coverage());
+    report_cp("  cp_mode_transition", cg_hart_mode.cp_mode_transition.get_inst_coverage());
+    report_cp("  cp_haltreq_guard",   cg_hart_mode.cp_haltreq_guard.get_inst_coverage());
+
+    report_cg("cg_dtm_dmi", cg_dtm_dmi.get_inst_coverage());
+    report_cp("  cp_dmi_op",     cg_dtm_dmi.cp_dmi_op.get_inst_coverage());
+    report_cp("  cp_dmi_result", cg_dtm_dmi.cp_dmi_result.get_inst_coverage());
+    report_cp("  x_op_x_result", cg_dtm_dmi.x_op_x_result.get_inst_coverage());
+
+    report_cg("cg_abstract_cmd", cg_abstract_cmd.get_inst_coverage());
+    report_cp("  cp_cmderr", cg_abstract_cmd.cp_cmderr.get_inst_coverage());
+
+    report_cg("cg_sba", cg_sba.get_inst_coverage());
+    report_cp("  cp_sbaccess", cg_sba.cp_sbaccess.get_inst_coverage());
+    report_cp("  cp_sberror",  cg_sba.cp_sberror.get_inst_coverage());
+
+    `uvm_info("SPECCOV", $sformatf("SPEC_TOTAL %0.2f%%", overall()), UVM_NONE)
+  endfunction
+
+  // Tagged so a regression script can grep one stable prefix rather than
+  // parsing prose that will be reworded.
+  function void report_cg(string name, real pct);
+    `uvm_info("SPECCOV", $sformatf("CG  %-22s %6.2f%%", name, pct), UVM_NONE)
+  endfunction
+  function void report_cp(string name, real pct);
+    `uvm_info("SPECCOV", $sformatf("CP  %-22s %6.2f%%", name, pct), UVM_NONE)
+  endfunction
+
+  function real overall();
+    return (cg_debug_entry.get_inst_coverage() + cg_step_external.get_inst_coverage()
+          + cg_hart_mode.get_inst_coverage()   + cg_dtm_dmi.get_inst_coverage()
+          + cg_abstract_cmd.get_inst_coverage()+ cg_sba.get_inst_coverage()) / 6.0;
   endfunction
 
 endclass

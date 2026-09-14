@@ -1,0 +1,19 @@
+{
+    "_comment": [
+        "Single-step over a wfi. Sdext: a stepped stalling instruction is treated",
+        "as a nop. Regression test for the CVA6 wfi single-step deadlock.",
+        "",
+        "The wfi's address is resolved from the ELF symbol wfi_insn at run time, so",
+        "editing sw/step_stall_probe.S and rebuilding needs no change here.",
+        "",
+        "  make soc_test CFG_FILE=configs/step_stall_uvm.json ELF=sw/step_stall_probe.elf"
+    ],
+    "scenario":  "step_stall",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {
+        "elf":    "sw/step_stall_probe.elf",
+        "symbol": "wfi_insn"
+    },
+    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 300.0 }
+}
