@@ -142,7 +142,7 @@ tests:
 
   - name: priv_irq
     config: configs/priv_irq_uvm.json
-    elf: sw/priv_irq.elf
+    elf: sw/priv_walk.elf
     timeout_s: 1200
     covers: [DM-011-V, SSTEP-006, SSTEP-007, SSTEP-018-V, SSTEP-022-V]
     why: >-

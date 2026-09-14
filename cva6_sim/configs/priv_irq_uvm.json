@@ -1,15 +1,22 @@
 {
     "_comment": [
-        "Step in M, S and U with a timer interrupt pending, at both stepie values.",
+        "Cycle M -> S -> U and step in each.",
         "",
-        "cp_prv, cp_prv_at_step and the {stepie, irq_pending} 2x2 cannot be",
-        "filled from an M-mode-only program with no interrupt armed.",
+        "cp_prv and cp_prv_at_step cannot be filled from an M-mode-only program.",
+        "The interrupt cross moved out: arming a timer in the same program spent",
+        "more instructions in M than the S and U bodies combined, and any fault in",
+        "that setup looped in the trap handler.",
         "",
-        "  make soc_test_cov CFG_FILE=configs/priv_irq_uvm.json ELF=sw/priv_irq.elf"
+        "  make soc_test_cov CFG_FILE=configs/priv_irq_uvm.json ELF=sw/priv_walk.elf"
     ],
-    "scenario":  "priv_irq",
+    "scenario": "priv_irq",
     "transport": "uvm",
-    "mode":      "batch",
-    "params": { "elf": "sw/priv_irq.elf" },
-    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 900.0 }
+    "mode": "batch",
+    "params": {
+        "elf": "sw/priv_walk.elf"
+    },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout": 900.0
+    }
 }
