@@ -312,6 +312,10 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
     prev_mode = 1'b0;
     prev_debug_entry = 1'b0;
     s_consecutive_steps = 0;
+    // Explicitly zeroed: an uninitialised mask reports 'x' for the privileges
+    // that were never reached, which reads as "unknown" when the answer is
+    // "no". The diagnostic exists to distinguish those two.
+    s_prv_seen_mask = 4'b0;
 
     forever begin
       @(posedge hart_vif.clk);
@@ -320,6 +324,10 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
         s_consecutive_steps = 0;
         continue;
       end
+      // Guard the index: priv_lvl can be x briefly out of reset, and an x
+      // index silently corrupts the whole mask rather than one bit.
+      if (!$isunknown(hart_vif.priv_lvl) && !hart_vif.debug_mode)
+        s_prv_seen_mask[hart_vif.priv_lvl] = 1'b1;
 
       // Mode transition, sampled every cycle so the D->M->D round trip is
       // seen even when it is only a couple of cycles wide.
@@ -357,11 +365,8 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
       if (hart_vif.commit_valid && !hart_vif.debug_mode && hart_vif.step())
         s_iclass = hart_vif.commit_iclass;
 
-      // Record every privilege the hart actually runs at, whatever dcsr says.
-      if (!hart_vif.debug_mode) begin
+      if (!hart_vif.debug_mode && !$isunknown(hart_vif.priv_lvl))
         s_actual_prv = hart_vif.priv_lvl;
-        s_prv_seen_mask[hart_vif.priv_lvl] = 1'b1;
-      end
 
       prev_mode = hart_vif.debug_mode;
       prev_debug_entry = hart_vif.debug_mode;
