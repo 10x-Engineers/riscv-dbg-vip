@@ -44,9 +44,12 @@ DCSR_PRV_MASK = 0x3
 REGNO_DCSR = 0x07B0
 PRV_NAME = {0: "U", 1: "S", 3: "M"}
 
-#: Enough steps to traverse M -> S -> U and back. The body is ~40 instructions
-#: including two trap-handler round trips, so this covers the cycle twice.
-STEPS_PER_PASS = 90
+#: Steps per stepie pass. Deliberately modest: each step costs a resume, a
+#: dmstatus poll and an abstract command, so ~10 DMI round trips. 180 steps
+#: overran a 25-minute timeout. The privilege bins are filled by the halt/resume
+#: phase below, which is far cheaper; stepping only has to cover the stepie
+#: cross, and 40 is plenty for that.
+STEPS_PER_PASS = 40
 
 
 def _wait_halted(dm: RISCVDebug, timeout: float = 2.0):
@@ -131,10 +134,13 @@ def build_priv_irq_sequence(
                 cause = (d >> 6) & 0x7
                 prv = d & DCSR_PRV_MASK
                 privs[prv] = privs.get(prv, 0) + 1
-                try:
-                    pcs.append(dm.get_pc())
-                except Exception:
-                    pass
+                # dpc only every 8th step: it costs a second abstract command
+                # per step, and the span is a diagnostic rather than a check.
+                if i % 8 == 0:
+                    try:
+                        pcs.append(dm.get_pc())
+                    except Exception:
+                        pass
                 if cause != DCSR_CAUSE_STEP:
                     failures.append(f"step {i}: dcsr.cause={cause}, "
                                     f"expected {DCSR_CAUSE_STEP}")
@@ -156,6 +162,41 @@ def build_priv_irq_sequence(
                        "so the privilege crosses stay unfilled"),
             )
         return run
+
+    # ── Catch each privilege by halting a free-running hart ────────────────
+    # Far cheaper than stepping to it. The program cycles M -> S -> U
+    # continuously, so halting at varied delays lands in different privileges,
+    # and each halt records dcsr.prv at whatever it caught. Stepping to U would
+    # cost hundreds of round trips to reach the same bin.
+    def catch_privileges():
+        privs = {}
+        for i in range(24):
+            dm.resume_no_wait()
+            # Varying the dwell is what makes this work: a fixed delay
+            # resynchronises with the program's own loop and lands in the same
+            # place every time.
+            time.sleep(0.002 + (i % 7) * 0.003)
+            dm.halt()
+            halted, _ = _wait_halted(dm, timeout=1.0)
+            if not halted:
+                continue
+            try:
+                d = dm.read_dcsr()
+            except Exception:
+                continue
+            privs[d & DCSR_PRV_MASK] = privs.get(d & DCSR_PRV_MASK, 0) + 1
+
+        state["caught"] = privs
+        seen = ", ".join(f"{PRV_NAME.get(p, p)}={n}" for p, n in sorted(privs.items()))
+        return StepResult(
+            ok=len(privs) > 1,
+            msg=f"halted into privileges: {seen or 'none'}"
+                + ("" if len(privs) > 1 else
+                   "; only M reached -- either the program never leaves M or "
+                   "dcsr.prv does not record the privilege. PRV_SEEN in the "
+                   "coverage report distinguishes the two"),
+        )
+    session.add_step("Catch each privilege by halting a running hart", catch_privileges)
 
     # ── Pass 1: stepie=0, interrupts masked during the step ────────────────
     session.add_step("Set dcsr.step=1, stepie=0", set_stepie(False))

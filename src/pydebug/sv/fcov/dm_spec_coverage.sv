@@ -37,6 +37,7 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
   logic [1:0]  s_stepie_irq;      // {stepie, irq_pending}
   logic [1:0]  s_mode_prev, s_mode_curr;
   logic        s_haltreq_during_step;
+  logic        s_stepping;        // dcsr.step set when the transition happened
   logic [2:0]  s_dmi_op, s_dmi_result;
   logic [2:0]  s_cmderr;
   logic [2:0]  s_sbaccess;
@@ -195,9 +196,16 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
     }
 
     // If haltreq is still asserted the hart re-halts for the original request
-    // and the step proves nothing. This guards the whole covergroup.
+    // and the step proves nothing.
+    //
+    // Guarded on s_stepping, and the guard is load-bearing: without it this
+    // coverpoint samples on EVERY mode transition, so an ordinary deliberate
+    // halt -- where haltreq is asserted precisely because the debugger meant
+    // to halt -- trips the illegal bin. That is legitimate behaviour being
+    // reported as a conformance failure. The bin is only meaningful while a
+    // step is outstanding.
     // SSTEP-001-C0
-    cp_haltreq_guard: coverpoint s_haltreq_during_step {
+    cp_haltreq_guard: coverpoint s_haltreq_during_step iff (s_stepping) {
       bins deasserted = {0};
       illegal_bins still_asserted = {1};
     }
@@ -320,6 +328,7 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
       if (hart_vif.debug_mode !== prev_mode) begin
         s_haltreq_during_step = dm_vif == null ? 1'b0
                                 : dm_vif.dmcontrol[31];   // haltreq
+        s_stepping = hart_vif.step();
         cg_hart_mode.sample();
       end
 

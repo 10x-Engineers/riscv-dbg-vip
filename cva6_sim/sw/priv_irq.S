@@ -74,10 +74,6 @@ arm_timer:
 m_mode_work:
         addi    a0, a0, 1
         c.addi  a1, 1
-        addi    a0, a0, 1
-        c.addi  a1, 1
-        nop
-        nop
 
 # ── Drop to S ────────────────────────────────────────────────────────────
         li      s1, 1                   # next trap means "came from S"
@@ -92,11 +88,39 @@ m_mode_work:
         mret
 
 s_mode_work:
-        addi    a2, a2, 1
-        c.addi  a3, 1
+        # Long, deliberately. S and U were 6 instructions each against ~36 in M,
+        # so a halt landed in M ~85% of the time and a 40-step walk never left
+        # it -- cp_prv showed M only. Weighting the program towards S and U is
+        # what makes the privilege bins reachable by either halting or stepping.
         addi    a2, a2, 1
         c.addi  a3, 1
         nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
+        nop
+        addi    a2, a2, 1
+        c.addi  a3, 1
         nop
         ecall                           # -> handler, state 1
 
@@ -114,9 +138,33 @@ to_u_mode:
 u_mode_work:
         addi    a4, a4, 1
         c.addi  a5, 1
+        nop
         addi    a4, a4, 1
         c.addi  a5, 1
         nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
+        nop
+        addi    a4, a4, 1
+        c.addi  a5, 1
         nop
         ecall                           # -> handler, state 2
 
