@@ -305,6 +305,15 @@
       illegal_bins all_without_any = {2};
     }
 
+    // Selecting a nonexistent index must report nonexistent rather than the
+    // previously selected hart's state -- a stale-mux bug looks exactly like
+    // a correct read on either coverpoint alone.
+    x_hartsel_x_state: cross cp_hartsel_class, cp_hart_reported_state {
+      // A nonexistent hart reported as running or halted. Observed on both
+      // DUTs -- issue #130.
+      illegal_bins il = binsof(cp_hartsel_class.first_nonexistent && (cp_hart_reported_state.running || cp_hart_reported_state.halted));
+    }
+
   endgroup : cg_hart_selection
 
   // ========================================================================
@@ -434,6 +443,16 @@
       // spec: debug_module.html#dmstatus
       // testplan: RST-010-C
       bins not_pending = {0};
+    }
+
+    // A reset landing mid-operation is where DMs wedge, and which reset it is
+    // decides what should survive. ndmreset during an abstract command must
+    // leave the DM usable; dmactive=0 during the same command may
+    // legitimately discard it. Neither coverpoint alone distinguishes them.
+    x_source_x_activity: cross cp_reset_source, cp_activity_at_reset {
+      // The DTM resets act on the transport, not the DM, so hart-activity
+      // cells carry no information for them.
+      ignore_bins ig = binsof(cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset);
     }
 
   endgroup : cg_reset
@@ -926,6 +945,25 @@
       illegal_bins still_asserted = {1};
     }
 
+    // The privilege the stepped instruction executed at. Needed in its own
+    // right, and as the second leg of x_class_x_privilege.
+    cp_prv_at_step: coverpoint dcsr.prv at the step {
+      // Stepping user code.
+      // spec: Sdext.html#csr-dcsr
+      // testplan: SSTEP-018-V
+      bins U = {0};
+
+      // Stepping supervisor code.
+      // spec: Sdext.html#csr-dcsr
+      // testplan: SSTEP-018-V
+      bins S = {1};
+
+      // Stepping machine code.
+      // spec: Sdext.html#csr-dcsr
+      // testplan: SSTEP-018-V
+      bins M = {3};
+    }
+
     // Single steps can drift: an off-by-one in dpc only shows after several.
     // Boundaries at one, a handful, and enough to cross a loop back-edge.
     cp_consecutive_steps: coverpoint consecutive_steps_without_resume {
@@ -1224,6 +1262,24 @@
       bins recovery_sequence = (CMD_FAIL => CLEAR_CMDERR => CMD_OK);
     }
 
+    // Size legality depends on which register is addressed: a 64-bit access
+    // to a 32-bit CSR must be rejected while the same size on a GPR succeeds.
+    // This cross is where cmderr=2 for a size actually arises.
+    x_regno_x_size: cross cp_regno_class, cp_aarsize {
+      // An unimplemented regno fails on the register, not the size; the size
+      // cells add nothing.
+      ignore_bins ig = binsof(cp_regno_class.unimplemented);
+    }
+
+    // Each command type fails differently, and an unimplemented type must
+    // give cmderr=2 rather than whatever the last command left behind.
+    x_cmdtype_x_cmderr: cross cp_cmdtype, cp_cmderr {
+      // Unimplemented on this DUT, so only the not_supported cell is
+      // reachable; the others are excluded by construction rather than
+      // untested.
+      ignore_bins ig = binsof(cp_cmdtype.quick_access || cp_cmdtype.access_memory);
+    }
+
   endgroup : cg_abstract_command
 
   // ========================================================================
@@ -1448,6 +1504,27 @@
       // spec: debug_module.html#sbcs
       // testplan: SBA-008-S
       bins unmapped = {0};
+    }
+
+    // Alignment has no meaning on its own -- address 4 is aligned for 32-bit
+    // and misaligned for 64-bit. Sampled as a relationship, not an address,
+    // so the cross with size is expressible.
+    cp_sb_alignment: coverpoint sbaddress alignment relative to sbaccess size {
+      // Address is a multiple of the access size.
+      // spec: debug_module.html#sbcs
+      // testplan: SBA-001-S
+      bins aligned = {0};
+
+      // One byte past an aligned address -- the first illegal offset.
+      // spec: debug_module.html#sbcs
+      // testplan: SBA-007-S
+      bins misaligned_by_1 = {1};
+
+      // Half the access size: legal for a narrower size, illegal for this
+      // one.
+      // spec: debug_module.html#sbcs
+      // testplan: SBA-007-S
+      bins misaligned_half = {2};
     }
 
     // Non-intrusive access is the main reason SBA exists; if it is only ever
@@ -1786,6 +1863,43 @@
       // spec: debug_module.html#program-buffer
       // testplan: RAP-024-S
       bins program_buffer = {4};
+    }
+
+    // Permissions differ by which class of storage is reached, and the class
+    // determines which interfaces can reach it at all. The second leg of
+    // x_interface_x_register.
+    cp_register_class: coverpoint register_class_being_accessed {
+      // dmcontrol, dmstatus, abstractcs and the rest -- DMI only.
+      // spec: debug_module.html
+      // testplan: RAP-001-S
+      bins dm_register = {0};
+
+      // dcsr/dpc/dscratch -- hart CSR instruction, or DMI via abstract
+      // command.
+      // spec: Sdext.html#csr-dcsr
+      // testplan: RAP-020-S
+      bins debug_csr = {1};
+
+      // Writable over DMI, executable but not writable by the hart.
+      // spec: debug_module.html#program-buffer
+      // testplan: RAP-024-S
+      bins progbuf = {2};
+
+      // data0..N, reachable as memory by the hart when dataaccess=1.
+      // spec: debug_module.html#hartinfo
+      // testplan: RAP-026-C
+      bins data_window = {3};
+
+      // Reachable by SBA and by a hart load/store, with different
+      // permissions.
+      // spec: debug_module.html#sbcs
+      // testplan: RAP-027-S
+      bins system_memory = {4};
+
+      // Executable by the hart, must not be writable.
+      // spec: debug_module.html
+      // testplan: RAP-030-S
+      bins debug_rom = {5};
     }
 
     // Accessibility depends on DM state as well as on access type, and each

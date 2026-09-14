@@ -183,6 +183,17 @@ covergroups:
           - {name: all_and_any, kind: explicit, values: [3], spec: "debug_module.html#dmstatus", why: "Every selected hart in this state.", testplan: [HALT-001-C]}
           - {name: all_without_any, kind: illegal, values: [2], spec: "debug_module.html#dmstatus", why: "all set with any clear is a contradiction in any hart count."}
 
+    crosses:
+      - name: x_hartsel_x_state
+        of: [cp_hartsel_class, cp_hart_reported_state]
+        rationale: >-
+          Selecting a nonexistent index must report nonexistent rather than the
+          previously selected hart's state -- a stale-mux bug looks exactly like
+          a correct read on either coverpoint alone.
+        illegal:
+          - cells: "cp_hartsel_class.first_nonexistent && (cp_hart_reported_state.running || cp_hart_reported_state.halted)"
+            why: "A nonexistent hart reported as running or halted. Observed on both DUTs -- issue #130."
+
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_reset
     objective: >-
@@ -240,6 +251,18 @@ covergroups:
         bins:
           - {name: pending, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "Set while ndmreset is asserted.", testplan: [RST-010-C]}
           - {name: not_pending, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "Clear once the reset completes.", testplan: [RST-010-C]}
+
+    crosses:
+      - name: x_source_x_activity
+        of: [cp_reset_source, cp_activity_at_reset]
+        rationale: >-
+          A reset landing mid-operation is where DMs wedge, and which reset it
+          is decides what should survive. ndmreset during an abstract command
+          must leave the DM usable; dmactive=0 during the same command may
+          legitimately discard it. Neither coverpoint alone distinguishes them.
+        ignore:
+          - cells: "cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset"
+            why: "The DTM resets act on the transport, not the DM, so hart-activity cells carry no information for them."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_run_control
@@ -489,6 +512,16 @@ covergroups:
         bins:
           - {name: deasserted, kind: explicit, values: [0], spec: "debug_module.html#dmcontrol", why: "The only valid configuration for a step test.", testplan: [SSTEP-001-C0]}
           - {name: still_asserted, kind: illegal, values: [1], spec: "Sdext.html#stepbit", why: "A step measured with haltreq asserted is not a step measurement."}
+      - name: cp_prv_at_step
+        type: value
+        expression: "dcsr.prv at the step"
+        rationale: >-
+          The privilege the stepped instruction executed at. Needed in its own
+          right, and as the second leg of x_class_x_privilege.
+        bins:
+          - {name: U, kind: explicit, values: [0], spec: "Sdext.html#csr-dcsr", why: "Stepping user code.", testplan: [SSTEP-018-V]}
+          - {name: S, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "Stepping supervisor code.", testplan: [SSTEP-018-V]}
+          - {name: M, kind: explicit, values: [3], spec: "Sdext.html#csr-dcsr", why: "Stepping machine code.", testplan: [SSTEP-018-V]}
       - name: cp_consecutive_steps
         type: range
         expression: "consecutive_steps_without_resume"
@@ -639,6 +672,25 @@ covergroups:
           - {name: write_read_sequence, kind: explicit, transition: "WRITE_DATA => WRITE_CMD => POLL_BUSY => READ_DATA", spec: "debug_module.html#abstract-commands", why: "The prescribed order.", testplan: [AC-002-S]}
           - {name: recovery_sequence, kind: explicit, transition: "CMD_FAIL => CLEAR_CMDERR => CMD_OK", spec: "debug_module.html#abstractcs", why: "Error then recovery — proves the DM is usable after a failure.", testplan: [AC-009-C]}
 
+    crosses:
+      - name: x_regno_x_size
+        of: [cp_regno_class, cp_aarsize]
+        rationale: >-
+          Size legality depends on which register is addressed: a 64-bit access
+          to a 32-bit CSR must be rejected while the same size on a GPR
+          succeeds. This cross is where cmderr=2 for a size actually arises.
+        ignore:
+          - cells: "cp_regno_class.unimplemented"
+            why: "An unimplemented regno fails on the register, not the size; the size cells add nothing."
+      - name: x_cmdtype_x_cmderr
+        of: [cp_cmdtype, cp_cmderr]
+        rationale: >-
+          Each command type fails differently, and an unimplemented type must
+          give cmderr=2 rather than whatever the last command left behind.
+        ignore:
+          - cells: "cp_cmdtype.quick_access || cp_cmdtype.access_memory"
+            why: "Unimplemented on this DUT, so only the not_supported cell is reachable; the others are excluded by construction rather than untested."
+
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_program_buffer
     objective: >-
@@ -745,6 +797,17 @@ covergroups:
           - {name: ram_body, kind: range, range: [2147483649, 2415919103], spec: "debug_module.html#sbcs", why: "Ordinary mapped memory."}
           - {name: ram_top, kind: boundary, values: [2415919104], spec: "debug_module.html#sbcs", why: "Last mapped address — the boundary before the decode fails."}
           - {name: unmapped, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Must produce sberror=2 rather than hanging the bus.", testplan: [SBA-008-S]}
+      - name: cp_sb_alignment
+        type: value
+        expression: "sbaddress alignment relative to sbaccess size"
+        rationale: >-
+          Alignment has no meaning on its own -- address 4 is aligned for
+          32-bit and misaligned for 64-bit. Sampled as a relationship, not an
+          address, so the cross with size is expressible.
+        bins:
+          - {name: aligned, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Address is a multiple of the access size.", testplan: [SBA-001-S]}
+          - {name: misaligned_by_1, kind: boundary, values: [1], spec: "debug_module.html#sbcs", why: "One byte past an aligned address -- the first illegal offset.", testplan: [SBA-007-S]}
+          - {name: misaligned_half, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "Half the access size: legal for a narrower size, illegal for this one.", testplan: [SBA-007-S]}
       - name: cp_sb_concurrency
         type: event
         expression: "sba_while_hart_running"
@@ -925,6 +988,20 @@ covergroups:
           - {name: hart_load_store, kind: explicit, values: [2], spec: "debug_module.html#hartinfo", why: "The hart reaching the data window or Debug ROM as memory.", testplan: [RAP-026-C]}
           - {name: system_bus, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "SBA, which bypasses hart privilege and translation.", testplan: [RAP-028-C]}
           - {name: program_buffer, kind: explicit, values: [4], spec: "debug_module.html#program-buffer", why: "The hart executing debugger-supplied instructions.", testplan: [RAP-024-S]}
+      - name: cp_register_class
+        type: value
+        expression: "register_class_being_accessed"
+        rationale: >-
+          Permissions differ by which class of storage is reached, and the
+          class determines which interfaces can reach it at all. The second
+          leg of x_interface_x_register.
+        bins:
+          - {name: dm_register, kind: explicit, values: [0], spec: "debug_module.html", why: "dmcontrol, dmstatus, abstractcs and the rest -- DMI only.", testplan: [RAP-001-S]}
+          - {name: debug_csr, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "dcsr/dpc/dscratch -- hart CSR instruction, or DMI via abstract command.", testplan: [RAP-020-S]}
+          - {name: progbuf, kind: explicit, values: [2], spec: "debug_module.html#program-buffer", why: "Writable over DMI, executable but not writable by the hart.", testplan: [RAP-024-S]}
+          - {name: data_window, kind: explicit, values: [3], spec: "debug_module.html#hartinfo", why: "data0..N, reachable as memory by the hart when dataaccess=1.", testplan: [RAP-026-C]}
+          - {name: system_memory, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "Reachable by SBA and by a hart load/store, with different permissions.", testplan: [RAP-027-S]}
+          - {name: debug_rom, kind: explicit, values: [5], spec: "debug_module.html", why: "Executable by the hart, must not be writable.", testplan: [RAP-030-S]}
       - name: cp_gating_state
         type: state
         expression: "dm_gating_state_at_access"
