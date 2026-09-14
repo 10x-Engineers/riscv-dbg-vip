@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -60,16 +61,29 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
         cmd.append(f"ELF={elf}")
 
     started = time.time()
+    # Own process group, so a timeout can kill the whole tree. `make` spawns
+    # xrun which spawns xmsim; killing only `make` leaves xmsim running with
+    # the pipe open, so the read blocks forever and the timeout never actually
+    # takes effect -- one hung test stalls the entire regression.
+    proc = subprocess.Popen(cmd, cwd=SIM, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True)
+    timed_out = False
     try:
-        p = subprocess.run(cmd, cwd=SIM, capture_output=True, text=True,
-                           timeout=timeout)
-        out = p.stdout + p.stderr
-        timed_out = False
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or "") + (e.stderr or "")
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", "replace")
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
         timed_out = True
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            time.sleep(5)
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            out, _ = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            out = ""
+    out = out or ""
     elapsed = time.time() - started
 
     log_dir = SIM / "sim_outputs" / name

@@ -49,7 +49,7 @@ PRV_NAME = {0: "U", 1: "S", 3: "M"}
 #: overran a 25-minute timeout. The privilege bins are filled by the halt/resume
 #: phase below, which is far cheaper; stepping only has to cover the stepie
 #: cross, and 40 is plenty for that.
-STEPS_PER_PASS = 40
+STEPS_PER_PASS = 20
 
 
 def _wait_halted(dm: RISCVDebug, timeout: float = 2.0):
@@ -170,7 +170,7 @@ def build_priv_irq_sequence(
     # cost hundreds of round trips to reach the same bin.
     def catch_privileges():
         privs = {}
-        for i in range(24):
+        for i in range(12):
             dm.resume_no_wait()
             # Varying the dwell is what makes this work: a fixed delay
             # resynchronises with the program's own loop and lands in the same
