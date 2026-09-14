@@ -45,6 +45,13 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
   logic        s_stopcount_adv, s_stoptime_adv;
   int unsigned s_consecutive_steps;
 
+  // Actual hart privilege, sampled from priv_lvl_q rather than from dcsr.prv.
+  // Kept separate deliberately: if dcsr.prv reads M while the hart is
+  // demonstrably running in U, that is an RTL defect, and a coverpoint that
+  // reads dcsr.prv for both cannot tell the two apart.
+  logic [1:0]  s_actual_prv;
+  logic [3:0]  s_prv_seen_mask;    // bit per privilege ever observed
+
   // ══════════════════════════════════════════════════════════════════════════
   // cg_debug_entry -- a hart enters Debug Mode for exactly one reason and
   // records which, so a debugger can tell an external halt from a breakpoint,
@@ -341,6 +348,12 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
       if (hart_vif.commit_valid && !hart_vif.debug_mode && hart_vif.step())
         s_iclass = hart_vif.commit_iclass;
 
+      // Record every privilege the hart actually runs at, whatever dcsr says.
+      if (!hart_vif.debug_mode) begin
+        s_actual_prv = hart_vif.priv_lvl;
+        s_prv_seen_mask[hart_vif.priv_lvl] = 1'b1;
+      end
+
       prev_mode = hart_vif.debug_mode;
       prev_debug_entry = hart_vif.debug_mode;
     end
@@ -413,6 +426,12 @@ class dm_spec_coverage extends uvm_subscriber #(jtag_txn_c);
     report_cp("  cp_sbaccess", cg_sba.cp_sbaccess.get_inst_coverage());
     report_cp("  cp_sberror",  cg_sba.cp_sberror.get_inst_coverage());
 
+    // Diagnostic, not coverage: says whether the hart ever left M at all.
+    // Distinguishes "the program never reached S/U" from "dcsr.prv does not
+    // record them", which look identical in cp_prv.
+    `uvm_info("SPECCOV", $sformatf(
+      "PRV_SEEN actual privileges executed: U=%0d S=%0d M=%0d",
+      s_prv_seen_mask[0], s_prv_seen_mask[1], s_prv_seen_mask[3]), UVM_NONE)
     `uvm_info("SPECCOV", $sformatf("SPEC_TOTAL %0.2f%%", overall()), UVM_NONE)
   endfunction
 

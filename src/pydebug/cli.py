@@ -68,6 +68,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.cmderr_sequence",
         "builder": "build_cmderr_sequence",
     },
+    "priv_irq": {
+        "module": "pydebug.sequences.priv_irq_sequence",
+        "builder": "build_priv_irq_sequence",
+    },
     "read_dmstatus": {
         "module": "pydebug.sequences.read_dmstatus_sequence",
         "builder": "build_read_dmstatus_sequence",

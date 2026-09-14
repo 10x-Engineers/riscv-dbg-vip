@@ -225,6 +225,31 @@ coverage_regress: soc_compile_cov
 			echo "!!! scenario $$cfg failed, continuing !!!"; \
 	done
 
+# ── Regression ────────────────────────────────────────────────────────────
+# One entry per test in regress/regression.yaml, which also records each test's
+# KNOWN result. The driver reports a test whose result differs from that, which
+# is the thing worth noticing -- a suite where two tests are expected to fail
+# and do is not a broken suite.
+#
+#   make regress                 every test, no coverage (fast)
+#   make regress_cov             every test with -coverage all
+#   make regress ONLY=cmderr,priv_irq
+#   make regress_list
+REGRESS   = python3 $(dir $(lastword $(MAKEFILE_LIST)))../mk/run_regression.py
+ONLY     ?=
+REPORT   ?= ../testplans/results/regression_report.md
+
+.PHONY: regress regress_cov regress_list
+
+regress:
+	$(REGRESS) $(if $(ONLY),--only $(ONLY),) --report $(REPORT)
+
+regress_cov:
+	$(REGRESS) --coverage $(if $(ONLY),--only $(ONLY),) --report $(REPORT)
+
+regress_list:
+	$(REGRESS) --list
+
 coverage_merge:
 	@mkdir -p $(RESULTS_DIR)
 	$(SIM_COV_MERGE_REPORT)
@@ -283,4 +308,4 @@ clean:
 	rm -rf $(SIM_CLEAN_ARTIFACTS) uvm_bridge_soc.so flist_soc.tmp sim.log
 	rm -f sw/*.o sw/*.elf
 
-.PHONY: soc_compile soc_test soc_openocd soc_interactive soc_compile_cov soc_test_cov coverage_regress coverage_merge clean
+.PHONY: regress regress_cov regress_list soc_compile soc_test soc_openocd soc_interactive soc_compile_cov soc_test_cov coverage_regress coverage_merge clean

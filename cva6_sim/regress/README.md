@@ -1,0 +1,232 @@
+# Running the CVA6 Debug VIP regression
+
+How to run the suite, collect functional and code coverage, and read the
+results. Everything here is a command you can run; nothing is automated behind
+your back.
+
+---
+
+## Prerequisites
+
+| Need | Check | If missing |
+|---|---|---|
+| Xcelium | `xrun -version` | Source your Cadence setup |
+| RISC-V toolchain | `riscv64-unknown-elf-gcc --version` | `export PATH=/opt/riscv/bin:$PATH` |
+| pydebug, in **python3.9** | `/usr/local/bin/python3 -c "import pydebug"` | see below |
+| PyYAML | `python3 -c "import yaml"` | `python3 -m pip install --user pyyaml` |
+
+**pydebug must be installed into the interpreter the testbench launches**, which
+is `python3` → `/usr/local/bin/python3` (3.9), not whatever `pip` alone resolves
+to:
+
+```bash
+cd /work/10x-jkhalid/riscv-dbg-vip
+/usr/local/bin/python3 -m pip install -e . --user
+```
+
+Installing into the wrong interpreter fails at run time with an import error
+inside the simulator, which reads like a testbench problem and is not one.
+
+Build the test programs once:
+
+```bash
+make -C cva6_sim/sw
+```
+
+---
+
+## Running
+
+```bash
+cd cva6_sim
+
+make regress_list        # what is in the suite and what each is expected to do
+make regress             # all 22 tests, no coverage       (~20 min)
+make regress_cov         # all 22 tests with coverage      (~35 min)
+make regress ONLY=cmderr,step_classes,priv_irq
+```
+
+A report lands in `testplans/results/regression_report.md`. Per-test logs go to
+`cva6_sim/sim_outputs/<test>/regress.log`, alongside the trace and waves that
+run already collects.
+
+### Reading the verdict table
+
+```
+test                     result    expected    steps  errors
+--------------------------------------------------------------
+step_classes             pass      pass          9/9       0
+csr_access               fail      fail          3/4       0
+sba                      partial   partial         -       0
+hart_selection           fail      fail            -       0
+```
+
+`expected` comes from `regress/regression.yaml` and records **what happens
+today**, not what should happen. Two tests are expected to fail and one to abort
+early; each is a known RTL defect written up in
+[`testplans/results/rtl_findings.md`](../../testplans/results/rtl_findings.md).
+
+**The regression fails only when a result differs from `expected`**, and the
+driver exits non-zero and prints what changed. That is the signal — a suite
+where the known failures still fail is a suite telling you nothing changed.
+
+If a result changes, either the RTL moved or the `expect` field is stale. Update
+`regression.yaml` deliberately. Changing it to make the run green defeats the
+whole mechanism.
+
+| result | meaning |
+|---|---|
+| `pass` | every step passed, zero UVM errors |
+| `fail` | ran to completion, at least one step failed |
+| `partial` | died before reporting a verdict — usually fail-fast on a known defect |
+| `timeout` | did not finish; the log is still collected |
+
+---
+
+## Functional coverage
+
+### Collect
+
+```bash
+make regress_cov
+```
+
+Covergroups **only collect when the snapshot is built with `-coverage all`**.
+`make regress` (and `make soc_test`) report `0.00%` by construction. If every
+number is zero, check which target you ran before assuming the testbench broke.
+
+### Read it
+
+Two places, and they answer different questions.
+
+**Per run, at the end of each log** — the per-coverpoint breakdown:
+
+```
+CG  cg_step_external        41.96%
+CP    cp_stepped_class      62.50%
+CP    cp_stepie_irq         25.00%
+CP    x_class_x_stepie      12.50%
+SPEC_TOTAL 41.50%
+```
+
+Lines are tagged `CG ` and `CP ` precisely so you can grep them without parsing
+prose:
+
+```bash
+grep -E "^.*(CG|CP)  " cva6_sim/sim_outputs/step_classes/regress.log
+grep -o "SPEC_TOTAL.*" cva6_sim/sim_outputs/*/regress.log
+```
+
+**Across the suite** — `make regress_cov` prints the best value per coverpoint
+and writes the same into the report.
+
+### What the merged number is, and is not
+
+The suite-level figure is the **maximum per coverpoint across runs**, which is a
+**lower bound** on true merged coverage: if two runs hit different bins of the
+same coverpoint, the max credits only the higher one. It is not the merged
+number and is labelled as such everywhere it appears.
+
+A real merge needs `imc`, which **fails licence authentication on this machine**:
+
+```
+Error: (LMF-01513): License call failed.
+FLEXnet ERROR(-513, 4050, 0): ... Authentication Failed (-8,4048)
+```
+
+vManager is licensed separately from Xcelium. `xrun` authenticates against the
+same file and `imc` does not, so this is a property of the licence file rather
+than something fixable from the simulation side. **The coverage data itself is
+intact** — every run writes a real database under
+`cva6_sim/sim_outputs/coverage/scope/<test>/`, collected with `-coverage all`.
+Nothing needs re-simulating.
+
+On a host with a working vManager licence:
+
+```bash
+# merge every run and report, including code coverage scoped to the DM
+IMC=/path/to/imc bash mk/xcelium_cov_report.sh \
+    cva6_sim/sim_outputs/coverage testplans/results/merged_coverage.txt
+
+# or the DM-scoped script, which also recurses into dm_csrs/dm_mem/dm_sba
+IMC=/path/to/imc bash mk/dm_cov.sh \
+    cva6_sim/sim_outputs/coverage testplans/results/
+```
+
+Copying `cva6_sim/sim_outputs/coverage/` to that machine is enough; it is
+self-contained.
+
+### Closing a hole
+
+1. Find the short coverpoint in a run log (`CP` lines).
+2. Look it up in [`testplans/generated/coverage_model.yaml`](../../testplans/generated/coverage_model.yaml)
+   — every bin carries its spec anchor, why it matters, and the testplan item
+   that owns it.
+3. Check the owning item exists in
+   [`testplans/riscv_debug_testplan.md`](../../testplans/riscv_debug_testplan.md).
+4. If no test drives it, that is the hole. Write the test.
+
+The two artifacts are cross-checked mechanically:
+
+```bash
+python3 ~/.claude/skills/functional-coverage/scripts/reconcile.py \
+    testplans/generated/coverage_model.yaml \
+    --testplan testplans/riscv_debug_testplan.md
+```
+
+---
+
+## Code coverage
+
+Block, expression, toggle and FSM coverage are collected by the same
+`-coverage all` build that collects functional coverage — `make regress_cov`
+already produces it. There is no separate run.
+
+```bash
+make regress_cov
+ls cva6_sim/sim_outputs/coverage/scope/     # one directory per test
+```
+
+Reporting it needs `imc`, blocked as above. To scope it to the Debug Module
+rather than the whole SoC — which is what matters here, since CVA6's core is not
+the DUT:
+
+```bash
+IMC=/path/to/imc bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
+```
+
+That reports `tb_top_soc.dut.i_dm_top`, recursing into `dm_csrs`, `dm_mem`,
+`dm_sba` and `dmi_jtag`. Whole-SoC code coverage would be dominated by CVA6
+itself and would say nothing about the DM.
+
+---
+
+## Adding a test
+
+1. Write the sequence in `src/pydebug/sequences/`.
+2. Register it in `src/pydebug/cli.py`'s scenario table.
+3. Add a config in `cva6_sim/configs/`. If it needs its own program, put the
+   ELF in `params.elf` — the regression passes it through, and a scenario run
+   against the wrong program **passes while covering nothing**.
+4. Add an entry to `regress/regression.yaml` with `covers:` naming the testplan
+   items and `why:` saying what it is for.
+5. `make regress ONLY=<name>` until it does what you meant, then
+   `make regress_cov` to see what it moved.
+
+---
+
+## Known-failing tests
+
+Three entries are not expected to pass. They are in the suite deliberately —
+removing a test because it fails is how a defect stops being tracked.
+
+| Test | Why | Detail |
+|---|---|---|
+| `hart_selection` | RTL-003 | A nonexistent hart reports `allrunning=1` |
+| `csr_access` | testplan bug, not RTL | `TC-DCSR-003` expects `dscratch0/1` to survive a program-buffer command; `hartinfo.nscratch=2` means the DM owns them |
+| `sba` | RTL-002 | `sbcs.sbaccess` hardwired, so the scenario aborts before its verdict |
+
+`step_stall` is the regression for RTL-001 and passes **only with the
+`csr_regfile.sv` `wfi` fix applied**. Without it the hart deadlocks and the test
+reports `partial`. That is the intended behaviour: it is the test that catches
+the defect coming back.
