@@ -1,0 +1,1312 @@
+## RISC-V Debug v1.0 — functional coverage model
+##
+## Derived from the ratified specification, INDEPENDENTLY of the testplan.
+## That independence is the point: the testplan author and the coverage author
+## should miss different things, so the disagreements between the two artifacts
+## are where the real holes surface. Reconcile with:
+##
+##   python3 ~/.claude/skills/functional-coverage/scripts/reconcile.py \
+##       coverage_model.yaml --testplan ../riscv_debug_testplan.md
+##
+## Anchors resolve under https://docs.riscv.org/reference/debug/v1.0/
+
+version: "1.0"
+dut_profile: cva6-10x-fork
+
+scope: >-
+  The complete external-debug feature set of Debug Specification v1.0: DTM and
+  DMI transport, Debug Module control and status, hart selection and
+  availability, reset, halt and resume, abstract commands, Program Buffer,
+  System Bus Access, Debug Mode and the core debug registers, external
+  single-step, native single-step via icount, triggers (Sdtrig), halt and
+  resume groups, and authentication. Excluded and NOT counted in any closure
+  figure: the E-Trace/Nexus trace specifications, which are separate documents.
+
+covergroups:
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_dtm_dmi
+    objective: >-
+      The transport carries every operation and reports every outcome, so a
+      debugger can distinguish success from busy from a sticky error and
+      recover without losing Debug Module state.
+    spec_refs: ["dtm.html#dtmcs", "dtm.html#dmi"]
+    sample_on: "every DMI transaction, on the response"
+    observability: "JTAG DR capture of the dmi register"
+    coverpoints:
+      - name: cp_dmi_op
+        type: value
+        expression: "dmi.op (request)"
+        rationale: >-
+          The three request encodings exercise different DM paths; the reserved
+          encoding must not wedge the DTM.
+        bins:
+          - {name: nop, kind: explicit, values: [0], spec: "dtm.html#dmi", why: "A no-op request must leave DM state untouched.", testplan: [DTM-006-S]}
+          - {name: read, kind: explicit, values: [1], spec: "dtm.html#dmi", why: "Basic read path.", testplan: [DTM-003-S]}
+          - {name: write, kind: explicit, values: [2], spec: "dtm.html#dmi", why: "Basic write path.", testplan: [DTM-003-S]}
+          - {name: reserved, kind: explicit, values: [3], spec: "dtm.html#dmi", why: "Reserved in a request; must not hang the DTM.", testplan: [DTM-006-S]}
+      - name: cp_dmi_result
+        type: value
+        expression: "dmi.op (response)"
+        rationale: >-
+          The response encoding is how a debugger decides whether to retry. All
+          three reachable outcomes must occur or the retry logic is untested.
+        bins:
+          - {name: success, kind: explicit, values: [0], spec: "dtm.html#dmi", why: "Normal completion.", testplan: [DTM-003-C]}
+          - {name: failed, kind: explicit, values: [2], spec: "dtm.html#dmi", why: "Sticky failure; further accesses keep failing until dmireset.", testplan: [DTM-005-C]}
+          - {name: busy, kind: explicit, values: [3], spec: "dtm.html#dmi", why: "DM could not keep up; the debugger must back off, idle and retry.", testplan: [DTM-004-C], needs_directed: true}
+          - {name: reserved_result, kind: illegal, values: [1], spec: "dtm.html#dmi", why: "1 is not a defined response encoding."}
+      - name: cp_dtmcs_dmistat
+        type: state
+        expression: "dtmcs.dmistat"
+        rationale: "The sticky status a debugger polls to decide whether a reset is needed."
+        bins:
+          - {name: no_error, kind: explicit, values: [0], spec: "dtm.html#dtmcs", why: "Clean state.", testplan: [RST-043-C]}
+          - {name: op_failed, kind: explicit, values: [2], spec: "dtm.html#dtmcs", why: "Set by a failed operation and sticky until dmireset.", testplan: [RST-020-C]}
+          - {name: op_busy, kind: explicit, values: [3], spec: "dtm.html#dtmcs", why: "Set when an operation was attempted while busy.", testplan: [DTM-004-C]}
+      - name: cp_idle_cycles
+        type: range
+        expression: "run_test_idle_cycles_between_accesses"
+        rationale: >-
+          dtmcs.idle advertises how many idle cycles the DM needs. Under-running
+          it is the classic source of intermittent failures on a fast debugger,
+          so the boundary sits at the advertised value, not at a round number.
+        bins:
+          - {name: none, kind: boundary, values: [0], spec: "dtm.html#dtmcs", why: "No idling at all — provokes busy if the DM needs any.", testplan: [DTM-004-S]}
+          - {name: below_advertised, kind: boundary, range: [1, 0], spec: "dtm.html#dtmcs", why: "One short of dtmcs.idle. Range resolved at elaboration from the advertised value.", testplan: [DIS-004-S]}
+          - {name: exactly_advertised, kind: boundary, range: [0, 0], spec: "dtm.html#dtmcs", why: "Exactly dtmcs.idle — must always succeed.", testplan: [DIS-004-C]}
+          - {name: above_advertised, kind: explicit, values: [99], spec: "dtm.html#dtmcs", why: "Generous idling — the baseline every other test runs at.", testplan: [DIS-008-C]}
+    crosses:
+      - name: x_op_x_result
+        of: [cp_dmi_op, cp_dmi_result]
+        testplan: [DTM-010-V]
+        rationale: >-
+          Reads and writes fail differently: a failed read returns stale data, a
+          failed write may partially apply. Both need their failure and busy
+          cells, which neither coverpoint alone proves.
+        ignore:
+          - cells: "cp_dmi_op.nop && cp_dmi_result.busy"
+            why: "A nop does no DM work, so it has no path to a busy response."
+      - name: x_idle_x_result
+        of: [cp_idle_cycles, cp_dmi_result]
+        testplan: [DTM-011-V]
+        rationale: >-
+          Under-running dtmcs.idle is the specified way to provoke a busy
+          response. This cross is the only place that causal link is measured:
+          idling correctly must never yield busy, and idling short must be able
+          to.
+        illegal:
+          - cells: "cp_idle_cycles.exactly_advertised && cp_dmi_result.busy"
+            why: "A DM that advertises N idle cycles and still reports busy after N has mis-declared dtmcs.idle."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_dm_activation
+    objective: >-
+      The DM comes out of reset on request and is then genuinely alive —
+      meaning registers other than dmstatus.version read plausible values.
+    spec_refs: ["debug_module.html#dmcontrol", "debug_module.html#reset"]
+    sample_on: "every dmcontrol write and the dmstatus read that follows"
+    observability: "DMI"
+    coverpoints:
+      - name: cp_dmactive_transition
+        type: transition
+        expression: "dmcontrol.dmactive"
+        rationale: >-
+          The 0->1 edge is activation; 1->0 is the DM reset that must return
+          every register to its reset value. The idempotent cases are where a
+          spurious state change would show.
+        bins:
+          - {name: activate, kind: explicit, transition: "0 => 1", spec: "debug_module.html#dmcontrol", why: "Bring the DM out of reset.", testplan: [ACT-001-S]}
+          - {name: deactivate, kind: explicit, transition: "1 => 0", spec: "debug_module.html#reset", why: "Reset the DM; all state returns to reset values.", testplan: [ACT-003-S]}
+          - {name: reactivate, kind: explicit, transition: "1 => 0 => 1", spec: "debug_module.html#reset", why: "Full cycle: the state must be clean, not merely re-enabled.", testplan: [ACT-003-C]}
+          - {name: idempotent_set, kind: explicit, transition: "1 => 1", spec: "debug_module.html#dmcontrol", why: "Writing 1 when already active must change nothing.", testplan: [ACT-004-S]}
+      - name: cp_post_activation_read
+        type: event
+        expression: "register_read_after_activation"
+        rationale: >-
+          dmstatus.version reads correctly even on a dead DM, so reading it
+          proves nothing. Coverage must record that registers BEYOND version
+          were read and were plausible.
+        bins:
+          - {name: hartinfo, kind: explicit, values: [0], spec: "debug_module.html#hartinfo", why: "nscratch/dataaccess consistent with the DUT.", testplan: [ACT-002-C]}
+          - {name: abstractcs, kind: explicit, values: [1], spec: "debug_module.html#abstractcs", why: "progbufsize/datacount non-zero and within legal range.", testplan: [ACT-002-C]}
+          - {name: haltsum0, kind: explicit, values: [2], spec: "debug_module.html#haltsum0", why: "Reads consistent with the hart's actual halt state.", testplan: [ACT-002-S]}
+      - name: cp_op_while_inactive
+        type: event
+        expression: "operation_attempted_with_dmactive_0"
+        rationale: "Operations issued before activation must be ignored, not queued."
+        bins:
+          - {name: haltreq_ignored, kind: explicit, values: [0], spec: "debug_module.html#dmcontrol", why: "haltreq with dmactive=0 must not halt the hart.", testplan: [RST-003-C]}
+          - {name: other_register_read, kind: explicit, values: [1], spec: "debug_module.html#dmcontrol", why: "Reads return reset values while inactive.", testplan: [RAP-040-C]}
+    crosses:
+      - name: x_transition_x_post_read
+        of: [cp_dmactive_transition, cp_post_activation_read]
+        testplan: [ACT-005-V]
+        rationale: >-
+          What a register should read depends on which transition preceded it.
+          After a full reactivate every register must read its reset value;
+          after an idempotent write they must be unchanged. Reading the same
+          register proves opposite things in the two cases, and neither
+          coverpoint alone distinguishes them.
+        ignore:
+          - cells: "cp_dmactive_transition.deactivate"
+            why: "With dmactive=0 only dmcontrol is meaningful, so the post-activation reads are not defined for this cell; RAP-040-C owns the inactive case."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_hart_selection
+    objective: >-
+      The DM addresses the hart the debugger selected, and reports truthfully
+      about harts that do not exist or cannot respond.
+    spec_refs: ["debug_module.html#dmcontrol", "debug_module.html#dmstatus"]
+    sample_on: "dmstatus read after any hartsel write"
+    observability: "DMI"
+    coverpoints:
+      - name: cp_hartsel_class
+        type: value
+        expression: "hartsel_class"
+        rationale: >-
+          What matters is the class of index, not its numeric value: existing,
+          just past the end, and all-ones (the width probe) behave differently.
+        bins:
+          - {name: first_existing, kind: boundary, values: [0], spec: "debug_module.html#dmcontrol", why: "Hart 0 always exists.", testplan: [HS-001-S]}
+          - {name: last_existing, kind: boundary, values: [1], spec: "debug_module.html#dmcontrol", why: "The highest implemented index — the boundary the DM must still decode.", testplan: [HS-007-C]}
+          - {name: first_nonexistent, kind: boundary, values: [2], spec: "debug_module.html#dmstatus", why: "One past the end: the DM must report nonexistent, not wrap.", testplan: [HS-002-S]}
+          - {name: all_ones, kind: explicit, values: [3], spec: "debug_module.html#dmcontrol", why: "The standard width-discovery probe: write all ones, read back the implemented width.", testplan: [DIS-003-S]}
+      - name: cp_hart_reported_state
+        type: state
+        expression: "hart_state_from_dmstatus"
+        rationale: >-
+          The five states dmstatus can report. Each drives different debugger
+          behaviour, and the nonexistent and unavailable states are the ones
+          implementations get wrong.
+        bins:
+          - {name: running, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "allrunning/anyrunning set.", testplan: [RES-001-C]}
+          - {name: halted, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "allhalted/anyhalted set.", testplan: [HALT-001-C]}
+          - {name: unavailable, kind: explicit, values: [2], spec: "debug_module.html#dmstatus", why: "Hart powered down or held in reset.", testplan: [HS-004-C]}
+          - {name: nonexistent, kind: explicit, values: [3], spec: "debug_module.html#dmstatus", why: "No hart at this index.", testplan: [HS-002-C]}
+          - {name: in_reset, kind: explicit, values: [4], spec: "debug_module.html#dmstatus", why: "ndmreset or hartreset asserted.", testplan: [RST-010-C]}
+      - name: cp_nonexistent_runstate
+        type: value
+        expression: "{allrunning, anyrunning} when nonexistent"
+        rationale: >-
+          A hart that does not exist is not running. This coverpoint exists
+          solely because both project DUTs get it wrong — it is a live defect
+          with a bin of its own so a fix is measurable.
+        bins:
+          - {name: correctly_not_running, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "The spec-conformant reading.", testplan: [HS-002-C2]}
+          - {name: wrongly_running, kind: illegal, values: [3], spec: "debug_module.html#dmstatus", why: "allrunning/anyrunning asserted for a nonexistent hart. Observed on both DUTs — issue #130."}
+      - name: cp_all_vs_any
+        type: value
+        expression: "{all_bit, any_bit}"
+        rationale: >-
+          all/any pairs only differ in a multi-hart system, but the {0,1}
+          combination is architecturally impossible in any system and is worth
+          an illegal bin regardless of hart count.
+        bins:
+          - {name: neither, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "No selected hart in this state.", testplan: [HS-008-C]}
+          - {name: some_not_all, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "any set, all clear — only reachable with multiple harts selected.", reachable: false, why_unreachable: "Single-hart DUT."}
+          - {name: all_and_any, kind: explicit, values: [3], spec: "debug_module.html#dmstatus", why: "Every selected hart in this state.", testplan: [HALT-001-C]}
+          - {name: all_without_any, kind: illegal, values: [2], spec: "debug_module.html#dmstatus", why: "all set with any clear is a contradiction in any hart count."}
+
+    crosses:
+      - name: x_hartsel_x_state
+        of: [cp_hartsel_class, cp_hart_reported_state]
+        testplan: [HS-009-V]
+        rationale: >-
+          Selecting a nonexistent index must report nonexistent rather than the
+          previously selected hart's state -- a stale-mux bug looks exactly like
+          a correct read on either coverpoint alone.
+        illegal:
+          - cells: "cp_hartsel_class.first_nonexistent && (cp_hart_reported_state.running || cp_hart_reported_state.halted)"
+            why: "A nonexistent hart reported as running or halted. Observed on both DUTs -- issue #130."
+      - name: x_hartsel_x_all_any
+        of: [cp_hartsel_class, cp_all_vs_any]
+        testplan: [HS-010-V]
+        rationale: >-
+          all/any only diverge with several harts selected, and which harts are
+          selected is what hartsel controls. On a multi-hart DUT this is where a
+          selection mask that reports the wrong aggregate shows up.
+        ignore:
+          - cells: "cp_all_vs_any.some_not_all"
+            why: "Requires more than one hart selected. Unreachable on a single-hart DUT; retained so a multi-hart DUT is measured here."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_reset
+    objective: >-
+      Each reset has the scope the spec defines, resets are survivable
+      mid-operation, and havereset tracks every cause until acknowledged.
+    spec_refs: ["debug_module.html#reset", "debug_module.html#dmcontrol"]
+    sample_on: "every reset assertion and the dmstatus read after release"
+    observability: "DMI; dmstatus.ndmresetpending and the havereset bits"
+    coverpoints:
+      - name: cp_reset_source
+        type: value
+        expression: "reset_source"
+        rationale: >-
+          The sources have different scopes, and a DM that conflates them
+          resets things it should not. Each needs its own bin.
+        bins:
+          - {name: power_on, kind: explicit, values: [0], spec: "debug_module.html#reset", why: "Cold start; the baseline every reset value is checked against.", testplan: [RST-030-C]}
+          - {name: dmactive_low, kind: explicit, values: [1], spec: "debug_module.html#reset", why: "Resets the DM but must not reset the DTM.", testplan: [RST-001-S]}
+          - {name: ndmreset, kind: explicit, values: [2], spec: "debug_module.html#dmcontrol", why: "Resets the platform but not the DM/DTM/DMI.", testplan: [RST-010-S]}
+          - {name: hartreset, kind: explicit, values: [3], spec: "debug_module.html#dmcontrol", why: "Resets only the selected harts.", testplan: [RST-011-S]}
+          - {name: dtm_dmireset, kind: explicit, values: [4], spec: "dtm.html#dtmcs", why: "Clears a sticky DMI error without disturbing DM state.", testplan: [RST-020-S]}
+          - {name: dtm_dmihardreset, kind: explicit, values: [5], spec: "dtm.html#dtmcs", why: "Forcibly resets the DTM state machine.", testplan: [RST-021-S]}
+          - {name: external, kind: explicit, values: [6], spec: "debug_module.html#dmstatus", why: "A platform reset outside the DM's control must still set havereset.", testplan: [RST-012-V]}
+      - name: cp_activity_at_reset
+        type: state
+        expression: "dm_activity_when_reset_asserted"
+        rationale: >-
+          A reset landing mid-operation is where DMs wedge. These are the
+          in-flight states worth interrupting, and each leaves different
+          internal state to recover from.
+        bins:
+          - {name: idle, kind: explicit, values: [0], spec: "debug_module.html#reset", why: "Baseline.", testplan: [RST-056-C]}
+          - {name: hart_running, kind: explicit, values: [1], spec: "debug_module.html#reset", why: "The common case.", testplan: [RST-013-V]}
+          - {name: hart_halted, kind: explicit, values: [2], spec: "debug_module.html#reset", why: "Reset from inside Debug Mode.", testplan: [RST-013-V]}
+          - {name: abstract_busy, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "Reset with abstractcs.busy=1 — classic hang source.", testplan: [RST-050-S], needs_directed: true}
+          - {name: sb_busy, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "Reset with sbcs.sbbusy=1.", testplan: [RST-051-S]}
+          - {name: dmi_in_flight, kind: explicit, values: [5], spec: "dtm.html#dmi", why: "Reset between a DMI request and its response.", testplan: [RST-052-S]}
+          - {name: hart_stalled_wfi, kind: explicit, values: [6], spec: "Sdext.html#4-1-3-wait-for-interrupt-instruction", why: "Reset while the hart is stalled in wfi.", testplan: [RST-013-V]}
+      - name: cp_havereset_lifecycle
+        type: transition
+        expression: "havereset_state"
+        rationale: >-
+          havereset is sticky and cleared only by an explicit acknowledge. The
+          transitions prove stickiness and acknowledgement separately; a single
+          value coverpoint proves neither.
+        bins:
+          - {name: set_by_reset, kind: explicit, transition: "CLEAR => SET", spec: "debug_module.html#dmstatus", why: "Any reset sets it.", testplan: [RST-060-C]}
+          - {name: stays_set, kind: explicit, transition: "SET => SET", spec: "debug_module.html#dmstatus", why: "Survives unrelated reads and writes — stickiness.", testplan: [RST-061-C]}
+          - {name: cleared_by_ack, kind: explicit, transition: "SET => CLEAR", spec: "debug_module.html#dmcontrol", why: "ackhavereset clears it.", testplan: [RST-062-C]}
+          - {name: cleared_without_ack, kind: illegal, transition: "SET => CLEAR", spec: "debug_module.html#dmstatus", why: "Clearing without an ackhavereset write, except across dmactive=0 where the spec permits either behaviour.", reachable: true}
+      - name: cp_reset_pending
+        type: value
+        expression: "dmstatus.ndmresetpending"
+        rationale: "The only DMI-visible indication that ndmreset is still asserted."
+        bins:
+          - {name: pending, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "Set while ndmreset is asserted.", testplan: [RST-010-C]}
+          - {name: not_pending, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "Clear once the reset completes.", testplan: [RST-010-C]}
+
+    crosses:
+      - name: x_source_x_activity
+        of: [cp_reset_source, cp_activity_at_reset]
+        testplan: [RST-065-V]
+        rationale: >-
+          A reset landing mid-operation is where DMs wedge, and which reset it
+          is decides what should survive. ndmreset during an abstract command
+          must leave the DM usable; dmactive=0 during the same command may
+          legitimately discard it. Neither coverpoint alone distinguishes them.
+        ignore:
+          - cells: "cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset"
+            why: "The DTM resets act on the transport, not the DM, so hart-activity cells carry no information for them."
+      - name: x_source_x_havereset
+        of: [cp_reset_source, cp_havereset_lifecycle]
+        testplan: [RST-066-V]
+        rationale: >-
+          The spec requires havereset to be set regardless of which cause reset
+          the hart. That is a per-source claim, so only the cross can show a DM
+          that tracks ndmreset but silently misses an external reset.
+        ignore:
+          - cells: "cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset"
+            why: "The DTM resets do not reset any hart, so they have no havereset semantics."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_run_control
+    objective: >-
+      Halt and resume move the hart between running and Debug Mode, ignore
+      requests that do not apply, and report the handshake truthfully.
+    spec_refs: ["debug_module.html#dmcontrol", "debug_module.html#dmstatus"]
+    sample_on: "every dmcontrol write carrying haltreq or resumereq"
+    observability: "DMI"
+    coverpoints:
+      - name: cp_haltreq_x_resumereq
+        type: value
+        expression: "{haltreq, resumereq}"
+        rationale: >-
+          Both bits in one write is an explicitly specified precedence case
+          (haltreq wins), reachable only by writing both together.
+        bins:
+          - {name: neither, kind: explicit, values: [0], spec: "debug_module.html#dmcontrol", why: "A dmcontrol write for some other purpose.", testplan: [RES-007-V]}
+          - {name: halt_only, kind: explicit, values: [2], spec: "debug_module.html#dmcontrol", why: "Ordinary halt.", testplan: [HALT-001-S]}
+          - {name: resume_only, kind: explicit, values: [1], spec: "debug_module.html#dmcontrol", why: "Ordinary resume.", testplan: [RES-001-S]}
+          - {name: both, kind: explicit, values: [3], spec: "debug_module.html#dmcontrol", why: "haltreq takes precedence; resumereq has no effect.", testplan: [RES-003-S], needs_directed: true}
+      - name: cp_request_x_prior_state
+        type: value
+        expression: "{request_type, hart_state_before}"
+        rationale: >-
+          A request's effect depends entirely on the state it lands in, and the
+          spec defines an asymmetry: resumereq on a running hart is ignored but
+          still clears resumeack. That combination is only reachable here.
+        bins:
+          - {name: halt_when_running, kind: explicit, values: [0], spec: "debug_module.html#dmcontrol", why: "Takes effect.", testplan: [HALT-001-S]}
+          - {name: halt_when_halted, kind: explicit, values: [1], spec: "debug_module.html#dmcontrol", why: "Ignored; no state change.", testplan: [HALT-002-S]}
+          - {name: halt_when_in_reset, kind: explicit, values: [2], spec: "debug_module.html#dmcontrol", why: "Pending; takes effect on reset release.", testplan: [RST-053-S]}
+          - {name: resume_when_halted, kind: explicit, values: [3], spec: "debug_module.html#dmcontrol", why: "Takes effect.", testplan: [RES-001-S]}
+          - {name: resume_when_running, kind: explicit, values: [4], spec: "debug_module.html#dmcontrol", why: "Ignored, but resumeack is still cleared — the §3.5 asymmetry.", testplan: [RES-002-C]}
+          - {name: resume_when_in_reset, kind: explicit, values: [5], spec: "debug_module.html#dmcontrol", why: "No transition; the hart is neither halted nor running.", testplan: [RES-006-S]}
+      - name: cp_hart_transition
+        type: transition
+        expression: "hart_state"
+        rationale: >-
+          Steady states are reached by any test. The transitions carry the
+          behaviour, and the reset-adjacent ones are the ones nobody drives by
+          accident.
+        bins:
+          - {name: running_to_halted, kind: explicit, transition: "RUNNING => HALTED", spec: "debug_module.html#dmcontrol", why: "Halt.", testplan: [HALT-001-C]}
+          - {name: halted_to_running, kind: explicit, transition: "HALTED => RUNNING", spec: "debug_module.html#dmcontrol", why: "Resume.", testplan: [RES-001-C]}
+          - {name: running_to_in_reset, kind: explicit, transition: "RUNNING => IN_RESET", spec: "debug_module.html#reset", why: "Reset a running hart.", testplan: [RST-010-S]}
+          - {name: in_reset_to_running, kind: explicit, transition: "IN_RESET => RUNNING", spec: "debug_module.html#reset", why: "Normal reset release.", testplan: [RST-010-C]}
+          - {name: in_reset_to_halted, kind: explicit, transition: "IN_RESET => HALTED", spec: "debug_module.html#dmcontrol", why: "Pending haltreq takes effect on reset release — the portable halt-on-reset substitute.", testplan: [RST-053-C]}
+          - {name: halted_to_in_reset, kind: ignore, transition: "HALTED => IN_RESET", why: "Confirmed unreachable on both DUTs 2026-07-25: no stimulus drives a reset while the hart reports halted without passing through RUNNING. Kept so a DUT that can do it is measured."}
+      - name: cp_resumeack
+        type: value
+        expression: "{allresumeack, anyresumeack}"
+        rationale: "The handshake proving the hart actually resumed rather than merely being asked to."
+        bins:
+          - {name: acked, kind: explicit, values: [3], spec: "debug_module.html#dmstatus", why: "Resume completed.", testplan: [RES-001-C2]}
+          - {name: cleared, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "Cleared by a resumereq that was ignored.", testplan: [RES-002-C]}
+      - name: cp_halt_latency
+        type: range
+        expression: "cycles_from_haltreq_to_allhalted"
+        rationale: >-
+          The spec bounds halt response at one second. The interesting
+          boundaries are "immediate" and "longer than any test should wait",
+          not an arbitrary bucket split.
+        bins:
+          - {name: immediate, kind: boundary, range: [0, 10], spec: "debug_module.html#dmcontrol", why: "The common case on a hart executing ordinary instructions.", testplan: [HALT-011-C]}
+          - {name: delayed, kind: explicit, values: [100], spec: "debug_module.html#dmcontrol", why: "Hart was stalled or mid-instruction; still well within bound.", testplan: [HALT-003-S]}
+          - {name: over_bound, kind: illegal, range: [1000000000, 2000000000], spec: "debug_module.html#dmcontrol", why: "Beyond the spec's one-second bound — a conformance failure, not slow hardware."}
+    crosses:
+      - name: x_transition_x_resumeack
+        of: [cp_hart_transition, cp_resumeack]
+        testplan: [RES-009-V]
+        rationale: >-
+          resumeack must accompany a real HALTED => RUNNING transition and must
+          be cleared by a resumereq that caused no transition. The §3.5
+          asymmetry is only visible as the pairing of the two.
+        illegal:
+          - cells: "cp_hart_transition.halted_to_running && cp_resumeack.cleared"
+            why: "A hart that genuinely resumed must acknowledge it; a transition with the ack cleared means the handshake is lost."
+      - name: x_request_x_latency
+        of: [cp_request_x_prior_state, cp_halt_latency]
+        testplan: [RES-010-V]
+        rationale: >-
+          Latency is only meaningful for requests that take effect. A halt on a
+          running hart has a bound; a halt on an already-halted hart has no
+          latency at all, and conflating them hides a slow path behind the
+          ignored cases.
+        ignore:
+          - cells: "cp_request_x_prior_state.halt_when_halted || cp_request_x_prior_state.resume_when_running"
+            why: "These requests are specified as ignored, so no transition occurs and latency is undefined for them."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_debug_entry
+    objective: >-
+      A hart enters Debug Mode for exactly one reason at a time and records
+      which, so a debugger can tell an external halt from a breakpoint, a
+      trigger or a completed step.
+    spec_refs: ["Sdext.html#csr-dcsr", "debug_module.html#dmcontrol"]
+    sample_on: "abstract read of dcsr after dmstatus.allhalted rises"
+    observability: "dcsr via Access Register; dmstatus over DMI"
+    coverpoints:
+      - name: cp_cause
+        type: value
+        expression: "dcsr.cause"
+        rationale: >-
+          Each cause drives different debugger behaviour. This coverpoint is
+          what proves every entry path was actually taken, and the implemented
+          testbench has no equivalent today.
+        bins:
+          - {name: ebreak, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "ebreak with the matching ebreak* bit set.", testplan: [DM-001-C]}
+          - {name: trigger, kind: explicit, values: [2], spec: "Sdtrig.html", why: "A trigger firing.", testplan: [TRIG-003-C], needs_directed: true}
+          - {name: haltreq, kind: explicit, values: [3], spec: "debug_module.html#dmcontrol", why: "External halt request.", testplan: [HALT-001-C2]}
+          - {name: step, kind: explicit, values: [4], spec: "Sdext.html#stepbit", why: "Re-entry after a completed single step.", testplan: [SSTEP-001-C2]}
+          - {name: resethaltreq, kind: explicit, values: [5], spec: "debug_module.html#dmcontrol", why: "Halt-on-reset entry at the first instruction.", reachable: false, why_unreachable: "dmstatus.hasresethaltreq=0 on this DUT; RST-053 is the portable substitute and reports cause=3."}
+          - {name: undefined_causes, kind: illegal, values: [0, 6, 7], spec: "Sdext.html#csr-dcsr", why: "The spec enumerates causes 1-5. Sampling 0 or 6-7 means the DUT reported an undefined cause."}
+      - name: cp_prv
+        type: value
+        expression: "dcsr.prv"
+        rationale: "Records the privilege the hart was in; ebreak gating is per-privilege."
+        bins:
+          - {name: U, kind: explicit, values: [0], spec: "Sdext.html#csr-dcsr", why: "Entry from user mode.", testplan: [DM-011-V]}
+          - {name: S, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "Entry from supervisor mode.", testplan: [DM-011-V]}
+          - {name: M, kind: explicit, values: [3], spec: "Sdext.html#csr-dcsr", why: "Entry from machine mode.", testplan: [DM-011-V]}
+          - {name: reserved_prv, kind: illegal, values: [2], spec: "Sdext.html#csr-dcsr", why: "Privilege 2 is reserved."}
+      - name: cp_ebreak_enable
+        type: value
+        expression: "{ebreakm, ebreaks, ebreaku} vs executing privilege"
+        rationale: >-
+          The enable-clear case is the one that catches a stuck-enabled bit,
+          and it is invisible to a coverpoint that only samples successful
+          entries.
+        bins:
+          - {name: enabled_entered_debug, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "ebreak* set: ebreak enters Debug Mode.", testplan: [DM-001-C]}
+          - {name: disabled_took_trap, kind: explicit, values: [0], spec: "Sdext.html#csr-dcsr", why: "ebreak* clear: ebreak takes an ordinary breakpoint trap, mcause=3.", testplan: [DM-002-C]}
+      - name: cp_dpc_origin
+        type: value
+        expression: "dpc_relationship_to_entry"
+        rationale: >-
+          dpc means different things per cause: the interrupted PC for haltreq,
+          the ebreak's own address, the handler entry for a stepped trap. A
+          single "dpc is plausible" check hides all three.
+        bins:
+          - {name: interrupted_pc, kind: explicit, values: [0], spec: "Sdext.html#csr-dpc", why: "haltreq: the instruction that would have executed next.", testplan: [HALT-001-C3]}
+          - {name: ebreak_address, kind: explicit, values: [1], spec: "Sdext.html#csr-dpc", why: "ebreak: the address of the ebreak itself.", testplan: [DM-001-C]}
+          - {name: next_after_step, kind: explicit, values: [2], spec: "Sdext.html#csr-dpc", why: "step: advanced by the stepped instruction's length.", testplan: [SSTEP-001-C3]}
+          - {name: trap_handler_entry, kind: explicit, values: [3], spec: "Sdext.html#stepbit", why: "A stepped instruction that trapped: the handler's first instruction.", testplan: [SSTEP-008-C]}
+    crosses:
+      - name: x_cause_x_prv
+        of: [cp_cause, cp_prv]
+        rationale: >-
+          ebreak entry is gated per privilege by ebreakm/s/u, so this cross is
+          where a wrongly-gated ebreak shows up. The other causes do not vary by
+          privilege, but recording prv on each catches it being reported wrong.
+        testplan: [DM-012-C, DM-013-V]
+        ignore:
+          - cells: "cp_cause.resethaltreq && !cp_prv.M"
+            why: "Reset-halt entry always reports the post-reset privilege, which is M by definition. The U and S cells are unreachable, not untested."
+      - name: x_cause_x_dpc
+        of: [cp_cause, cp_dpc_origin]
+        testplan: [DM-014-V]
+        rationale: >-
+          dpc means something different per cause -- the interrupted PC for
+          haltreq, the ebreak's own address, the next instruction after a step,
+          the handler entry for a stepped trap. A DM can get dpc right for one
+          cause and wrong for another, and only this cross separates them.
+        illegal:
+          - cells: "cp_cause.ebreak && cp_dpc_origin.next_after_step"
+            why: "ebreak entry must report the ebreak's own address, not the following instruction; reporting the next address would silently skip an instruction on resume."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_debug_mode
+    objective: >-
+      Debug Mode suspends the things the spec says it suspends, and dret
+      returns the hart exactly where it came from.
+    spec_refs: ["Sdext.html#debugmode", "Sdext.html#dret"]
+    sample_on: "entry to and exit from Debug Mode"
+    observability: "dcsr/dpc via abstract command; mcycle and time via program buffer"
+    coverpoints:
+      - name: cp_stopcount
+        type: value
+        expression: "{dcsr.stopcount, counters_advanced}"
+        rationale: "Both settings matter: the suspend and the non-suspend are separate behaviours."
+        bins:
+          - {name: stopped, kind: explicit, values: [2], spec: "Sdext.html#csr-dcsr", why: "stopcount=1: mcycle must not advance while halted.", testplan: [DM-006-C]}
+          - {name: free_running, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "stopcount=0: counters continue.", testplan: [DM-006-S]}
+          - {name: stopped_but_advanced, kind: illegal, values: [3], spec: "Sdext.html#csr-dcsr", why: "stopcount=1 with counters advancing is a conformance failure."}
+      - name: cp_stoptime
+        type: value
+        expression: "{dcsr.stoptime, time_advanced}"
+        rationale: "Same structure as stopcount, on a different timer."
+        bins:
+          - {name: stopped, kind: explicit, values: [2], spec: "Sdext.html#csr-dcsr", why: "stoptime=1: time must not update while halted.", testplan: [DM-007-C]}
+          - {name: free_running, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "stoptime=0: time continues.", testplan: [DM-007-S]}
+      - name: cp_interrupts_in_debug
+        type: event
+        expression: "interrupt_asserted_while_in_debug_mode"
+        rationale: "An interrupt taken in Debug Mode would corrupt the debugger's context."
+        bins:
+          - {name: masked_correctly, kind: explicit, values: [0], spec: "Sdext.html#debugmode", why: "Interrupt pending and enabled but not taken while halted.", testplan: [DM-005-C]}
+          - {name: taken_in_debug, kind: illegal, values: [1], spec: "Sdext.html#debugmode", why: "An interrupt serviced while in Debug Mode."}
+      - name: cp_dret_context
+        type: value
+        expression: "dret_executed_in"
+        rationale: "dret outside Debug Mode is an illegal instruction — the negative case needs its own bin."
+        bins:
+          - {name: in_debug_mode, kind: explicit, values: [0], spec: "Sdext.html#dret", why: "Legal: returns to dpc at dcsr.prv.", testplan: [DM-003-C]}
+          - {name: outside_debug_mode, kind: explicit, values: [1], spec: "Sdext.html#dret", why: "Illegal instruction trap.", testplan: [DM-004-C]}
+      - name: cp_debug_csr_access_context
+        type: value
+        expression: "debug_csr_read_from_privilege"
+        rationale: "dcsr/dpc/dscratch must be invisible outside Debug Mode."
+        bins:
+          - {name: from_debug_mode, kind: explicit, values: [0], spec: "Sdext.html#csr-dcsr", why: "Legal.", testplan: [RAP-020-S]}
+          - {name: from_m_mode, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "Illegal instruction, even at machine privilege.", testplan: [RAP-022-C]}
+      - name: cp_debug_rom_flags
+        type: event
+        expression: "debug_rom_flag_written"
+        rationale: >-
+          The ROM/dm_mem flag addresses must agree. A stride mismatch here made
+          every abstract command hang, and no register-level coverpoint saw it.
+        bins:
+          - {name: halted, kind: explicit, values: [0], spec: "debug_module.html", why: "Hart reports arrival in Debug Mode.", testplan: [DM-008-C]}
+          - {name: going, kind: explicit, values: [1], spec: "debug_module.html", why: "Hart acknowledges a command. The flag whose stride was wrong.", testplan: [DM-009-C]}
+          - {name: resuming, kind: explicit, values: [2], spec: "debug_module.html", why: "Hart acknowledges a resume.", testplan: [DM-009-C]}
+          - {name: exception, kind: explicit, values: [3], spec: "debug_module.html", why: "Hart reports a fault during program buffer execution.", testplan: [PB-005-C]}
+    crosses:
+      - name: x_stopcount_x_stoptime
+        of: [cp_stopcount, cp_stoptime]
+        testplan: [DM-015-V]
+        rationale: >-
+          dcsr.stopcount and dcsr.stoptime are independent controls over two
+          different timebases, and an implementation that wires them together
+          passes both coverpoints separately while being wrong. All four
+          combinations are architecturally legal.
+      - name: x_dret_x_csr_access
+        of: [cp_dret_context, cp_debug_csr_access_context]
+        testplan: [DM-016-V]
+        rationale: >-
+          Both measure what the hart may do outside Debug Mode. The cross
+          confirms the privilege check is on Debug Mode itself rather than on
+          machine privilege -- a hart in M-mode must be refused both.
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_step_external
+    objective: >-
+      A single step retires exactly one instruction and returns to Debug Mode
+      unaided, for every class of instruction — including those that would
+      otherwise never complete.
+    spec_refs: ["Sdext.html#stepbit"]
+    sample_on: "dcsr read after the post-step re-halt"
+    observability: "dpc delta and dcsr.cause via Access Register; commit trace"
+    coverpoints:
+      - name: cp_stepped_class
+        type: value
+        expression: "stepped_instruction_class"
+        rationale: >-
+          The instruction class is what makes a step interesting. Ordinary
+          instructions are hit by any test; the stalling and control-transfer
+          classes must be asked for.
+        bins:
+          - {name: ordinary, kind: explicit, values: [0], spec: "Sdext.html#stepbit", why: "dpc advances by the instruction length.", testplan: [SSTEP-001-C3]}
+          - {name: compressed, kind: explicit, values: [1], spec: "Sdext.html#stepbit", why: "dpc advances by 2 rather than 4.", testplan: [SSTEP-002-C]}
+          - {name: wfi, kind: explicit, values: [2], spec: "Sdext.html#stepbit", why: "A stalling instruction stepped over must be treated as a nop. This is the bin that represents the CVA6 deadlock.", testplan: [SSTEP-004-C2]}
+          - {name: taken_branch, kind: explicit, values: [3], spec: "Sdext.html#stepbit", why: "dpc must be the branch target, not the sequential next address.", testplan: [SSTEP-003-C]}
+          - {name: not_taken_branch, kind: explicit, values: [4], spec: "Sdext.html#stepbit", why: "Falls through: dpc is the sequential next address.", testplan: [SSTEP-019-C]}
+          - {name: trapping, kind: explicit, values: [5], spec: "Sdext.html#stepbit", why: "Debug Mode re-entered at the handler's first instruction.", testplan: [SSTEP-008-C]}
+          - {name: privilege_changing, kind: explicit, values: [6], spec: "Sdext.html#stepbit", why: "ecall/mret/sret: dcsr.prv must reflect the privilege after the transition.", testplan: [SSTEP-009-C]}
+          - {name: load_store, kind: explicit, values: [7], spec: "Sdext.html#stepbit", why: "The access must complete before Debug Mode is re-entered.", testplan: [SSTEP-015-C]}
+          - {name: wrs, kind: ignore, values: [8], why: "Zawrs absent on this DUT; wrs.sto/wrs.nto decode as illegal and would test the trap handler rather than the step rule."}
+      - name: cp_stepie_x_irq
+        type: value
+        expression: "{dcsr.stepie, interrupt_pending}"
+        rationale: >-
+          stepie decides whether an interrupt may fire during the step, and it
+          only matters with an interrupt actually pending. A 2x2 rather than two
+          independent points, because three of the four cells are trivial and
+          one is the whole question.
+        bins:
+          - {name: masked_no_irq, kind: explicit, values: [0], spec: "Sdext.html#csr-dcsr", why: "Baseline step.", testplan: [SSTEP-006-C]}
+          - {name: masked_irq_pending, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "stepie=0 must keep the interrupt from firing.", testplan: [SSTEP-006-C]}
+          - {name: unmasked_no_irq, kind: explicit, values: [2], spec: "Sdext.html#csr-dcsr", why: "stepie=1, nothing pending: behaves as a normal step.", testplan: [SSTEP-007-C]}
+          - {name: unmasked_irq_pending, kind: explicit, values: [3], spec: "Sdext.html#csr-dcsr", why: "The interrupt is taken; dpc is the handler entry.", testplan: [SSTEP-007-C]}
+      - name: cp_step_transition
+        type: transition
+        expression: "hart_mode"
+        rationale: "The step is a D->M->D round trip; the return leg is the property under test."
+        bins:
+          - {name: complete_step, kind: explicit, transition: "DEBUG => RUNNING => DEBUG", spec: "Sdext.html#stepbit", why: "A completed step.", testplan: [SSTEP-001-C]}
+          - {name: stuck_running, kind: illegal, transition: "DEBUG => RUNNING [* 2]", spec: "Sdext.html#stepbit", why: "Two consecutive samples in RUNNING after a step means the hart never re-entered Debug Mode — exactly the CVA6 wfi deadlock."}
+      - name: cp_haltreq_during_step
+        type: value
+        expression: "haltreq_asserted_during_step_window"
+        rationale: >-
+          If haltreq is still asserted the hart re-halts for the original
+          request and the step proves nothing. This bin guards the whole
+          covergroup's validity.
+        bins:
+          - {name: deasserted, kind: explicit, values: [0], spec: "debug_module.html#dmcontrol", why: "The only valid configuration for a step test.", testplan: [SSTEP-001-C0]}
+          - {name: still_asserted, kind: illegal, values: [1], spec: "Sdext.html#stepbit", why: "A step measured with haltreq asserted is not a step measurement."}
+      - name: cp_prv_at_step
+        type: value
+        expression: "dcsr.prv at the step"
+        rationale: >-
+          The privilege the stepped instruction executed at. Needed in its own
+          right, and as the second leg of x_class_x_privilege.
+        bins:
+          - {name: U, kind: explicit, values: [0], spec: "Sdext.html#csr-dcsr", why: "Stepping user code.", testplan: [SSTEP-018-V]}
+          - {name: S, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "Stepping supervisor code.", testplan: [SSTEP-018-V]}
+          - {name: M, kind: explicit, values: [3], spec: "Sdext.html#csr-dcsr", why: "Stepping machine code.", testplan: [SSTEP-018-V]}
+      - name: cp_consecutive_steps
+        type: range
+        expression: "consecutive_steps_without_resume"
+        rationale: >-
+          Single steps can drift: an off-by-one in dpc only shows after several.
+          Boundaries at one, a handful, and enough to cross a loop back-edge.
+        bins:
+          - {name: single, kind: boundary, values: [1], spec: "Sdext.html#stepbit", why: "The basic case.", testplan: [SSTEP-001-S]}
+          - {name: several, kind: range, range: [2, 16], spec: "Sdext.html#stepbit", why: "Enough to expose drift; 14 observed clean.", testplan: [SSTEP-013-C]}
+          - {name: across_loop_backedge, kind: explicit, values: [32], spec: "Sdext.html#stepbit", why: "Stepping past a backward branch, where dpc must follow the branch.", testplan: [SSTEP-020-C]}
+    crosses:
+      - name: x_class_x_privilege
+        of: [cp_stepped_class, cp_prv_at_step]
+        testplan: [SSTEP-021-V]
+        rationale: >-
+          Privilege changes what an instruction class does: a trapping
+          instruction from U enters the M-mode handler, from M stays in M.
+          Stepping the stalling and trapping classes from each privilege is
+          where the interaction lives. The ordinary and compressed classes do
+          not vary by privilege and are ignored here to avoid an empty product.
+        ignore:
+          - cells: "cp_stepped_class.ordinary || cp_stepped_class.compressed"
+            why: "These classes behave identically at every privilege; the cross adds cells without adding information. Privilege for them is covered by cp_prv alone."
+      - name: x_class_x_stepie
+        of: [cp_stepped_class, cp_stepie_x_irq]
+        testplan: [SSTEP-022-V]
+        rationale: >-
+          Interrupt masking interacts with instruction class, and the stalling
+          case is where it matters most: a wfi stepped with stepie=1 and an
+          interrupt pending may legitimately complete via the interrupt, while
+          the same wfi with stepie=0 must be treated as a nop. Testing the wfi
+          only at one stepie setting leaves the harder half unmeasured.
+        ignore:
+          - cells: "cp_stepped_class.wrs"
+            why: "Zawrs absent on this DUT; retained so a Zawrs DUT is measured across both stepie settings."
+      - name: x_class_x_consecutive
+        of: [cp_stepped_class, cp_consecutive_steps]
+        testplan: [SSTEP-023-V]
+        rationale: >-
+          Drift accumulates differently per class. Stepping repeatedly across a
+          loop back-edge exercises taken branches many times, where an
+          off-by-one in dpc compounds rather than cancelling.
+        ignore:
+          - cells: "cp_consecutive_steps.single"
+            why: "One step cannot accumulate drift; the single case is owned by the per-class bins directly."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_step_native
+    objective: >-
+      Native single-step via an icount trigger steps one instruction of a
+      less-privileged program — with none of the guarantees dcsr.step provides.
+    spec_refs: ["Sdext.html#stepicount", "debugger_implementation.html#nativestep"]
+    sample_on: "icount trigger fire"
+    observability: "trap into the M-mode stub; mepc; tdata1"
+    coverpoints:
+      - name: cp_native_step_guarantees
+        type: value
+        expression: "native_step_observed_behaviour"
+        rationale: >-
+          This mechanism INVERTS two of dcsr.step's guarantees, and conflating
+          the two is the mistake this covergroup exists to prevent.
+        bins:
+          - {name: one_instruction_retired, kind: explicit, values: [0], spec: "Sdext.html#stepicount", why: "count=1 fires after exactly one instruction.", testplan: [NSTEP-001-C]}
+          - {name: interrupt_fired, kind: explicit, values: [1], spec: "Sdext.html#stepicount", why: "icount gives NO interrupt masking — the opposite of dcsr.stepie.", testplan: [NSTEP-002-C]}
+          - {name: interrupt_masked_via_mstatus, kind: explicit, values: [2], spec: "Sdext.html#stepicount", why: "The spec's prescribed workaround: the debugger edits mstatus itself.", testplan: [NSTEP-003-C]}
+          - {name: wfi_stalled, kind: explicit, values: [3], spec: "Sdext.html#stepicount", why: "wfi is NOT treated specially here and may stall indefinitely — the inverse of cg_step_external.cp_stepped_class.wfi.", testplan: [NSTEP-005-C]}
+          - {name: mstatus_read_observed_debugger_value, kind: explicit, values: [4], spec: "Sdext.html#stepicount", why: "The spec warns instructions reading mstatus need special handling; this bin quantifies the exposure.", testplan: [NSTEP-004-C]}
+      - name: cp_native_step_privilege
+        type: value
+        expression: "{stub_privilege, target_privilege}"
+        rationale: "Appendix A flags same-privilege stepping as materially harder than stepping a less-privileged program."
+        bins:
+          - {name: m_stub_u_target, kind: explicit, values: [0], spec: "debugger_implementation.html#nativestep", why: "The straightforward case.", testplan: [NSTEP-007-V]}
+          - {name: same_privilege, kind: explicit, values: [1], spec: "debugger_implementation.html#nativestep", why: "Spec calls this 'more complicated, depending on what other debug features are implemented'.", testplan: [NSTEP-006-C]}
+    crosses:
+      - name: x_guarantee_x_privilege
+        of: [cp_native_step_guarantees, cp_native_step_privilege]
+        testplan: [NSTEP-008-V]
+        rationale: >-
+          The privilege relationship changes which limitations bite. Stepping a
+          less-privileged program lets the M-mode stub edit mstatus freely;
+          stepping code at the stub's own privilege makes that edit visible to
+          the program being debugged, which is precisely the case Appendix A
+          calls more complicated.
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_abstract_command
+    objective: >-
+      Abstract commands read and write hart state without the hart executing
+      anything the debugger supplied, and report every failure mode distinctly
+      enough for a debugger to react correctly.
+    spec_refs: ["debug_module.html#access-register", "debug_module.html#abstractcs"]
+    sample_on: "every command write and the abstractcs read that follows"
+    observability: "DMI"
+    coverpoints:
+      - name: cp_cmdtype
+        type: value
+        expression: "command.cmdtype"
+        rationale: "Unsupported command types must be rejected cleanly, not ignored."
+        bins:
+          - {name: access_register, kind: explicit, values: [0], spec: "debug_module.html#access-register", why: "The only type this DUT implements.", testplan: [AC-001-S]}
+          - {name: quick_access, kind: explicit, values: [1], spec: "debug_module.html#quick-access", why: "Must return cmderr=2 when unimplemented.", testplan: [AC-013-S]}
+          - {name: access_memory, kind: explicit, values: [2], spec: "debug_module.html#access-memory", why: "Must return cmderr=2 when unimplemented.", testplan: [AC-013-S]}
+          - {name: reserved_cmdtype, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "Undefined type; must not hang the DM.", testplan: [AC-018-C]}
+      - name: cp_regno_class
+        type: value
+        expression: "regno_class"
+        rationale: >-
+          The register number space has architecturally distinct regions, and
+          the unimplemented region is the one that must fail cleanly.
+        bins:
+          - {name: csr, kind: explicit, values: [0], spec: "debug_module.html#access-register", why: "0x0000-0x0fff: CSRs including dcsr/dpc.", testplan: [AC-004-S]}
+          - {name: gpr, kind: explicit, values: [1], spec: "debug_module.html#access-register", why: "0x1000-0x101f: the integer registers.", testplan: [AC-001-S]}
+          - {name: gpr_x0, kind: boundary, values: [2], spec: "debug_module.html#access-register", why: "x0 specifically: reads zero, writes discarded.", testplan: [AC-003-C]}
+          - {name: fpr, kind: explicit, values: [3], spec: "debug_module.html#access-register", why: "0x1020-0x103f: present on this imafdc DUT.", testplan: [AC-017-V]}
+          - {name: unimplemented, kind: explicit, values: [4], spec: "debug_module.html#access-register", why: "Must produce cmderr 2 or 3, not silence.", testplan: [AC-006-S]}
+      - name: cp_aarsize
+        type: value
+        expression: "command.aarsize"
+        rationale: "An unsupported size must be rejected rather than silently truncating."
+        bins:
+          - {name: size32, kind: explicit, values: [2], spec: "debug_module.html#access-register", why: "32-bit access.", testplan: [AC-017-V]}
+          - {name: size64, kind: explicit, values: [3], spec: "debug_module.html#access-register", why: "64-bit access on this RV64 DUT.", testplan: [AC-001-S]}
+          - {name: size128, kind: explicit, values: [4], spec: "debug_module.html#access-register", why: "Unsupported here: expect cmderr=2.", testplan: [AC-005-S]}
+          - {name: reserved_size, kind: explicit, values: [0, 1, 5, 6, 7], spec: "debug_module.html#access-register", why: "Undefined encodings must be rejected.", testplan: [AC-019-C]}
+      - name: cp_command_flags
+        type: value
+        expression: "{transfer, postexec, aarpostincrement, write}"
+        rationale: >-
+          These flags compose, and the combinations that matter are transfer
+          with and without postexec, and postexec with transfer=0 — the last is
+          how a debugger runs the program buffer without touching a register.
+        bins:
+          - {name: transfer_read, kind: explicit, values: [8], spec: "debug_module.html#access-register", why: "Plain register read.", testplan: [AC-001-S]}
+          - {name: transfer_write, kind: explicit, values: [12], spec: "debug_module.html#access-register", why: "Plain register write.", testplan: [AC-002-S]}
+          - {name: transfer_and_postexec, kind: explicit, values: [10], spec: "debug_module.html#access-register", why: "Transfer then run the program buffer.", testplan: [AC-010-S]}
+          - {name: postexec_only, kind: explicit, values: [2], spec: "debug_module.html#access-register", why: "transfer=0: run the buffer with no register transfer.", testplan: [AC-011-S]}
+          - {name: postincrement, kind: explicit, values: [9], spec: "debug_module.html#access-register", why: "regno advances after the access — how block register dumps work.", testplan: [AC-012-S]}
+      - name: cp_cmderr
+        type: value
+        expression: "abstractcs.cmderr"
+        rationale: >-
+          Every error code drives different debugger recovery. A debugger that
+          cannot distinguish busy from halt/resume retries the wrong thing.
+        bins:
+          - {name: none, kind: explicit, values: [0], spec: "debug_module.html#abstractcs", why: "Success.", testplan: [AC-001-C]}
+          - {name: busy, kind: explicit, values: [1], spec: "debug_module.html#abstractcs", why: "Command or data accessed while busy.", testplan: [RAP-042-C]}
+          - {name: not_supported, kind: explicit, values: [2], spec: "debug_module.html#abstractcs", why: "Unsupported command, size or register.", testplan: [AC-005-C]}
+          - {name: exception, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "The hart faulted executing the command or program buffer.", testplan: [PB-005-C]}
+          - {name: halt_resume, kind: explicit, values: [4], spec: "debug_module.html#abstractcs", why: "Command issued while the hart was not halted.", testplan: [AC-007-C]}
+          - {name: bus, kind: explicit, values: [5], spec: "debug_module.html#abstractcs", why: "Bus error during the command.", reachable: false, why_unreachable: "Requires abstract memory access, absent on this DUT."}
+          - {name: other, kind: explicit, values: [7], spec: "debug_module.html#abstractcs", why: "Catch-all; reaching it means the DM could not classify its own failure.", testplan: [AC-020-C]}
+          - {name: reserved_cmderr, kind: illegal, values: [6], spec: "debug_module.html#abstractcs", why: "6 is not a defined cmderr encoding."}
+      - name: cp_cmderr_lifecycle
+        type: transition
+        expression: "cmderr_state"
+        rationale: >-
+          cmderr is sticky and W1C. A debugger that assumes a successful command
+          clears it misattributes the next failure — and only a transition
+          coverpoint proves stickiness.
+        bins:
+          - {name: set_by_failure, kind: explicit, transition: "NONE => ERROR", spec: "debug_module.html#abstractcs", why: "A failing command sets it.", testplan: [AC-008-S]}
+          - {name: sticky_across_success, kind: explicit, transition: "ERROR => ERROR", spec: "debug_module.html#abstractcs", why: "A subsequent VALID command must not clear it.", testplan: [AC-008-C]}
+          - {name: cleared_by_w1c, kind: explicit, transition: "ERROR => NONE", spec: "debug_module.html#abstractcs", why: "Only a write of 1s clears it.", testplan: [AC-009-S]}
+          - {name: cleared_by_success, kind: illegal, transition: "ERROR => NONE", spec: "debug_module.html#abstractcs", why: "Clearing on a successful command instead of on W1C."}
+      - name: cp_busy_observed
+        type: event
+        expression: "abstractcs.busy_seen_set"
+        rationale: >-
+          If busy is never observed set, the polling loop is untested and a
+          slow command would break a real debugger.
+        bins:
+          - {name: busy_observed, kind: explicit, values: [1], spec: "debug_module.html#abstractcs", why: "The debugger actually polled through a busy period.", testplan: [AC-001-C]}
+      - name: cp_command_sequence
+        type: sequence
+        expression: "abstract_command_phase"
+        rationale: >-
+          The protocol is ordered: data, command, poll, result. Order violations
+          are a different defect class from wrong values.
+        bins:
+          - {name: write_read_sequence, kind: explicit, transition: "WRITE_DATA => WRITE_CMD => POLL_BUSY => READ_DATA", spec: "debug_module.html#abstract-commands", why: "The prescribed order.", testplan: [AC-002-S]}
+          - {name: recovery_sequence, kind: explicit, transition: "CMD_FAIL => CLEAR_CMDERR => CMD_OK", spec: "debug_module.html#abstractcs", why: "Error then recovery — proves the DM is usable after a failure.", testplan: [AC-009-C]}
+
+    crosses:
+      - name: x_regno_x_size
+        of: [cp_regno_class, cp_aarsize]
+        testplan: [AC-021-V]
+        rationale: >-
+          Size legality depends on which register is addressed: a 64-bit access
+          to a 32-bit CSR must be rejected while the same size on a GPR
+          succeeds. This cross is where cmderr=2 for a size actually arises.
+        ignore:
+          - cells: "cp_regno_class.unimplemented"
+            why: "An unimplemented regno fails on the register, not the size; the size cells add nothing."
+      - name: x_cmdtype_x_cmderr
+        of: [cp_cmdtype, cp_cmderr]
+        testplan: [AC-022-V]
+        rationale: >-
+          Each command type fails differently, and an unimplemented type must
+          give cmderr=2 rather than whatever the last command left behind.
+        ignore:
+          - cells: "cp_cmdtype.quick_access || cp_cmdtype.access_memory"
+            why: "Unimplemented on this DUT, so only the not_supported cell is reachable; the others are excluded by construction rather than untested."
+      - name: x_flags_x_cmderr
+        of: [cp_command_flags, cp_cmderr]
+        testplan: [AC-023-V]
+        rationale: >-
+          A command that both transfers and runs the program buffer can fail in
+          either phase, and the debugger must be able to tell which. postexec
+          with transfer=0 failing means the buffer faulted; a transfer failing
+          means the register access did. Same cmderr, different cause.
+        ignore:
+          - cells: "cp_cmderr.bus"
+            why: "cmderr=5 requires abstract memory access, absent on this DUT; retained so a DUT implementing cmdtype=2 is measured."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_program_buffer
+    objective: >-
+      The program buffer executes arbitrary instructions on a halted hart and
+      returns control cleanly, including when the instructions fault.
+    spec_refs: ["debug_module.html#program-buffer", "debug_module.html#abstractcs"]
+    sample_on: "each postexec completion"
+    observability: "cmderr; hart registers and memory via abstract command"
+    coverpoints:
+      - name: cp_progbuf_fill
+        type: range
+        expression: "words_written_to_progbuf"
+        rationale: >-
+          Boundaries sit at one word and at exactly progbufsize — the last slot
+          is where an off-by-one in the buffer decode shows up.
+        bins:
+          - {name: single_word, kind: boundary, values: [1], spec: "debug_module.html#program-buffer", why: "Minimum useful buffer.", testplan: [PB-001-S]}
+          - {name: partial, kind: range, range: [2, 7], spec: "debug_module.html#abstractcs", why: "Ordinary use.", testplan: [PB-011-C]}
+          - {name: full, kind: boundary, values: [8], spec: "debug_module.html#abstractcs", why: "Exactly progbufsize — the boundary.", testplan: [PB-003-S]}
+          - {name: overflow, kind: explicit, values: [9], spec: "debug_module.html#abstractcs", why: "One past the end: must be ignored, not wrap onto progbuf0.", testplan: [DIS-005-S]}
+      - name: cp_progbuf_outcome
+        type: value
+        expression: "program_buffer_termination"
+        rationale: >-
+          How execution ended is the behaviour; each outcome leaves the DM in a
+          different state and the debugger must be able to continue from all.
+        bins:
+          - {name: explicit_ebreak, kind: explicit, values: [0], spec: "debug_module.html#program-buffer", why: "The debugger's own ebreak returns control.", testplan: [PB-001-C]}
+          - {name: implicit_ebreak, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "impebreak=1: no explicit ebreak needed.", testplan: [PB-004-C]}
+          - {name: exception, kind: explicit, values: [2], spec: "debug_module.html#program-buffer", why: "A faulting instruction: cmderr=3, hart stays usable.", testplan: [PB-005-C]}
+          - {name: illegal_instruction, kind: explicit, values: [3], spec: "debug_module.html#program-buffer", why: "An illegal encoding.", testplan: [PB-006-C]}
+          - {name: control_transfer_out, kind: explicit, values: [4], spec: "debug_module.html#program-buffer", why: "A jump beyond the buffer — the spec permits treating it as illegal; record what this DUT does.", testplan: [PB-007-C]}
+      - name: cp_progbuf_operation
+        type: value
+        expression: "what_the_buffer_did"
+        rationale: "The buffer exists to reach what abstract commands cannot; each use must be exercised."
+        bins:
+          - {name: register_access, kind: explicit, values: [0], spec: "debug_module.html#program-buffer", why: "Reach a register with no abstract encoding.", testplan: [PB-002-C]}
+          - {name: memory_read, kind: explicit, values: [1], spec: "debug_module.html#program-buffer", why: "Load from the hart's point of view, honouring its MMU and PMP.", testplan: [PB-002-S]}
+          - {name: memory_write, kind: explicit, values: [2], spec: "debug_module.html#program-buffer", why: "Store from the hart's point of view.", testplan: [PB-012-C]}
+          - {name: csr_access, kind: explicit, values: [3], spec: "debug_module.html#program-buffer", why: "How dcsr is written during a step setup.", testplan: [RAP-020-S]}
+      - name: cp_progbuf_reuse
+        type: transition
+        expression: "progbuf_execution_count"
+        rationale: "Buffer contents must persist; a DM that clears on execute breaks repeated use."
+        bins:
+          - {name: rerun_without_rewrite, kind: explicit, transition: "EXECUTED => EXECUTED", spec: "debug_module.html#program-buffer", why: "Second run behaves identically.", testplan: [PB-008-C]}
+    crosses:
+      - name: x_outcome_x_operation
+        of: [cp_progbuf_outcome, cp_progbuf_operation]
+        testplan: [PB-013-V]
+        rationale: >-
+          An exception during a memory write leaves different state from one
+          during a register read -- a partially-completed store versus a clean
+          abort. The recovery path a debugger needs differs, so the outcome
+          must be measured per operation rather than in aggregate.
+      - name: x_fill_x_outcome
+        of: [cp_progbuf_fill, cp_progbuf_outcome]
+        testplan: [PB-014-V]
+        rationale: >-
+          The last buffer slot is where off-by-one errors live. An exception
+          raised by the final word of a full buffer, and implicit ebreak on a
+          full buffer, are the two boundary interactions worth naming.
+        ignore:
+          - cells: "cp_progbuf_fill.overflow"
+            why: "Writes past progbufsize are ignored, so no execution outcome follows; DIS-005 owns the out-of-range write itself."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_system_bus_access
+    objective: >-
+      System Bus Access reaches memory independently of the hart, its MMU and
+      its PMP, and reports every error class distinctly.
+    spec_refs: ["debug_module.html#sbcs", "debug_module.html#systembusaccess"]
+    sample_on: "every sbcs write and every sbdata access"
+    observability: "DMI; sberror and sbbusy"
+    coverpoints:
+      - name: cp_sbaccess_size
+        type: value
+        expression: "sbcs.sbaccess"
+        rationale: >-
+          sbaccess is declared R/W with a reset of constant 2. Every size, and
+          an unsupported one, must be writable — the unsupported case is how
+          sberror=4 is reached at all.
+        bins:
+          - {name: size8, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "8-bit access.", testplan: [SBA-011-V]}
+          - {name: size16, kind: explicit, values: [1], spec: "debug_module.html#sbcs", why: "16-bit access.", testplan: [SBA-011-V]}
+          - {name: size32, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "32-bit; also the specified reset value.", testplan: [RST-038-C2]}
+          - {name: size64, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "64-bit, the only size this DUT advertises.", testplan: [SBA-001-S]}
+          - {name: size128, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "128-bit.", testplan: [SBA-011-V]}
+          - {name: unsupported_size_written, kind: explicit, values: [7], spec: "debug_module.html#sbcs", why: "Spec: an unsupported value at access time gives sberror=4. The field must accept the write for that path to exist.", testplan: [RAP-007-C3]}
+      - name: cp_sberror
+        type: value
+        expression: "sbcs.sberror"
+        rationale: "Each error class means a different debugger response."
+        bins:
+          - {name: none, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Success.", testplan: [SBA-001-C]}
+          - {name: timeout, kind: explicit, values: [1], spec: "debug_module.html#sbcs", why: "The bus did not respond.", testplan: [SBA-012-C]}
+          - {name: bad_address, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "Unmapped physical address.", testplan: [SBA-008-C]}
+          - {name: alignment, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "Misaligned for the selected size.", testplan: [SBA-007-C]}
+          - {name: unsupported_size, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "sbaccess named a size the DM does not support.", testplan: [SBA-006-C]}
+          - {name: other, kind: explicit, values: [7], spec: "debug_module.html#sbcs", why: "Catch-all.", testplan: [SBA-013-C]}
+      - name: cp_sb_trigger_mode
+        type: value
+        expression: "{sbreadonaddr, sbreadondata, sbautoincrement}"
+        rationale: >-
+          These three compose into the block-transfer modes a debugger actually
+          uses. Autoincrement with readondata is how a memory dump works, and it
+          is a different path from a single addressed read.
+        bins:
+          - {name: manual, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Explicit address then explicit data access.", testplan: [SBA-014-C]}
+          - {name: read_on_addr, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "Writing the address triggers the read.", testplan: [SBA-003-C]}
+          - {name: read_on_data, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "Reading data triggers the next read.", testplan: [SBA-004-C]}
+          - {name: block_dump, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "readondata + autoincrement: the memory-dump mode.", testplan: [SBA-005-C]}
+      - name: cp_sb_address_region
+        type: range
+        expression: "sbaddress"
+        rationale: >-
+          Regions are chosen by what the bus does with them, not by equal
+          division: mapped RAM, the boundary at the top of RAM, and an unmapped
+          address that must produce sberror=2.
+        bins:
+          - {name: ram_base, kind: boundary, values: [2147483648], spec: "debug_module.html#sbcs", why: "First byte of DRAM (0x8000_0000).", testplan: [SBA-001-S]}
+          - {name: ram_body, kind: range, range: [2147483649, 2415919103], spec: "debug_module.html#sbcs", why: "Ordinary mapped memory.", testplan: [SBA-015-C]}
+          - {name: ram_top, kind: boundary, values: [2415919104], spec: "debug_module.html#sbcs", why: "Last mapped address — the boundary before the decode fails.", testplan: [SBA-015-C]}
+          - {name: unmapped, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Must produce sberror=2 rather than hanging the bus.", testplan: [SBA-008-S]}
+      - name: cp_sb_alignment
+        type: value
+        expression: "sbaddress alignment relative to sbaccess size"
+        rationale: >-
+          Alignment has no meaning on its own -- address 4 is aligned for
+          32-bit and misaligned for 64-bit. Sampled as a relationship, not an
+          address, so the cross with size is expressible.
+        bins:
+          - {name: aligned, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Address is a multiple of the access size.", testplan: [SBA-001-S]}
+          - {name: misaligned_by_1, kind: boundary, values: [1], spec: "debug_module.html#sbcs", why: "One byte past an aligned address -- the first illegal offset.", testplan: [SBA-007-S]}
+          - {name: misaligned_half, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "Half the access size: legal for a narrower size, illegal for this one.", testplan: [SBA-007-S]}
+      - name: cp_sb_concurrency
+        type: event
+        expression: "sba_while_hart_running"
+        rationale: >-
+          Non-intrusive access is the main reason SBA exists; if it is only ever
+          exercised on a halted hart, that property is untested.
+        bins:
+          - {name: hart_running, kind: explicit, values: [1], spec: "debug_module.html#sbcs", why: "Hart must continue undisturbed throughout.", testplan: [SBA-010-C]}
+          - {name: hart_halted, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "The easy case.", testplan: [SBA-001-S]}
+      - name: cp_sbbusyerror
+        type: event
+        expression: "access_while_sbbusy"
+        rationale: "Accessing while busy must be reported, not silently dropped or applied."
+        bins:
+          - {name: flagged, kind: explicit, values: [1], spec: "debug_module.html#sbcs", why: "sbbusyerror set; the in-flight transfer unaffected.", testplan: [RAP-043-C]}
+    crosses:
+      - name: x_size_x_alignment
+        of: [cp_sbaccess_size, cp_sb_alignment]
+        testplan: [SBA-016-V]
+        rationale: >-
+          Alignment is only meaningful relative to the access size: address 4 is
+          aligned for 32-bit and misaligned for 64-bit. Neither coverpoint alone
+          can express that, and this is where sberror=3 actually comes from.
+        ignore:
+          - cells: "cp_sbaccess_size.size8"
+            why: "Every address is aligned for an 8-bit access; the cells carry no information."
+      - name: x_mode_x_error
+        of: [cp_sb_trigger_mode, cp_sberror]
+        testplan: [SBA-017-V]
+        rationale: >-
+          An error mid-block-transfer is the interesting case: with
+          autoincrement the address has already advanced, so the debugger must
+          be able to tell which word failed. A single-access error does not
+          have that problem.
+      - name: x_size_x_region
+        of: [cp_sbaccess_size, cp_sb_address_region]
+        testplan: [SBA-018-V]
+        rationale: >-
+          A wide access near the top of mapped memory can straddle the boundary
+          while a narrow one at the same address does not. The ram_top cell is
+          only reachable as a size/region pair.
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_triggers
+    objective: >-
+      Triggers halt the hart on a condition rather than on a debugger request,
+      for each supported trigger type and privilege.
+    spec_refs: ["Sdtrig.html", "Sdtrig.html#mcontrol6"]
+    sample_on: "every tdata write and every trigger fire"
+    observability: "tselect/tdata via abstract command; dcsr.cause"
+    coverpoints:
+      - name: cp_trigger_type
+        type: value
+        expression: "tdata1.type"
+        rationale: "Each type matches on a different event and has its own configuration path."
+        bins:
+          - {name: none, kind: explicit, values: [0], spec: "Sdtrig.html", why: "Trigger slot exists but is unconfigured.", testplan: [TRIG-006-C]}
+          - {name: mcontrol, kind: explicit, values: [2], spec: "Sdtrig.html", why: "v0.13-era match control; encoding differs from mcontrol6.", reachable: false, why_unreachable: "This DUT reports v1.0 and implements mcontrol6."}
+          - {name: icount, kind: explicit, values: [3], spec: "Sdtrig.html#icount", why: "Instruction count — the native single-step mechanism.", testplan: [TRIG-008-C]}
+          - {name: itrigger, kind: explicit, values: [4], spec: "Sdtrig.html#itrigger", why: "Interrupt trigger.", testplan: [TRIG-009-C]}
+          - {name: etrigger, kind: explicit, values: [5], spec: "Sdtrig.html#itrigger", why: "Exception trigger.", testplan: [TRIG-009-C]}
+          - {name: mcontrol6, kind: explicit, values: [6], spec: "Sdtrig.html#mcontrol6", why: "The v1.0 match control.", testplan: [TRIG-003-S]}
+      - name: cp_match_event
+        type: value
+        expression: "{execute, load, store}"
+        rationale: >-
+          The three access classes take different paths through the core, and a
+          trigger that works on execute may not on store.
+        bins:
+          - {name: execute, kind: explicit, values: [4], spec: "Sdtrig.html#mcontrol6", why: "Instruction fetch at an address.", testplan: [TRIG-003-S]}
+          - {name: load, kind: explicit, values: [1], spec: "Sdtrig.html#mcontrol6", why: "Data read at an address.", testplan: [TRIG-004-S]}
+          - {name: store, kind: explicit, values: [2], spec: "Sdtrig.html#mcontrol6", why: "Data write at an address.", testplan: [TRIG-005-S]}
+          - {name: load_and_store, kind: explicit, values: [3], spec: "Sdtrig.html#mcontrol6", why: "Both set — a watchpoint on any access.", testplan: [TRIG-015-C]}
+      - name: cp_trigger_privilege
+        type: value
+        expression: "{m, s, u} enable bits"
+        rationale: >-
+          A trigger enabled only for U must not fire in M. The negative case is
+          the one that catches a mis-decoded enable.
+        bins:
+          - {name: m_only, kind: explicit, values: [4], spec: "Sdtrig.html#mcontrol6", why: "Fires in M only.", testplan: [TRIG-012-V]}
+          - {name: s_only, kind: explicit, values: [2], spec: "Sdtrig.html#mcontrol6", why: "Fires in S only.", testplan: [TRIG-012-V]}
+          - {name: u_only, kind: explicit, values: [1], spec: "Sdtrig.html#mcontrol6", why: "Fires in U only.", testplan: [TRIG-012-V]}
+          - {name: all_privileges, kind: explicit, values: [7], spec: "Sdtrig.html#mcontrol6", why: "Fires anywhere.", testplan: [TRIG-016-C]}
+          - {name: none_enabled, kind: explicit, values: [0], spec: "Sdtrig.html#mcontrol6", why: "Configured but disabled: must never fire.", testplan: [TRIG-006-C]}
+      - name: cp_tselect_probe
+        type: value
+        expression: "tselect_write_vs_readback"
+        rationale: >-
+          The spec requires a debugger to read back what it writes to tdata
+          registers; enumeration depends on the out-of-range behaviour.
+        bins:
+          - {name: in_range, kind: explicit, values: [0], spec: "Sdtrig.html#enumeration", why: "Reads back what was written.", testplan: [TRIG-001-C]}
+          - {name: out_of_range, kind: boundary, values: [1], spec: "Sdtrig.html", why: "Reads back a legal index — how the count is discovered.", testplan: [TRIG-002-C]}
+      - name: cp_trigger_update_context
+        type: value
+        expression: "tdata_written_while"
+        rationale: "The spec restricts trigger updates from a running hart; both contexts must be exercised."
+        bins:
+          - {name: hart_halted, kind: explicit, values: [0], spec: "Sdtrig.html", why: "The normal configuration path.", testplan: [TRIG-001-S]}
+          - {name: hart_running, kind: explicit, values: [1], spec: "Sdtrig.html", why: "Restricted; verify the DUT's behaviour matches.", testplan: [TRIG-007-C]}
+    crosses:
+      - name: x_match_x_privilege
+        of: [cp_match_event, cp_trigger_privilege]
+        testplan: [TRIG-017-V]
+        rationale: >-
+          The privilege filter is applied per access class, and a core can get
+          it right for execute and wrong for load. This cross is the whole point
+          of the trigger privilege bits.
+        ignore:
+          - cells: "cp_trigger_privilege.none_enabled"
+            why: "A disabled trigger fires for no access class; the cells are unreachable by construction, and TRIG-006-C owns the disabled case."
+      - name: x_type_x_privilege
+        of: [cp_trigger_type, cp_trigger_privilege]
+        testplan: [TRIG-018-V]
+        rationale: >-
+          Each trigger type applies the privilege filter through its own
+          matching logic, so a core can honour it for mcontrol6 and ignore it
+          for icount or etrigger. Per-type privilege filtering is not implied
+          by getting it right once.
+        ignore:
+          - cells: "cp_trigger_type.none"
+            why: "An unconfigured trigger has no privilege fields in effect."
+          - cells: "cp_trigger_type.mcontrol"
+            why: "v0.13 encoding; this DUT reports v1.0 and implements mcontrol6. Retained so a v0.13 DUT is measured."
+      - name: x_type_x_update_context
+        of: [cp_trigger_type, cp_trigger_update_context]
+        testplan: [TRIG-019-V]
+        rationale: >-
+          The spec restricts trigger updates from a running hart. Whether a DUT
+          enforces that can differ per trigger type, since each has a different
+          write path into tdata1.
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_halt_groups
+    objective: >-
+      Halt and resume groups propagate a halt between harts and to external
+      trigger outputs.
+    spec_refs: ["debug_module.html#dmcs2", "debug_module.html#halt-groups"]
+    sample_on: "every dmcs2 write and every group-propagated halt"
+    observability: "DMI; external trigger pins"
+    coverpoints:
+      - name: cp_group_config
+        type: value
+        expression: "{dmcs2.grouptype, hgselect}"
+        rationale: "Halt groups and resume groups are configured through the same field pair."
+        bins:
+          - {name: halt_group, kind: explicit, values: [0], spec: "debug_module.html#dmcs2", why: "grouptype=0.", testplan: [HG-001-S]}
+          - {name: resume_group, kind: explicit, values: [1], spec: "debug_module.html#dmcs2", why: "grouptype=1.", testplan: [HG-003-S]}
+          - {name: external_trigger, kind: explicit, values: [2], spec: "debug_module.html#dmcs2", why: "hgselect=1 selects the external trigger rather than a hart group.", testplan: [HG-003-S]}
+      - name: cp_group_propagation
+        type: event
+        expression: "group_halt_propagated"
+        rationale: "Propagation is the feature; configuration without propagation proves nothing."
+        bins:
+          - {name: hart_to_hart, kind: explicit, values: [0], spec: "debug_module.html#halt-groups", why: "Halting one member halts the group.", reachable: false, why_unreachable: "Single-hart DUT — cannot be demonstrated."}
+          - {name: external_in, kind: explicit, values: [1], spec: "debug_module.html#dmcs2", why: "An external trigger halts the group.", testplan: [HG-003-C]}
+          - {name: external_out, kind: explicit, values: [2], spec: "debug_module.html#dmcs2", why: "A group halt drives the outgoing trigger.", testplan: [HG-004-C]}
+    crosses:
+      - name: x_config_x_propagation
+        of: [cp_group_config, cp_group_propagation]
+        testplan: [HG-005-V]
+        rationale: >-
+          Halt groups and resume groups propagate through separate logic, and
+          the external trigger is a third path. Configuring one and observing
+          propagation on another is the failure this cross catches.
+        ignore:
+          - cells: "cp_group_propagation.hart_to_hart"
+            why: "Requires more than one hart. Unreachable on this DUT; retained so a multi-hart DUT is measured, since this is the primary purpose of halt groups."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_authentication
+    objective: >-
+      An unauthenticated DM exposes only what the spec permits, and reports
+      itself already authenticated when it implements no authentication.
+    spec_refs: ["debug_module.html#authdata", "debug_module.html#dmstatus"]
+    sample_on: "dmstatus reads and any authdata access"
+    observability: "DMI"
+    coverpoints:
+      - name: cp_auth_state
+        type: state
+        expression: "{authenticated, authbusy}"
+        rationale: >-
+          A DM with no authentication must report authenticated=1 from reset,
+          or every debugger will refuse to proceed.
+        bins:
+          - {name: no_auth_implemented, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "authenticated=1 permanently. The only bin reachable on this DUT.", testplan: [AUTH-001-C]}
+          - {name: unauthenticated, kind: explicit, values: [0], spec: "debug_module.html#authdata", why: "Access restricted to dmstatus/dmcontrol/authdata.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
+          - {name: auth_in_progress, kind: explicit, values: [2], spec: "debug_module.html#dmstatus", why: "authbusy set during the exchange.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
+          - {name: busy_and_authenticated, kind: illegal, values: [3], spec: "debug_module.html#dmstatus", why: "authbusy set while already authenticated is contradictory."}
+      - name: cp_auth_permitted_register
+        type: value
+        expression: "register_class_accessed_while_unauthenticated"
+        rationale: >-
+          The spec names exactly which registers stay reachable before
+          authentication. Both the permitted and the denied set must be
+          exercised, or the gate is only half tested.
+        bins:
+          - {name: dmstatus, kind: explicit, values: [0], spec: "debug_module.html#authdata", why: "Must remain readable -- it carries authenticated itself.", testplan: [RAP-041-C]}
+          - {name: dmcontrol, kind: explicit, values: [1], spec: "debug_module.html#authdata", why: "Must remain accessible so the DM can be activated.", testplan: [AUTH-004-C]}
+          - {name: authdata, kind: explicit, values: [2], spec: "debug_module.html#authdata", why: "The challenge/response channel itself.", testplan: [AUTH-005-C]}
+          - {name: gated_register, kind: explicit, values: [3], spec: "debug_module.html#authdata", why: "Any other DM register: must be inaccessible until authenticated.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
+    crosses:
+      - name: x_auth_x_gated_access
+        of: [cp_auth_state, cp_auth_permitted_register]
+        testplan: [AUTH-006-V]
+        rationale: >-
+          Authentication is a gate, so the behaviour is the pairing: which
+          registers remain reachable in which auth state. dmstatus, dmcontrol
+          and authdata must stay readable while unauthenticated; everything
+          else must not.
+        ignore:
+          - cells: "cp_auth_state.no_auth_implemented"
+            why: "With no authentication implemented every register is reachable, so the gating cells carry no information on this DUT. Retained so a DUT implementing authentication is measured."
+
+  # ══════════════════════════════════════════════════════════════════════════
+  - name: cg_register_access
+    objective: >-
+      Every DM register honours its declared access type, from every interface
+      that can reach it. The same storage can be writable from one side and
+      read-only from another.
+    spec_refs: ["debug_module.html", "introduction.html#1-1-3-3-register-definition-format"]
+    sample_on: "every register access, tagged with the originating interface"
+    observability: "DMI; hart CSR reads via program buffer; SBA"
+    coverpoints:
+      - name: cp_access_type
+        type: value
+        expression: "field_access_type"
+        rationale: >-
+          Each access type has a distinct conformance rule, and the model must
+          record that every type was actually exercised rather than assumed.
+        bins:
+          - {name: read_only, kind: explicit, values: [0], spec: "introduction.html#1-1-3-3-register-definition-format", why: "Writes must not change it.", testplan: [RAP-001-C]}
+          - {name: read_write, kind: explicit, values: [1], spec: "introduction.html#1-1-3-3-register-definition-format", why: "Round-trips exactly.", testplan: [RAP-002-C]}
+          - {name: warl, kind: explicit, values: [2], spec: "introduction.html#1-1-3-3-register-definition-format", why: "Illegal writes legalise deterministically.", testplan: [RAP-003-C]}
+          - {name: warz, kind: explicit, values: [3], spec: "debug_module.html#command", why: "Reads zero regardless of what was written — read-back only, not storage.", testplan: [RAP-004-C]}
+          - {name: w1, kind: explicit, values: [4], spec: "debug_module.html#dmcontrol", why: "Writing 1 acts, writing 0 does nothing, reads return 0.", testplan: [RAP-005-C]}
+          - {name: w1c, kind: explicit, values: [5], spec: "debug_module.html#abstractcs", why: "Cleared only by writing 1s.", testplan: [RAP-006-C]}
+          - {name: reserved, kind: explicit, values: [6], spec: "debug_module.html", why: "Reads 0 always.", testplan: [RAP-008-C]}
+      - name: cp_interface
+        type: value
+        expression: "originating_interface"
+        rationale: >-
+          This is the dimension most coverage models omit entirely. A register's
+          permissions differ by who is asking, and a model that only samples DMI
+          cannot see it.
+        bins:
+          - {name: dmi, kind: explicit, values: [0], spec: "dtm.html#dmi", why: "The debugger's own path.", testplan: [RAP-001-S]}
+          - {name: hart_csr, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "The hart reading/writing its own debug CSRs.", testplan: [RAP-020-S]}
+          - {name: hart_load_store, kind: explicit, values: [2], spec: "debug_module.html#hartinfo", why: "The hart reaching the data window or Debug ROM as memory.", testplan: [RAP-026-C]}
+          - {name: system_bus, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "SBA, which bypasses hart privilege and translation.", testplan: [RAP-028-C]}
+          - {name: program_buffer, kind: explicit, values: [4], spec: "debug_module.html#program-buffer", why: "The hart executing debugger-supplied instructions.", testplan: [RAP-024-S]}
+      - name: cp_register_class
+        type: value
+        expression: "register_class_being_accessed"
+        rationale: >-
+          Permissions differ by which class of storage is reached, and the
+          class determines which interfaces can reach it at all. The second
+          leg of x_interface_x_register.
+        bins:
+          - {name: dm_register, kind: explicit, values: [0], spec: "debug_module.html", why: "dmcontrol, dmstatus, abstractcs and the rest -- DMI only.", testplan: [RAP-001-S]}
+          - {name: debug_csr, kind: explicit, values: [1], spec: "Sdext.html#csr-dcsr", why: "dcsr/dpc/dscratch -- hart CSR instruction, or DMI via abstract command.", testplan: [RAP-020-S]}
+          - {name: progbuf, kind: explicit, values: [2], spec: "debug_module.html#program-buffer", why: "Writable over DMI, executable but not writable by the hart.", testplan: [RAP-024-S]}
+          - {name: data_window, kind: explicit, values: [3], spec: "debug_module.html#hartinfo", why: "data0..N, reachable as memory by the hart when dataaccess=1.", testplan: [RAP-026-C]}
+          - {name: system_memory, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "Reachable by SBA and by a hart load/store, with different permissions.", testplan: [RAP-027-S]}
+          - {name: debug_rom, kind: explicit, values: [5], spec: "debug_module.html", why: "Executable by the hart, must not be writable.", testplan: [RAP-030-S]}
+      - name: cp_gating_state
+        type: state
+        expression: "dm_gating_state_at_access"
+        rationale: >-
+          Accessibility depends on DM state as well as on access type, and each
+          gating state rejects differently.
+        bins:
+          - {name: normal, kind: explicit, values: [0], spec: "debug_module.html", why: "Baseline.", testplan: [RAP-002-S]}
+          - {name: dm_inactive, kind: explicit, values: [1], spec: "debug_module.html#dmcontrol", why: "dmactive=0: only dmcontrol is meaningful.", testplan: [RAP-040-C]}
+          - {name: in_ndmreset, kind: explicit, values: [2], spec: "debug_module.html#reset", why: "Only dmcontrol R/W and ndmresetpending are supported; the rest is UNSPECIFIED.", testplan: [RST-054-C]}
+          - {name: abstract_busy, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "cmderr=1 on command or data access.", testplan: [RAP-042-C]}
+          - {name: sb_busy, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "sbbusyerror on sbaddress/sbdata access.", testplan: [RAP-043-C]}
+          - {name: unauthenticated, kind: explicit, values: [5], spec: "debug_module.html#authdata", why: "Most registers inaccessible.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
+    crosses:
+      - name: x_interface_x_register
+        of: [cp_interface, cp_register_class]
+        testplan: [RAP-046-V]
+        rationale: >-
+          The whole point of §2.2: the same register reached from two
+          interfaces must honour two different permissions. dcsr from the hart
+          versus over DMI, progbuf from DMI versus from the executing hart, and
+          memory via SBA versus via a hart load are the three that matter.
+        ignore:
+          - cells: "cp_interface.system_bus && cp_register_class.dm_register"
+            why: "SBA reaches system memory, not DM registers; the combination does not exist."
+      - name: x_interface_x_access_type
+        of: [cp_interface, cp_access_type]
+        testplan: [RAP-047-V]
+        rationale: >-
+          An access type is declared per field, but enforced per interface. A
+          field that is R/W over DMI may be read-only to the hart, and a DM
+          that enforces the type only on its DMI decode passes cp_access_type
+          while being wrong everywhere else.
+      - name: x_class_x_gating
+        of: [cp_register_class, cp_gating_state]
+        testplan: [RAP-048-V]
+        rationale: >-
+          Gating applies unevenly by class: dmcontrol stays reachable with
+          dmactive=0 while other DM registers do not, and debug CSRs become
+          unreachable when the hart is not halted regardless of DM state.
+
+# ════════════════════════════════════════════════════════════════════════════
+# Assertion candidates. Recorded here, NEVER counted toward functional closure:
+# a property being proven says nothing about whether the interesting scenarios
+# were exercised, and a vacuously proven one says less than nothing.
+assertions:
+  - name: a_one_retire_per_step
+    property: "Between dret and the next Debug Mode entry with dcsr.cause==4, exactly one instruction retires."
+    spec: "Sdext.html#stepbit"
+    why_not_coverage: "A temporal invariant over every step, not a scenario to be hit once."
+
+  - name: a_halt_within_bound
+    property: "allhalted rises within one second of haltreq being asserted on an available hart."
+    spec: "debug_module.html#dmcontrol"
+    why_not_coverage: "A liveness bound; a coverage bin cannot express 'eventually, within N'."
+
+  - name: a_cmderr_sticky
+    property: "cmderr never transitions from non-zero to zero except on a write of 1s to that field."
+    spec: "debug_module.html#abstractcs"
+    why_not_coverage: "A safety property over every command, cheaper to prove than to hit."
+
+  - name: a_busy_before_result
+    property: "abstractcs.busy is set for at least one cycle between a command write and cmderr updating."
+    spec: "debug_module.html#abstractcs"
+    why_not_coverage: "Ordering invariant; a coverpoint can record that busy was seen but not that it always precedes the result."
+
+  - name: a_no_interrupt_in_debug
+    property: "No trap is taken while debug_mode is asserted."
+    spec: "Sdext.html#debugmode"
+    why_not_coverage: "A never-condition over all time."
+
+  - name: a_dm_regs_stable_across_ndmreset
+    property: "DM register values are unchanged across an ndmreset assert/deassert."
+    spec: "debug_module.html#reset"
+    why_not_coverage: "Relates two points in time across every register; a bin would have to enumerate them."

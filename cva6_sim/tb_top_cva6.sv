@@ -189,8 +189,86 @@ module tb_top_soc;
     assign dm_backdoor_if.data1        = dut.i_dm_top.i_dm_csrs.data_q[1];
 
     initial begin
+        // Scoped to the whole env: the checker predicts against it, and the
+        // spec coverage reads cmderr and sbcs from it so a failing command is
+        // binned even when the sequence never reads abstractcs back.
         uvm_config_db #(virtual dbg_dm_backdoor_if)::set(
-            null, "uvm_test_top.m_env.m_model_checker", "dm_backdoor_vif", dm_backdoor_if);
+            null, "uvm_test_top.m_env.*", "dm_backdoor_vif", dm_backdoor_if);
+    end
+
+    // ── Hart-side backdoor ─────────────────────────────────────────────────
+    // dcsr, dpc and the hart's privilege live in the core, reachable over DMI
+    // only through an abstract command. A coverage model sampling DMI alone
+    // cannot see which instruction was stepped, so no bin could represent "a
+    // step over a stalling instruction" -- which is why the wfi deadlock was
+    // found by a directed test rather than by a coverage hole.
+    //
+    // Observation only. This block and the interface are the whole of the
+    // VIP's dependency on core-internal names.
+    dbg_hart_backdoor_if hart_backdoor_if (.clk(clk), .rst_n(rst_n));
+
+    localparam int unsigned HART_XLEN = 64;
+
+    assign hart_backdoor_if.dcsr       = dut.i_ariane.i_cva6.csr_regfile_i.dcsr_q;
+    assign hart_backdoor_if.dpc        = dut.i_ariane.i_cva6.csr_regfile_i.dpc_q;
+    assign hart_backdoor_if.dscratch0  = dut.i_ariane.i_cva6.csr_regfile_i.dscratch0_q;
+    assign hart_backdoor_if.dscratch1  = dut.i_ariane.i_cva6.csr_regfile_i.dscratch1_q;
+    assign hart_backdoor_if.debug_mode = dut.i_ariane.i_cva6.csr_regfile_i.debug_mode_q;
+    assign hart_backdoor_if.priv_lvl   = dut.i_ariane.i_cva6.csr_regfile_i.priv_lvl_q;
+    assign hart_backdoor_if.wfi_stalled = dut.i_ariane.i_cva6.csr_regfile_i.wfi_q;
+
+    // Commit port 0 is enough: a step retires exactly one instruction, and the
+    // classes that matter (wfi, branches, loads) are never dual-issued alone.
+    assign hart_backdoor_if.commit_valid =
+        dut.i_ariane.i_cva6.commit_ack[0] &&
+        dut.i_ariane.i_cva6.commit_instr_id_commit[0].valid;
+    assign hart_backdoor_if.commit_pc =
+        dut.i_ariane.i_cva6.commit_instr_id_commit[0].pc;
+
+    assign hart_backdoor_if.irq_pending =
+        |(dut.i_ariane.i_cva6.csr_regfile_i.mip_q &
+          dut.i_ariane.i_cva6.csr_regfile_i.mie_q);
+
+    // Instruction class, from CVA6's own decode. Done here because ariane_pkg's
+    // enum names are in scope in the TB; comparing against ordinals inside the
+    // VIP would hardcode enum positions, and a reordered enum would silently
+    // reclassify every instruction rather than fail to compile.
+    always_comb begin : p_iclass
+        automatic ariane_pkg::fu_t  fu = dut.i_ariane.i_cva6.commit_instr_id_commit[0].fu;
+        automatic ariane_pkg::fu_op op = dut.i_ariane.i_cva6.commit_instr_id_commit[0].op;
+        automatic logic compressed =
+            dut.i_ariane.i_cva6.commit_instr_id_commit[0].is_compressed;
+        automatic logic trapped =
+            dut.i_ariane.i_cva6.commit_instr_id_commit[0].ex.valid;
+        automatic logic taken = dut.i_ariane.i_cva6.resolved_branch.is_taken;
+
+        // A trap outranks the encoding: the interesting property is that the
+        // step landed in a handler, whatever the instruction was.
+        if (trapped)
+            hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_TRAPPING;
+        else if (fu == ariane_pkg::CSR && op == ariane_pkg::WFI)
+            hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_WFI;
+        else if (fu == ariane_pkg::CSR &&
+                 op inside {ariane_pkg::MRET, ariane_pkg::SRET,
+                            ariane_pkg::DRET, ariane_pkg::ECALL})
+            hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_PRIV_CHANGE;
+        else if (fu inside {ariane_pkg::LOAD, ariane_pkg::STORE})
+            hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_LOAD_STORE;
+        else if (fu == ariane_pkg::CTRL_FLOW)
+            // JAL/JALR always transfer; a conditional BRANCH may fall through.
+            hart_backdoor_if.commit_iclass =
+                (op == ariane_pkg::BRANCH && !taken)
+                    ? hart_backdoor_if.ICLASS_BRANCH_NTAKEN
+                    : hart_backdoor_if.ICLASS_BRANCH_TAKEN;
+        else if (compressed)
+            hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_COMPRESSED;
+        else
+            hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_ORDINARY;
+    end
+
+    initial begin
+        uvm_config_db #(virtual dbg_hart_backdoor_if)::set(
+            null, "uvm_test_top.m_env.*", "hart_backdoor_vif", hart_backdoor_if);
     end
 
     // ── DMI bus tap ────────────────────────────────────────────────────────

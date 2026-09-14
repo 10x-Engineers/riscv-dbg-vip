@@ -20,6 +20,7 @@ package debug_pkg;
   `include "../model/dut_config_reader.sv"
   // Must precede env.sv: env instantiates debug_coverage.
   `include "../fcov/covergroups.sv"
+  `include "../fcov/dm_spec_coverage.sv"
   // Must precede dm_ref_model.sv: hart_state_s's halted/running/resume_ack
   // fields are hart_signal_bit handles, constructed by dm_ref_model.sv.
   `include "../model/hart_signal_bit.sv"

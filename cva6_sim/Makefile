@@ -42,6 +42,7 @@ SRC_SV_KIT = \
     $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_if.sv \
     $(PYDEBUG_SV_DIR)/agents/axi/dbg_axi_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/backdoor/dbg_dm_backdoor_if.sv \
+    $(PYDEBUG_SV_DIR)/agents/backdoor/dbg_hart_backdoor_if.sv \
     $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_if.sv \
     $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_pkg.sv \
     $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
@@ -207,11 +208,20 @@ soc_test_cov: soc_compile_cov
 	     $(ELF_PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(COV_DIR)/$(UCDB_NAME).log
 
+# A scenario that needs its own program declares it as params.elf in its config.
+# That field alone only tells the Python client which ELF to resolve symbols
+# from; the ELF actually loaded into memory comes from $(ELF). Pass it through
+# here, or a scenario silently runs its sequence against the default program --
+# which passes vacuously rather than failing, because the addresses still
+# resolve, just to the wrong instructions.
+cfg_elf = $(shell python3 -c "import json;print(json.load(open('$(1)')).get('params',{}).get('elf',''))" 2>/dev/null)
+
 coverage_regress: soc_compile_cov
 	@mkdir -p $(COV_DIR)
 	@for cfg in $(COV_CONFIGS); do \
-		echo "=== coverage run: $$cfg ==="; \
-		$(MAKE) --no-print-directory soc_test_cov CFG_FILE=$$cfg || \
+		elf=$$(python3 -c "import json;print(json.load(open('$$cfg')).get('params',{}).get('elf',''))" 2>/dev/null); \
+		echo "=== coverage run: $$cfg $${elf:+(elf=$$elf)} ==="; \
+		$(MAKE) --no-print-directory soc_test_cov CFG_FILE=$$cfg $${elf:+ELF=$$elf} || \
 			echo "!!! scenario $$cfg failed, continuing !!!"; \
 	done
 
