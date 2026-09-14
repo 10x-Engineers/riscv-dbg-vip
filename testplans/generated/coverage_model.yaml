@@ -86,6 +86,16 @@ covergroups:
         ignore:
           - cells: "cp_dmi_op.nop && cp_dmi_result.busy"
             why: "A nop does no DM work, so it has no path to a busy response."
+      - name: x_idle_x_result
+        of: [cp_idle_cycles, cp_dmi_result]
+        rationale: >-
+          Under-running dtmcs.idle is the specified way to provoke a busy
+          response. This cross is the only place that causal link is measured:
+          idling correctly must never yield busy, and idling short must be able
+          to.
+        illegal:
+          - cells: "cp_idle_cycles.exactly_advertised && cp_dmi_result.busy"
+            why: "A DM that advertises N idle cycles and still reports busy after N has mis-declared dtmcs.idle."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_dm_activation
@@ -126,6 +136,18 @@ covergroups:
         bins:
           - {name: haltreq_ignored, kind: explicit, values: [0], spec: "debug_module.html#dmcontrol", why: "haltreq with dmactive=0 must not halt the hart.", testplan: [RST-003-C]}
           - {name: other_register_read, kind: explicit, values: [1], spec: "debug_module.html#dmcontrol", why: "Reads return reset values while inactive.", testplan: [RAP-040-C]}
+    crosses:
+      - name: x_transition_x_post_read
+        of: [cp_dmactive_transition, cp_post_activation_read]
+        rationale: >-
+          What a register should read depends on which transition preceded it.
+          After a full reactivate every register must read its reset value;
+          after an idempotent write they must be unchanged. Reading the same
+          register proves opposite things in the two cases, and neither
+          coverpoint alone distinguishes them.
+        ignore:
+          - cells: "cp_dmactive_transition.deactivate"
+            why: "With dmactive=0 only dmcontrol is meaningful, so the post-activation reads are not defined for this cell; RAP-040-C owns the inactive case."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_hart_selection
@@ -193,6 +215,15 @@ covergroups:
         illegal:
           - cells: "cp_hartsel_class.first_nonexistent && (cp_hart_reported_state.running || cp_hart_reported_state.halted)"
             why: "A nonexistent hart reported as running or halted. Observed on both DUTs -- issue #130."
+      - name: x_hartsel_x_all_any
+        of: [cp_hartsel_class, cp_all_vs_any]
+        rationale: >-
+          all/any only diverge with several harts selected, and which harts are
+          selected is what hartsel controls. On a multi-hart DUT this is where a
+          selection mask that reports the wrong aggregate shows up.
+        ignore:
+          - cells: "cp_all_vs_any.some_not_all"
+            why: "Requires more than one hart selected. Unreachable on a single-hart DUT; retained so a multi-hart DUT is measured here."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_reset
@@ -263,6 +294,15 @@ covergroups:
         ignore:
           - cells: "cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset"
             why: "The DTM resets act on the transport, not the DM, so hart-activity cells carry no information for them."
+      - name: x_source_x_havereset
+        of: [cp_reset_source, cp_havereset_lifecycle]
+        rationale: >-
+          The spec requires havereset to be set regardless of which cause reset
+          the hart. That is a per-source claim, so only the cross can show a DM
+          that tracks ndmreset but silently misses an external reset.
+        ignore:
+          - cells: "cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset"
+            why: "The DTM resets do not reset any hart, so they have no havereset semantics."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_run_control
@@ -330,6 +370,26 @@ covergroups:
           - {name: immediate, kind: boundary, range: [0, 10], spec: "debug_module.html#dmcontrol", why: "The common case on a hart executing ordinary instructions."}
           - {name: delayed, kind: explicit, values: [100], spec: "debug_module.html#dmcontrol", why: "Hart was stalled or mid-instruction; still well within bound.", testplan: [HALT-003-S]}
           - {name: over_bound, kind: illegal, range: [1000000000, 2000000000], spec: "debug_module.html#dmcontrol", why: "Beyond the spec's one-second bound — a conformance failure, not slow hardware."}
+    crosses:
+      - name: x_transition_x_resumeack
+        of: [cp_hart_transition, cp_resumeack]
+        rationale: >-
+          resumeack must accompany a real HALTED => RUNNING transition and must
+          be cleared by a resumereq that caused no transition. The §3.5
+          asymmetry is only visible as the pairing of the two.
+        illegal:
+          - cells: "cp_hart_transition.halted_to_running && cp_resumeack.cleared"
+            why: "A hart that genuinely resumed must acknowledge it; a transition with the ack cleared means the handshake is lost."
+      - name: x_request_x_latency
+        of: [cp_request_x_prior_state, cp_halt_latency]
+        rationale: >-
+          Latency is only meaningful for requests that take effect. A halt on a
+          running hart has a bound; a halt on an already-halted hart has no
+          latency at all, and conflating them hides a slow path behind the
+          ignored cases.
+        ignore:
+          - cells: "cp_request_x_prior_state.halt_when_halted || cp_request_x_prior_state.resume_when_running"
+            why: "These requests are specified as ignored, so no transition occurs and latency is undefined for them."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_debug_entry
@@ -397,6 +457,16 @@ covergroups:
         ignore:
           - cells: "cp_cause.resethaltreq && !cp_prv.M"
             why: "Reset-halt entry always reports the post-reset privilege, which is M by definition. The U and S cells are unreachable, not untested."
+      - name: x_cause_x_dpc
+        of: [cp_cause, cp_dpc_origin]
+        rationale: >-
+          dpc means something different per cause -- the interrupted PC for
+          haltreq, the ebreak's own address, the next instruction after a step,
+          the handler entry for a stepped trap. A DM can get dpc right for one
+          cause and wrong for another, and only this cross separates them.
+        illegal:
+          - cells: "cp_cause.ebreak && cp_dpc_origin.next_after_step"
+            why: "ebreak entry must report the ebreak's own address, not the following instruction; reporting the next address would silently skip an instruction on resume."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_debug_mode
@@ -454,6 +524,20 @@ covergroups:
           - {name: going, kind: explicit, values: [1], spec: "debug_module.html", why: "Hart acknowledges a command. The flag whose stride was wrong.", testplan: [DM-009-C]}
           - {name: resuming, kind: explicit, values: [2], spec: "debug_module.html", why: "Hart acknowledges a resume.", testplan: [DM-009-C]}
           - {name: exception, kind: explicit, values: [3], spec: "debug_module.html", why: "Hart reports a fault during program buffer execution.", testplan: [PB-005-C]}
+    crosses:
+      - name: x_stopcount_x_stoptime
+        of: [cp_stopcount, cp_stoptime]
+        rationale: >-
+          dcsr.stopcount and dcsr.stoptime are independent controls over two
+          different timebases, and an implementation that wires them together
+          passes both coverpoints separately while being wrong. All four
+          combinations are architecturally legal.
+      - name: x_dret_x_csr_access
+        of: [cp_dret_context, cp_debug_csr_access_context]
+        rationale: >-
+          Both measure what the hart may do outside Debug Mode. The cross
+          confirms the privilege check is on Debug Mode itself rather than on
+          machine privilege -- a hart in M-mode must be refused both.
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_step_external
@@ -544,6 +628,26 @@ covergroups:
         ignore:
           - cells: "cp_stepped_class.ordinary || cp_stepped_class.compressed"
             why: "These classes behave identically at every privilege; the cross adds cells without adding information. Privilege for them is covered by cp_prv alone."
+      - name: x_class_x_stepie
+        of: [cp_stepped_class, cp_stepie_x_irq]
+        rationale: >-
+          Interrupt masking interacts with instruction class, and the stalling
+          case is where it matters most: a wfi stepped with stepie=1 and an
+          interrupt pending may legitimately complete via the interrupt, while
+          the same wfi with stepie=0 must be treated as a nop. Testing the wfi
+          only at one stepie setting leaves the harder half unmeasured.
+        ignore:
+          - cells: "cp_stepped_class.wrs"
+            why: "Zawrs absent on this DUT; retained so a Zawrs DUT is measured across both stepie settings."
+      - name: x_class_x_consecutive
+        of: [cp_stepped_class, cp_consecutive_steps]
+        rationale: >-
+          Drift accumulates differently per class. Stepping repeatedly across a
+          loop back-edge exercises taken branches many times, where an
+          off-by-one in dpc compounds rather than cancelling.
+        ignore:
+          - cells: "cp_consecutive_steps.single"
+            why: "One step cannot accumulate drift; the single case is owned by the per-class bins directly."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_step_native
@@ -573,6 +677,15 @@ covergroups:
         bins:
           - {name: m_stub_u_target, kind: explicit, values: [0], spec: "debugger_implementation.html#nativestep", why: "The straightforward case.", testplan: [NSTEP-007-V]}
           - {name: same_privilege, kind: explicit, values: [1], spec: "debugger_implementation.html#nativestep", why: "Spec calls this 'more complicated, depending on what other debug features are implemented'.", testplan: [NSTEP-006-C]}
+    crosses:
+      - name: x_guarantee_x_privilege
+        of: [cp_native_step_guarantees, cp_native_step_privilege]
+        rationale: >-
+          The privilege relationship changes which limitations bite. Stepping a
+          less-privileged program lets the M-mode stub edit mstatus freely;
+          stepping code at the stub's own privilege makes that edit visible to
+          the program being debugged, which is precisely the case Appendix A
+          calls more complicated.
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_abstract_command
@@ -690,6 +803,16 @@ covergroups:
         ignore:
           - cells: "cp_cmdtype.quick_access || cp_cmdtype.access_memory"
             why: "Unimplemented on this DUT, so only the not_supported cell is reachable; the others are excluded by construction rather than untested."
+      - name: x_flags_x_cmderr
+        of: [cp_command_flags, cp_cmderr]
+        rationale: >-
+          A command that both transfers and runs the program buffer can fail in
+          either phase, and the debugger must be able to tell which. postexec
+          with transfer=0 failing means the buffer faulted; a transfer failing
+          means the register access did. Same cmderr, different cause.
+        ignore:
+          - cells: "cp_cmderr.bus"
+            why: "cmderr=5 requires abstract memory access, absent on this DUT; retained so a DUT implementing cmdtype=2 is measured."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_program_buffer
@@ -738,6 +861,23 @@ covergroups:
         rationale: "Buffer contents must persist; a DM that clears on execute breaks repeated use."
         bins:
           - {name: rerun_without_rewrite, kind: explicit, transition: "EXECUTED => EXECUTED", spec: "debug_module.html#program-buffer", why: "Second run behaves identically.", testplan: [PB-008-C]}
+    crosses:
+      - name: x_outcome_x_operation
+        of: [cp_progbuf_outcome, cp_progbuf_operation]
+        rationale: >-
+          An exception during a memory write leaves different state from one
+          during a register read -- a partially-completed store versus a clean
+          abort. The recovery path a debugger needs differs, so the outcome
+          must be measured per operation rather than in aggregate.
+      - name: x_fill_x_outcome
+        of: [cp_progbuf_fill, cp_progbuf_outcome]
+        rationale: >-
+          The last buffer slot is where off-by-one errors live. An exception
+          raised by the final word of a full buffer, and implicit ebreak on a
+          full buffer, are the two boundary interactions worth naming.
+        ignore:
+          - cells: "cp_progbuf_fill.overflow"
+            why: "Writes past progbufsize are ignored, so no execution outcome follows; DIS-005 owns the out-of-range write itself."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_system_bus_access
@@ -833,6 +973,19 @@ covergroups:
         ignore:
           - cells: "cp_sbaccess_size.size8"
             why: "Every address is aligned for an 8-bit access; the cells carry no information."
+      - name: x_mode_x_error
+        of: [cp_sb_trigger_mode, cp_sberror]
+        rationale: >-
+          An error mid-block-transfer is the interesting case: with
+          autoincrement the address has already advanced, so the debugger must
+          be able to tell which word failed. A single-access error does not
+          have that problem.
+      - name: x_size_x_region
+        of: [cp_sbaccess_size, cp_sb_address_region]
+        rationale: >-
+          A wide access near the top of mapped memory can straddle the boundary
+          while a narrow one at the same address does not. The ram_top cell is
+          only reachable as a size/region pair.
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_triggers
@@ -903,6 +1056,24 @@ covergroups:
         ignore:
           - cells: "cp_trigger_privilege.none_enabled"
             why: "A disabled trigger fires for no access class; the cells are unreachable by construction, and TRIG-006-C owns the disabled case."
+      - name: x_type_x_privilege
+        of: [cp_trigger_type, cp_trigger_privilege]
+        rationale: >-
+          Each trigger type applies the privilege filter through its own
+          matching logic, so a core can honour it for mcontrol6 and ignore it
+          for icount or etrigger. Per-type privilege filtering is not implied
+          by getting it right once.
+        ignore:
+          - cells: "cp_trigger_type.none"
+            why: "An unconfigured trigger has no privilege fields in effect."
+          - cells: "cp_trigger_type.mcontrol"
+            why: "v0.13 encoding; this DUT reports v1.0 and implements mcontrol6. Retained so a v0.13 DUT is measured."
+      - name: x_type_x_update_context
+        of: [cp_trigger_type, cp_trigger_update_context]
+        rationale: >-
+          The spec restricts trigger updates from a running hart. Whether a DUT
+          enforces that can differ per trigger type, since each has a different
+          write path into tdata1.
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_halt_groups
@@ -929,6 +1100,16 @@ covergroups:
           - {name: hart_to_hart, kind: explicit, values: [0], spec: "debug_module.html#halt-groups", why: "Halting one member halts the group.", reachable: false, why_unreachable: "Single-hart DUT — cannot be demonstrated."}
           - {name: external_in, kind: explicit, values: [1], spec: "debug_module.html#dmcs2", why: "An external trigger halts the group.", testplan: [HG-003-C]}
           - {name: external_out, kind: explicit, values: [2], spec: "debug_module.html#dmcs2", why: "A group halt drives the outgoing trigger.", testplan: [HG-004-C]}
+    crosses:
+      - name: x_config_x_propagation
+        of: [cp_group_config, cp_group_propagation]
+        rationale: >-
+          Halt groups and resume groups propagate through separate logic, and
+          the external trigger is a third path. Configuring one and observing
+          propagation on another is the failure this cross catches.
+        ignore:
+          - cells: "cp_group_propagation.hart_to_hart"
+            why: "Requires more than one hart. Unreachable on this DUT; retained so a multi-hart DUT is measured, since this is the primary purpose of halt groups."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_authentication
@@ -950,6 +1131,29 @@ covergroups:
           - {name: unauthenticated, kind: explicit, values: [0], spec: "debug_module.html#authdata", why: "Access restricted to dmstatus/dmcontrol/authdata.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
           - {name: auth_in_progress, kind: explicit, values: [2], spec: "debug_module.html#dmstatus", why: "authbusy set during the exchange.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
           - {name: busy_and_authenticated, kind: illegal, values: [3], spec: "debug_module.html#dmstatus", why: "authbusy set while already authenticated is contradictory."}
+      - name: cp_auth_permitted_register
+        type: value
+        expression: "register_class_accessed_while_unauthenticated"
+        rationale: >-
+          The spec names exactly which registers stay reachable before
+          authentication. Both the permitted and the denied set must be
+          exercised, or the gate is only half tested.
+        bins:
+          - {name: dmstatus, kind: explicit, values: [0], spec: "debug_module.html#authdata", why: "Must remain readable -- it carries authenticated itself.", testplan: [RAP-041-C]}
+          - {name: dmcontrol, kind: explicit, values: [1], spec: "debug_module.html#authdata", why: "Must remain accessible so the DM can be activated."}
+          - {name: authdata, kind: explicit, values: [2], spec: "debug_module.html#authdata", why: "The challenge/response channel itself."}
+          - {name: gated_register, kind: explicit, values: [3], spec: "debug_module.html#authdata", why: "Any other DM register: must be inaccessible until authenticated.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
+    crosses:
+      - name: x_auth_x_gated_access
+        of: [cp_auth_state, cp_auth_permitted_register]
+        rationale: >-
+          Authentication is a gate, so the behaviour is the pairing: which
+          registers remain reachable in which auth state. dmstatus, dmcontrol
+          and authdata must stay readable while unauthenticated; everything
+          else must not.
+        ignore:
+          - cells: "cp_auth_state.no_auth_implemented"
+            why: "With no authentication implemented every register is reachable, so the gating cells carry no information on this DUT. Retained so a DUT implementing authentication is measured."
 
   # ══════════════════════════════════════════════════════════════════════════
   - name: cg_register_access
@@ -1026,6 +1230,19 @@ covergroups:
         ignore:
           - cells: "cp_interface.system_bus && cp_register_class.dm_register"
             why: "SBA reaches system memory, not DM registers; the combination does not exist."
+      - name: x_interface_x_access_type
+        of: [cp_interface, cp_access_type]
+        rationale: >-
+          An access type is declared per field, but enforced per interface. A
+          field that is R/W over DMI may be read-only to the hart, and a DM
+          that enforces the type only on its DMI decode passes cp_access_type
+          while being wrong everywhere else.
+      - name: x_class_x_gating
+        of: [cp_register_class, cp_gating_state]
+        rationale: >-
+          Gating applies unevenly by class: dmcontrol stays reachable with
+          dmactive=0 while other DM registers do not, and debug CSRs become
+          unreachable when the hart is not halted regardless of DM state.
 
 # ════════════════════════════════════════════════════════════════════════════
 # Assertion candidates. Recorded here, NEVER counted toward functional closure:

@@ -127,6 +127,16 @@
       ignore_bins ig = binsof(cp_dmi_op.nop && cp_dmi_result.busy);
     }
 
+    // Under-running dtmcs.idle is the specified way to provoke a busy
+    // response. This cross is the only place that causal link is measured:
+    // idling correctly must never yield busy, and idling short must be able
+    // to.
+    x_idle_x_result: cross cp_idle_cycles, cp_dmi_result {
+      // A DM that advertises N idle cycles and still reports busy after N has
+      // mis-declared dtmcs.idle.
+      illegal_bins il = binsof(cp_idle_cycles.exactly_advertised && cp_dmi_result.busy);
+    }
+
   endgroup : cg_dtm_dmi
 
   // ========================================================================
@@ -197,6 +207,18 @@
       // spec: debug_module.html#dmcontrol
       // testplan: RAP-040-C
       bins other_register_read = {1};
+    }
+
+    // What a register should read depends on which transition preceded it.
+    // After a full reactivate every register must read its reset value; after
+    // an idempotent write they must be unchanged. Reading the same register
+    // proves opposite things in the two cases, and neither coverpoint alone
+    // distinguishes them.
+    x_transition_x_post_read: cross cp_dmactive_transition, cp_post_activation_read {
+      // With dmactive=0 only dmcontrol is meaningful, so the post-activation
+      // reads are not defined for this cell; RAP-040-C owns the inactive
+      // case.
+      ignore_bins ig = binsof(cp_dmactive_transition.deactivate);
     }
 
   endgroup : cg_dm_activation
@@ -312,6 +334,15 @@
       // A nonexistent hart reported as running or halted. Observed on both
       // DUTs -- issue #130.
       illegal_bins il = binsof(cp_hartsel_class.first_nonexistent && (cp_hart_reported_state.running || cp_hart_reported_state.halted));
+    }
+
+    // all/any only diverge with several harts selected, and which harts are
+    // selected is what hartsel controls. On a multi-hart DUT this is where a
+    // selection mask that reports the wrong aggregate shows up.
+    x_hartsel_x_all_any: cross cp_hartsel_class, cp_all_vs_any {
+      // Requires more than one hart selected. Unreachable on a single-hart
+      // DUT; retained so a multi-hart DUT is measured here.
+      ignore_bins ig = binsof(cp_all_vs_any.some_not_all);
     }
 
   endgroup : cg_hart_selection
@@ -452,6 +483,15 @@
     x_source_x_activity: cross cp_reset_source, cp_activity_at_reset {
       // The DTM resets act on the transport, not the DM, so hart-activity
       // cells carry no information for them.
+      ignore_bins ig = binsof(cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset);
+    }
+
+    // The spec requires havereset to be set regardless of which cause reset
+    // the hart. That is a per-source claim, so only the cross can show a DM
+    // that tracks ndmreset but silently misses an external reset.
+    x_source_x_havereset: cross cp_reset_source, cp_havereset_lifecycle {
+      // The DTM resets do not reset any hart, so they have no havereset
+      // semantics.
       ignore_bins ig = binsof(cp_reset_source.dtm_dmireset || cp_reset_source.dtm_dmihardreset);
     }
 
@@ -598,6 +638,25 @@
       illegal_bins over_bound = [1000000000:2000000000];
     }
 
+    // resumeack must accompany a real HALTED => RUNNING transition and must
+    // be cleared by a resumereq that caused no transition. The §3.5 asymmetry
+    // is only visible as the pairing of the two.
+    x_transition_x_resumeack: cross cp_hart_transition, cp_resumeack {
+      // A hart that genuinely resumed must acknowledge it; a transition with
+      // the ack cleared means the handshake is lost.
+      illegal_bins il = binsof(cp_hart_transition.halted_to_running && cp_resumeack.cleared);
+    }
+
+    // Latency is only meaningful for requests that take effect. A halt on a
+    // running hart has a bound; a halt on an already-halted hart has no
+    // latency at all, and conflating them hides a slow path behind the
+    // ignored cases.
+    x_request_x_latency: cross cp_request_x_prior_state, cp_halt_latency {
+      // These requests are specified as ignored, so no transition occurs and
+      // latency is undefined for them.
+      ignore_bins ig = binsof(cp_request_x_prior_state.halt_when_halted || cp_request_x_prior_state.resume_when_running);
+    }
+
   endgroup : cg_run_control
 
   // ========================================================================
@@ -718,6 +777,17 @@
       ignore_bins ig = binsof(cp_cause.resethaltreq && !cp_prv.M);
     }
 
+    // dpc means something different per cause -- the interrupted PC for
+    // haltreq, the ebreak's own address, the next instruction after a step,
+    // the handler entry for a stepped trap. A DM can get dpc right for one
+    // cause and wrong for another, and only this cross separates them.
+    x_cause_x_dpc: cross cp_cause, cp_dpc_origin {
+      // ebreak entry must report the ebreak's own address, not the following
+      // instruction; reporting the next address would silently skip an
+      // instruction on resume.
+      illegal_bins il = binsof(cp_cause.ebreak && cp_dpc_origin.next_after_step);
+    }
+
   endgroup : cg_debug_entry
 
   // ========================================================================
@@ -825,6 +895,17 @@
       // testplan: PB-005-C
       bins exception = {3};
     }
+
+    // dcsr.stopcount and dcsr.stoptime are independent controls over two
+    // different timebases, and an implementation that wires them together
+    // passes both coverpoints separately while being wrong. All four
+    // combinations are architecturally legal.
+    x_stopcount_x_stoptime: cross cp_stopcount, cp_stoptime;
+
+    // Both measure what the hart may do outside Debug Mode. The cross
+    // confirms the privilege check is on Debug Mode itself rather than on
+    // machine privilege -- a hart in M-mode must be refused both.
+    x_dret_x_csr_access: cross cp_dret_context, cp_debug_csr_access_context;
 
   endgroup : cg_debug_mode
 
@@ -994,6 +1075,26 @@
       ignore_bins ig = binsof(cp_stepped_class.ordinary || cp_stepped_class.compressed);
     }
 
+    // Interrupt masking interacts with instruction class, and the stalling
+    // case is where it matters most: a wfi stepped with stepie=1 and an
+    // interrupt pending may legitimately complete via the interrupt, while
+    // the same wfi with stepie=0 must be treated as a nop. Testing the wfi
+    // only at one stepie setting leaves the harder half unmeasured.
+    x_class_x_stepie: cross cp_stepped_class, cp_stepie_x_irq {
+      // Zawrs absent on this DUT; retained so a Zawrs DUT is measured across
+      // both stepie settings.
+      ignore_bins ig = binsof(cp_stepped_class.wrs);
+    }
+
+    // Drift accumulates differently per class. Stepping repeatedly across a
+    // loop back-edge exercises taken branches many times, where an off-by-one
+    // in dpc compounds rather than cancelling.
+    x_class_x_consecutive: cross cp_stepped_class, cp_consecutive_steps {
+      // One step cannot accumulate drift; the single case is owned by the
+      // per-class bins directly.
+      ignore_bins ig = binsof(cp_consecutive_steps.single);
+    }
+
   endgroup : cg_step_external
 
   // ========================================================================
@@ -1052,6 +1153,13 @@
       // testplan: NSTEP-006-C
       bins same_privilege = {1};
     }
+
+    // The privilege relationship changes which limitations bite. Stepping a
+    // less-privileged program lets the M-mode stub edit mstatus freely;
+    // stepping code at the stub's own privilege makes that edit visible to
+    // the program being debugged, which is precisely the case Appendix A
+    // calls more complicated.
+    x_guarantee_x_privilege: cross cp_native_step_guarantees, cp_native_step_privilege;
 
   endgroup : cg_step_native
 
@@ -1280,6 +1388,16 @@
       ignore_bins ig = binsof(cp_cmdtype.quick_access || cp_cmdtype.access_memory);
     }
 
+    // A command that both transfers and runs the program buffer can fail in
+    // either phase, and the debugger must be able to tell which. postexec
+    // with transfer=0 failing means the buffer faulted; a transfer failing
+    // means the register access did. Same cmderr, different cause.
+    x_flags_x_cmderr: cross cp_command_flags, cp_cmderr {
+      // cmderr=5 requires abstract memory access, absent on this DUT;
+      // retained so a DUT implementing cmdtype=2 is measured.
+      ignore_bins ig = binsof(cp_cmderr.bus);
+    }
+
   endgroup : cg_abstract_command
 
   // ========================================================================
@@ -1377,6 +1495,21 @@
       // spec: debug_module.html#program-buffer
       // testplan: PB-008-C
       bins rerun_without_rewrite = (EXECUTED => EXECUTED);
+    }
+
+    // An exception during a memory write leaves different state from one
+    // during a register read -- a partially-completed store versus a clean
+    // abort. The recovery path a debugger needs differs, so the outcome must
+    // be measured per operation rather than in aggregate.
+    x_outcome_x_operation: cross cp_progbuf_outcome, cp_progbuf_operation;
+
+    // The last buffer slot is where off-by-one errors live. An exception
+    // raised by the final word of a full buffer, and implicit ebreak on a
+    // full buffer, are the two boundary interactions worth naming.
+    x_fill_x_outcome: cross cp_progbuf_fill, cp_progbuf_outcome {
+      // Writes past progbufsize are ignored, so no execution outcome follows;
+      // DIS-005 owns the out-of-range write itself.
+      ignore_bins ig = binsof(cp_progbuf_fill.overflow);
     }
 
   endgroup : cg_program_buffer
@@ -1558,6 +1691,16 @@
       ignore_bins ig = binsof(cp_sbaccess_size.size8);
     }
 
+    // An error mid-block-transfer is the interesting case: with autoincrement
+    // the address has already advanced, so the debugger must be able to tell
+    // which word failed. A single-access error does not have that problem.
+    x_mode_x_error: cross cp_sb_trigger_mode, cp_sberror;
+
+    // A wide access near the top of mapped memory can straddle the boundary
+    // while a narrow one at the same address does not. The ram_top cell is
+    // only reachable as a size/region pair.
+    x_size_x_region: cross cp_sbaccess_size, cp_sb_address_region;
+
   endgroup : cg_system_bus_access
 
   // ========================================================================
@@ -1693,6 +1836,23 @@
       ignore_bins ig = binsof(cp_trigger_privilege.none_enabled);
     }
 
+    // Each trigger type applies the privilege filter through its own matching
+    // logic, so a core can honour it for mcontrol6 and ignore it for icount
+    // or etrigger. Per-type privilege filtering is not implied by getting it
+    // right once.
+    x_type_x_privilege: cross cp_trigger_type, cp_trigger_privilege {
+      // An unconfigured trigger has no privilege fields in effect.
+      ignore_bins ig = binsof(cp_trigger_type.none);
+      // v0.13 encoding; this DUT reports v1.0 and implements mcontrol6.
+      // Retained so a v0.13 DUT is measured.
+      ignore_bins ig = binsof(cp_trigger_type.mcontrol);
+    }
+
+    // The spec restricts trigger updates from a running hart. Whether a DUT
+    // enforces that can differ per trigger type, since each has a different
+    // write path into tdata1.
+    x_type_x_update_context: cross cp_trigger_type, cp_trigger_update_context;
+
   endgroup : cg_triggers
 
   // ========================================================================
@@ -1744,6 +1904,16 @@
       bins external_out = {2};
     }
 
+    // Halt groups and resume groups propagate through separate logic, and the
+    // external trigger is a third path. Configuring one and observing
+    // propagation on another is the failure this cross catches.
+    x_config_x_propagation: cross cp_group_config, cp_group_propagation {
+      // Requires more than one hart. Unreachable on this DUT; retained so a
+      // multi-hart DUT is measured, since this is the primary purpose of halt
+      // groups.
+      ignore_bins ig = binsof(cp_group_propagation.hart_to_hart);
+    }
+
   endgroup : cg_halt_groups
 
   // ========================================================================
@@ -1778,6 +1948,40 @@
       // authbusy set while already authenticated is contradictory.
       // spec: debug_module.html#dmstatus
       illegal_bins busy_and_authenticated = {3};
+    }
+
+    // The spec names exactly which registers stay reachable before
+    // authentication. Both the permitted and the denied set must be
+    // exercised, or the gate is only half tested.
+    cp_auth_permitted_register: coverpoint register_class_accessed_while_unauthenticated {
+      // Must remain readable -- it carries authenticated itself.
+      // spec: debug_module.html#authdata
+      // testplan: RAP-041-C
+      bins dmstatus = {0};
+
+      // Must remain accessible so the DM can be activated.
+      // spec: debug_module.html#authdata
+      bins dmcontrol = {1};
+
+      // The challenge/response channel itself.
+      // spec: debug_module.html#authdata
+      bins authdata = {2};
+
+      // Any other DM register: must be inaccessible until authenticated.
+      // spec: debug_module.html#authdata
+      // NOT REACHABLE on this DUT -- kept so another DUT is measured
+      bins gated_register = {3};
+    }
+
+    // Authentication is a gate, so the behaviour is the pairing: which
+    // registers remain reachable in which auth state. dmstatus, dmcontrol and
+    // authdata must stay readable while unauthenticated; everything else must
+    // not.
+    x_auth_x_gated_access: cross cp_auth_state, cp_auth_permitted_register {
+      // With no authentication implemented every register is reachable, so
+      // the gating cells carry no information on this DUT. Retained so a DUT
+      // implementing authentication is measured.
+      ignore_bins ig = binsof(cp_auth_state.no_auth_implemented);
     }
 
   endgroup : cg_authentication
@@ -1946,6 +2150,17 @@
       // exist.
       ignore_bins ig = binsof(cp_interface.system_bus && cp_register_class.dm_register);
     }
+
+    // An access type is declared per field, but enforced per interface. A
+    // field that is R/W over DMI may be read-only to the hart, and a DM that
+    // enforces the type only on its DMI decode passes cp_access_type while
+    // being wrong everywhere else.
+    x_interface_x_access_type: cross cp_interface, cp_access_type;
+
+    // Gating applies unevenly by class: dmcontrol stays reachable with
+    // dmactive=0 while other DM registers do not, and debug CSRs become
+    // unreachable when the hart is not halted regardless of DM state.
+    x_class_x_gating: cross cp_register_class, cp_gating_state;
 
   endgroup : cg_register_access
 
