@@ -107,7 +107,9 @@ wrong reset value in an unused field surfaces later as an unexplained mismatch.
 | RST-035-C | Check | `abstractauto` == 0 | P2 | Not started | |
 | RST-036-C | Check | `data0..1` == reset value | P1 | Not started | |
 | RST-037-C | Check | `progbuf0..7` == reset value | P1 | Not started | |
-| RST-038-C | Check | `sbcs` == reset value: `sbversion=1`, supported `sbaccess*`, `sbbusy=0`, `sberror=0` | P0 | **Fail** | Model expects `0x20140808`, RTL holds `0x20160808`. `sbaccess` hardwired at `dm_csrs.sv:618` — 10x PR #4 regression, absent in pulp upstream |
+| RST-038-S | Stimulate | Read `sbcs` immediately after reset, before any other `sbcs` write | P0 | Not started | Both values recorded so far carry `sbreadonaddr=1`, whose reset is 0 — **neither was a post-reset read** |
+| RST-038-C | Check | `sbcs` == `0x20040808` for this DUT's presets (`sbasize=64`, `sbaccess64=1`), with `sbversion=1`, `sbbusy=0`, `sberror=0`, `sbreadonaddr=0` | P0 | Not started | Computed from the spec's per-field reset column, not observed |
+| RST-038-C2 | Check | `sbcs.sbaccess` == **2** after reset | P0 | **Fail** | Spec gives `sbaccess` a reset of constant `2`, **not** `Preset`, with no exception for a DM that lacks 32-bit support. RTL forces 3 at `dm_csrs.sv:618`: `sbaccess = (BusWidth == 64) ? 3 : 2` |
 | RST-039-C | Check | `sbaddress0..3`, `sbdata0..3` == reset value | P1 | Not started | |
 | RST-040-C | Check | `haltsum0..3` == 0 with no hart halted | P2 | Not started | |
 | RST-041-C | Check | `dmcs2` == reset value | P2 | Pass | `external_trigger_uvm` |
@@ -123,7 +125,7 @@ The interesting failures are resets that land mid-transaction.
 |---|---|---|---|---|---|
 | RST-050-S | Stimulate | Start an abstract command; assert `ndmreset` while `abstractcs.busy=1` | P1 | Not started | Classic hang source |
 | RST-050-C | Check | After reset release, `abstractcs.busy=0` and a new command completes normally | P1 | Not started | |
-| RST-051-S | Stimulate | Start an SBA transfer; assert `ndmreset` while `sbcs.sbbusy=1` | P2 | Blocked | Blocked by RST-038 |
+| RST-051-S | Stimulate | Start an SBA transfer; assert `ndmreset` while `sbcs.sbbusy=1` | P2 | Blocked | Blocked by the `sbaccess` mismatch, RST-038-C2 |
 | RST-051-C | Check | `sbbusy` clears; a subsequent SBA access succeeds | P2 | Blocked | |
 | RST-052-S | Stimulate | Assert reset between a DMI request and its response | P2 | Not started | |
 | RST-052-C | Check | DTM returns to idle; no stuck busy | P2 | Not started | |
@@ -175,7 +177,9 @@ Reference: `debug_module.html`
 | RAP-005-C | Check | Writing 1 acts, writing 0 does nothing, read returns 0 | P1 | Not started | |
 | RAP-006-S | Stimulate | Set `abstractcs.cmderr` via a failing command, then write 1s to it | P1 | Not started | |
 | RAP-006-C | Check | `cmderr` clears only on a write of 1s, not on a write of 0s | P1 | Not started | |
-| RAP-007-C | Check | Hardwired fields read their fixed value regardless of what is written | P1 | **Fail** | `sbcs.sbaccess` — see RST-038 |
+| RAP-007-C | Check | Fields the spec permits an implementation to tie (`hartsel` high bits, `hartarraymask`, `dcsr` bits marked hardwireable) read their fixed value regardless of what is written | P1 | Not started | The spec grants tying **explicitly** where it means to; this row covers only those |
+| RAP-007-C2 | Check | `sbcs.sbaccess` is writable — write each value 0..4 and read it back | P1 | **Fail** | `sbaccess` is declared **`R/W`**, not `WARL` and not `R`. RTL clobbers it: `dm_csrs.sv:513` applies the DMI write, then line 618 unconditionally overwrites `sbaccess` later in the same `always_comb`, so no debugger write can ever stick. **No clause anywhere in the spec permits tying this field** |
+| RAP-007-C3 | Check | Writing an unsupported size to `sbaccess`, then starting a bus access, sets `sberror=4` | P1 | **Fail** | Spec: "If `sbaccess` has an unsupported value when the DM starts a bus access, the access is not performed and `sberror` is set to 4." Hardwiring makes this specified error path **unreachable** — the clause presupposes the field can hold an unsupported value |
 | RAP-008-C | Check | Every reserved bit in every DM register reads 0 | P1 | Not started | |
 | RAP-009-S | Stimulate | Read and write every unimplemented DMI address in range | P1 | Not started | |
 | RAP-009-C | Check | Reads return 0, writes are ignored, no error is raised, no hang | P1 | Not started | |
@@ -416,8 +420,11 @@ abstract commands cannot express.
 **Intent.** Reach memory with no working CPU — independent of the hart, its MMU
 and its PMP.
 
-> **Blocked.** `sbcs.sbaccess` is hardwired on this DUT (RST-038), so every row
-> below aborts before its verdict. Specified, not skipped.
+> **Blocked.** The reference model predicts `sbaccess=2` (the spec's reset
+> constant) while the RTL forces 3, so fail-fast aborts these scenarios before
+> their verdict. The mismatch is now understood (RST-038-C2, RAP-007-C2) and is
+> an RTL defect, not a model defect — but until the comparison is reconciled the
+> rows below stay unrun. Specified, not skipped.
 
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
@@ -647,7 +654,7 @@ requirement**.
 | Finding | Rows | Status |
 |---|---|---|
 | Single-step over `wfi` deadlocks the hart | SSTEP-004 | `openhwgroup/cva6#3549`, dup of #3497 — PR #3525 open upstream |
-| `sbcs.sbaccess` hardwired | RST-038, RAP-007, all of §3.8 | 10x `riscv-dbg` PR #4 regression, absent in pulp upstream. **Unfiled** |
+| `sbcs.sbaccess` hardwired and reset to 3 | RST-038-C2, RAP-007-C2/C3, all of §3.8 | Spec declares it `R/W` with reset constant `2`; RTL forces `(BusWidth==64) ? 3 : 2` at `dm_csrs.sv:618`, clobbering DMI writes. **Not** a PR #4 regression — `git log -L` attributes the line to `17e912c` "Updated 1.0 debug module", which replaced the old v0.13 support-bit block. **Unfiled** |
 | `allrunning=1` for a nonexistent hart | HS-002-C2 | Issue #130; reproduces on both DUTs |
 | `dmstatus` mismatch on hart selection | HS-001 | `hart_selection_uvm` aborts before verdict |
 | `dscratch0/1` clobbered by the DM | RAP-023 | **Testplan expectation is wrong** — `nscratch=2`. Re-specify, do not file |

@@ -40,12 +40,19 @@ absent:
 known_deviations:
   - id: DEV-SBCS-001
     field: sbcs.sbaccess
-    observed: "0x20160808"
-    expected: "0x20140808"
+    observed: "sbaccess=3 (from sbcs=0x20160808)"
+    expected: "sbaccess=2 (spec reset constant; model predicts sbcs=0x20140808)"
     note: >-
-      Hardwired at dm_csrs.sv:618 in the 10x riscv-dbg fork; not present in
-      pulp-platform upstream. Regression introduced by PR #4.
-    raised: "10x-Engineers/riscv-dbg PR #4 (pending)"
+      Bit 17 is sbaccess[0] -- the 3-bit size-select field -- NOT one of the
+      sbaccess8/16/32/64/128 support bits, as previously recorded here.
+      The spec declares sbaccess R/W with a reset value of constant 2 (not
+      "Preset"), and grants no permission anywhere to tie or legalise it.
+      dm_csrs.sv:618 forces `(BusWidth == 64) ? 3 : 2` unconditionally, later
+      in the same always_comb than the DMI write at :513, so no debugger write
+      can stick. This also makes the spec's sberror=4 path unreachable.
+      NOT a PR #4 regression: git log -L attributes the line to 17e912c
+      "Updated 1.0 debug module", which replaced the v0.13 support-bit block.
+    raised: "unfiled"
 
   - id: DEV-WFI-STEP-001
     field: csr_regfile.sv wfi_ctrl
