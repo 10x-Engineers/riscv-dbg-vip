@@ -1,0 +1,16 @@
+{
+    "_comment": [
+        "Read memory through the program buffer.",
+        "",
+        "This config was listed in regress/regression.yaml before it existed.",
+        "The Python client died on the missing file, the simulator kept running",
+        "with nothing driving it, and the test burned its whole 900s timeout --",
+        "a missing config looked exactly like a hung DUT.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/mem_scan_uvm.json"
+    ],
+    "scenario":  "mem_scan",
+    "transport": "uvm",
+    "mode":      "batch",
+    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 600.0 }
+}

@@ -56,6 +56,18 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
     timeout = test.get("timeout_s", defaults.get("timeout_s", 900))
     target = "soc_test_cov" if coverage else "soc_test"
 
+    # Check inputs before launching. A missing config kills the Python client
+    # instantly while the simulator keeps running with nothing driving it, so
+    # the test burns its whole timeout and reports `timeout` -- indistinguishable
+    # from a hung DUT. Better to say which file is missing.
+    for path, what in ((SIM / cfg, "config"), (SIM / elf, "ELF") if elf else (None, None)):
+        if path is not None and not path.exists():
+            return {"name": name, "result": "error", "elapsed": 0.0, "steps": "-",
+                    "uvm_errors": 0, "coverage": {}, "spec_total": None,
+                    "expect": test.get("expect", defaults.get("expect", "pass")),
+                    "covers": test.get("covers", []),
+                    "note": f"missing {what}: {path}"}
+
     cmd = ["make", target, f"CFG_FILE={cfg}"]
     if elf:
         cmd.append(f"ELF={elf}")
@@ -156,7 +168,9 @@ def main() -> int:
         r = run_one(t, defaults, a.coverage)
         results.append(r)
         flag = "" if r["result"] == r["expect"] else "  <-- CHANGED"
-        print(f"{r['result']:<8} {r['steps']:>7}  {r['elapsed']:6.1f}s{flag}")
+        note = f"  {r['note']}" if r.get("note") else ""
+        print(f"{r['result']:<8} {r['steps']:>7}  {r['elapsed']:6.1f}s{flag}{note}",
+              flush=True)
 
     # ── Verdict table ────────────────────────────────────────────────────
     changed = [r for r in results if r["result"] != r["expect"]]

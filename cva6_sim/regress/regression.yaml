@@ -67,10 +67,11 @@ tests:
   - name: hart_selection
     config: configs/hart_selection_uvm.json
     covers: [HS-001, HS-002]
-    expect: fail
+    expect: partial
     why: >-
-      RTL-003 -- a nonexistent hart reports allrunning=1. Kept failing rather
-      than waived so a fix is visible.
+      RTL-003 -- a nonexistent hart reports allrunning=1. It aborts on that
+      mismatch before reaching a verdict, so `partial` rather than `fail`.
+      Kept in the suite rather than waived so a fix is visible.
 
   # ── Reset ─────────────────────────────────────────────────────────────
   - name: reset_ctrl
@@ -145,9 +146,14 @@ tests:
     elf: sw/priv_walk.elf
     timeout_s: 600
     covers: [DM-011-V, SSTEP-006, SSTEP-007, SSTEP-018-V, SSTEP-022-V]
+    expect: fail
     why: >-
-      Stepping in M, S and U with a timer interrupt pending, at both stepie
-      settings. The only test that fills the privilege and stepie crosses.
+      Cycles M -> S -> U and steps in each. Currently FAILS: the halt phase
+      catches S but never U, and the step walk stays in M, so the privilege
+      bins are only partly filled. dcsr.prv itself is correct -- a separate
+      priv_lvl_q diagnostic confirmed that -- so this is the test not yet
+      driving the hart where it needs to go, not an RTL defect. Recorded as
+      failing rather than relaxed to make the suite green.
 
   # ── Triggers and external ─────────────────────────────────────────────
   - name: trigger
