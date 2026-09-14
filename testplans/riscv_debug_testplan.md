@@ -134,6 +134,8 @@ The interesting failures are resets that land mid-transaction.
 | RST-054-C | Check | While `ndmreset` asserted, DMI accesses other than `dmcontrol` do not hang the DM | P2 | Not started | Spec says UNSPECIFIED — check for absence of hang, assert no value |
 | RST-055-S | Stimulate | Ten back-to-back `ndmreset` assert/deassert pairs with no settling time | P2 | Not started | |
 | RST-055-C | Check | DM reaches a consistent state; `dmstatus` readable after the last one | P2 | Not started | |
+| RST-056-S | Stimulate | Assert `ndmreset` with the DM idle — no command, no SBA, no DMI in flight | P2 | Not started | Coverage: the baseline every other reset-activity cell is compared against |
+| RST-056-C | Check | Reset completes and every DM register reads its reset value | P2 | Not started |  |
 
 ## 1.6 `havereset` tracking
 
@@ -147,6 +149,8 @@ Reference: `debug_module.html#dmstatus` · `#dmcontrol`
 | RST-062-C | Check | `anyhavereset` and `allhavereset` clear to 0 | P0 | Pass | |
 | RST-063-C | Check | Record whether `havereset` survives `dmactive=0` | P2 | Not started | Implementation-defined — document, do not assert |
 | RST-064-V | Cover | `havereset` × `ackhavereset` = {set-no-ack, set-then-ack, ack-when-clear} | P1 | Pass | |
+| RST-065-V | Cover | Reset source × DM activity at assertion | P1 | Not started | `cg_reset.x_source_x_activity` — which reset lands mid-operation decides what must survive |
+| RST-066-V | Cover | Reset source × `havereset` lifecycle | P1 | Not started | `x_source_x_havereset` — catches a DM tracking `ndmreset` but missing an external reset |
 
 ---
 
@@ -211,7 +215,7 @@ access and what the permission is *from there*.
 | RAP-029-C | Check | Hart cannot reach DM registers as memory, except the Debug ROM and the `data` window | `debug_module.html` | P2 | Not started | |
 | RAP-030-S | Stimulate | Hart stores to a Debug ROM address | `debug_module.html` | P2 | Not started | |
 | RAP-030-C | Check | ROM contents unchanged; the park loop still functions | `debug_module.html` | P2 | Not started | |
-| RAP-031-V | Cover | Interface = {DMI, hart CSR, hart load/store, SBA, program buffer} × register class | P1 | Not started | |
+| RAP-031-V | Cover | Interface = {DMI, hart CSR, hart load/store, SBA, program buffer} × register class | `debug_module.html` | P1 | Not started | |
 
 ## 2.3 Access gated by DM state
 
@@ -224,7 +228,10 @@ access and what the permission is *from there*.
 | RAP-043-S | Stimulate | Write `sbaddress0` while `sbcs.sbbusy=1` | `debug_module.html#sbcs` | P1 | Blocked | |
 | RAP-043-C | Check | `sbcs.sbbusyerror=1`; the in-flight transfer is unaffected | `debug_module.html#sbcs` | P1 | Blocked | |
 | RAP-044-C | Check | With `authenticated=0`, only `dmstatus`, `dmcontrol` and `authdata` are accessible | `debug_module.html#authdata` | P3 | N/A | Authentication not implemented — recorded, not silently skipped |
-| RAP-045-V | Cover | Gating state = {`dmactive=0`, `ndmreset=1`, `busy=1`, `sbbusy=1`, `authenticated=0`} | P1 | Not started | |
+| RAP-045-V | Cover | Gating state = {`dmactive=0`, `ndmreset=1`, `busy=1`, `sbbusy=1`, `authenticated=0`} | `debug_module.html` | P1 | Not started | |
+| RAP-046-V | Cover | Interface × register class | `debug_module.html` | P1 | Not started | `x_interface_x_register` — which interfaces reach which storage at all |
+| RAP-047-V | Cover | Interface × access type | `introduction.html#1-1-3-3-register-definition-format` | P0 | Not started | `x_interface_x_access_type` — a type is declared per field but **enforced per interface**. A DM enforcing it only on its DMI decode passes the per-field check while being wrong everywhere else |
+| RAP-048-V | Cover | Register class × gating state | `debug_module.html` | P1 | Not started | `x_class_x_gating` — `dmcontrol` survives `dmactive=0`; debug CSRs go unreachable when the hart is not halted |
 
 ---
 
@@ -255,6 +262,7 @@ beyond `version`.
 | ACT-003-C | Check | All DM registers are back at reset values after the cycle | `debug_module.html#dmcontrol` | P0 | Pass | |
 | ACT-004-S | Stimulate | Write `dmactive=1` when it is already 1 | `debug_module.html#dmcontrol` | P2 | Not started | |
 | ACT-004-C | Check | No register changes value; no hart state changes | `debug_module.html#dmcontrol` | P2 | Not started | |
+| ACT-005-V | Cover | `dmactive` transition × post-activation register read | `debug_module.html#dmcontrol` | P1 | Not started | `x_transition_x_post_read` — the same read proves opposite things: reset values after a reactivate, unchanged after an idempotent write |
 
 ## 3.2 Discovery and version detection
 
@@ -275,6 +283,8 @@ without disturbing a running hart.
 | DIS-006-S | Stimulate | Run full discovery while the hart is running | `debug_module.html` | P1 | Not started | |
 | DIS-006-C | Check | Hart is still running afterwards; `dmstatus.allrunning=1` throughout | `debug_module.html#dmstatus` | P1 | Not started | Debuggers discover before halting |
 | DIS-007-C | Check | `nextdm == 0` when this is the only DM | `debug_module.html#nextdm` | P2 | Not started | |
+| DIS-008-S | Stimulate | Issue DMI accesses idling far more than `dtmcs.idle` requires | `dtm.html#dtmcs` | P2 | Not started | Coverage: the generous-idling baseline every other test implicitly runs at |
+| DIS-008-C | Check | Every access succeeds; no busy response | `dtm.html#dmi` | P2 | Not started |  |
 
 ## 3.3 Hart selection and availability
 
@@ -291,8 +301,13 @@ not exist or cannot respond.
 | HS-003-C | Check | `hartsel` is unchanged by halt, resume and abstract commands | `debug_module.html#dmcontrol` | P1 | Not started | |
 | HS-004-S | Stimulate | Hold a hart in reset, then read `dmstatus` | `debug_module.html#dmstatus` | P1 | Not started | |
 | HS-004-C | Check | `anyunavail`/`allunavail` reflect the unavailable hart | `debug_module.html#dmstatus` | P1 | Not started | |
-| HS-005-V | Cover | Hart state reported = {running, halted, unavailable, nonexistent, in reset} | P1 | Not started | |
-| HS-006-V | Cover | `hartsel` = {0, max implemented, first nonexistent, all-ones} | P1 | Not started | |
+| HS-005-V | Cover | Hart state reported = {running, halted, unavailable, nonexistent, in reset} | `debug_module.html#dmstatus` | P1 | Not started | |
+| HS-006-V | Cover | `hartsel` = {0, max implemented, first nonexistent, all-ones} | `debug_module.html#dmcontrol` | P1 | Not started | |
+| HS-007-S | Stimulate | Select the highest implemented hart index | `debug_module.html#dmcontrol` | P1 | Not started | Coverage: the boundary the DM must still decode |
+| HS-007-C | Check | That hart's state is reported; `anynonexistent=0` | `debug_module.html#dmstatus` | P1 | Not started |  |
+| HS-008-C | Check | With no selected hart in a given state, both its `all` and `any` bits read 0 | `debug_module.html#dmstatus` | P1 | Not started | Coverage: the neither cell, unreachable by a test that only checks the asserted case |
+| HS-009-V | Cover | `hartsel` class × reported hart state | `debug_module.html#dmstatus` | P0 | Not started | `x_hartsel_x_state` — carries issue #130 as an illegal cell. A stale mux looks correct on either coverpoint alone |
+| HS-010-V | Cover | `hartsel` class × all/any aggregation | `debug_module.html#dmstatus` | P1 | Not started | `x_hartsel_x_all_any` — `some_not_all` needs several harts selected; excluded here, retained for a multi-hart DUT |
 
 ## 3.4 Halt
 
@@ -319,8 +334,9 @@ clear `haltreq` → read `dcsr.cause`.
 | HALT-006-C | Check | `haltsum0` bit for the halted hart is set | `debug_module.html#haltsum0` | P2 | Pass | `report_halt_status_uvm` (4/4) |
 | HALT-007-A | Assertion | Hart halts within the spec's one-second bound after `haltreq` | `debug_module.html#dmcontrol` | P2 | Not started | Cycle-domain property — SVA, not a directed test |
 | HALT-008-V | Cover | Privilege at halt = {M, S, U} — `dcsr.prv` records each | `Sdext.html#csr-dcsr` | P1 | Not started | |
-| HALT-009-V | Cover | Hart activity at halt = {ordinary insn, `wfi`, taking a trap, in a tight loop, executing a load/store} | P1 | Not started | |
+| HALT-009-V | Cover | Hart activity at halt = {ordinary insn, `wfi`, taking a trap, in a tight loop, executing a load/store} | `debug_module.html#dmcontrol` | P1 | Not started | |
 | HALT-010-S | Stimulate | Select multiple harts and assert `haltreq` | `debug_module.html#dmstatus` | P1 | N/A | Single-hart DUT — `allhalted` vs `anyhalted` cannot be distinguished |
+| HALT-011-C | Check | A halt on a hart executing ordinary instructions completes within ~10 cycles | `debug_module.html#dmcontrol` | P2 | Not started | Coverage: the immediate-latency bin. Separating it from the stalled case stops a slow path hiding behind the bound |
 
 ## 3.5 Resume
 
@@ -345,8 +361,10 @@ confirm the resume actually happened.
 | RES-005-C | Check | Every register the debugger did not write is unchanged | `Sdext.html#debugmode` | P0 | Not started | Abstract commands and the program buffer must not corrupt hart state |
 | RES-006-S | Stimulate | Assert `ndmreset`; write `resumereq=1` while reset is held | `debug_module.html#dmcontrol` | P2 | Pass | |
 | RES-006-C | Check | No halt/run transition occurs | `debug_module.html#dmstatus` | P2 | Pass | |
-| RES-007-V | Cover | `haltreq` × `resumereq` = {`1,0`}, {`0,1`}, {`1,1`}, {`0,0`} | P1 | Pass | |
-| RES-008-V | Cover | `resumereq` × prior state = {halted, running, in reset} | P1 | Pass | |
+| RES-007-V | Cover | `haltreq` × `resumereq` = {`1,0`}, {`0,1`}, {`1,1`}, {`0,0`} | `debug_module.html#dmcontrol` | P1 | Pass | |
+| RES-008-V | Cover | `resumereq` × prior state = {halted, running, in reset} | `debug_module.html#dmcontrol` | P1 | Pass | |
+| RES-009-V | Cover | Hart transition × `resumeack` | `debug_module.html#dmstatus` | P1 | Not started | `x_transition_x_resumeack` — the §3.5 asymmetry exists only as the pairing |
+| RES-010-V | Cover | Request × prior state × halt latency | `debug_module.html#dmcontrol` | P2 | Not started | `x_request_x_latency` — ignored requests have no latency; conflating them hides a slow path |
 
 ## 3.6 Abstract commands
 
@@ -388,7 +406,15 @@ write `command` → poll `abstractcs.busy` → read `cmderr` → read `data0..`.
 | AC-014-C | Check | The command re-executes automatically on the `data0` access | `debug_module.html#abstractauto` | P2 | Not started | |
 | AC-015-C | Check | After any abstract command, GPRs/CSRs other than the target are unchanged | `debug_module.html#abstract-commands` | P0 | Not started | Except `dscratch0/1` — see RAP-023 |
 | AC-016-V | Cover | `cmderr` = {0 none, 1 busy, 2 not supported, 3 exception, 4 halt/resume, 5 bus, 7 other} | `debug_module.html#abstractcs` | P1 | Not started | |
-| AC-017-V | Cover | `regno` class = {GPR, FPR, CSR, unimplemented}; `aarsize` = {32, 64, unsupported} | P1 | Not started | |
+| AC-017-V | Cover | `regno` class = {GPR, FPR, CSR, unimplemented}; `aarsize` = {32, 64, unsupported} | `debug_module.html#access-register` | P1 | Not started | |
+| AC-018-S | Stimulate | Issue a command with an undefined `cmdtype` (3) | `debug_module.html#abstractcs` | P2 | Not started | Coverage: the reserved encoding |
+| AC-018-C | Check | DM rejects it and remains usable; no hart state changes | `debug_module.html#abstractcs` | P2 | Not started |  |
+| AC-019-S | Stimulate | Issue Access Register with a reserved `aarsize` (0, 1, 5, 6, 7) | `debug_module.html#access-register` | P2 | Not started | Coverage: undefined encodings, distinct from an unsupported-but-defined size |
+| AC-019-C | Check | Rejected with `cmderr=2`; no transfer occurs | `debug_module.html#abstractcs` | P2 | Not started |  |
+| AC-020-C | Check | If `cmderr=7` (other) is ever reported, the condition is investigated and classified | `debug_module.html#abstractcs` | P2 | Not started | Reaching this bin means the DM could not classify its own failure |
+| AC-021-V | Cover | `regno` class × `aarsize` | `debug_module.html#access-register` | P1 | Not started | `x_regno_x_size` — 64-bit to a 32-bit CSR must fail while the same size on a GPR succeeds |
+| AC-022-V | Cover | `cmdtype` × `cmderr` | `debug_module.html#abstractcs` | P1 | Not started | `x_cmdtype_x_cmderr` — an unimplemented type must give `cmderr=2`, not whatever the last command left |
+| AC-023-V | Cover | Command flags × `cmderr` | `debug_module.html#access-register` | P1 | Not started | `x_flags_x_cmderr` — a transfer-plus-postexec command can fail in either phase; the debugger must tell which |
 
 ## 3.7 Program Buffer
 
@@ -413,7 +439,13 @@ abstract commands cannot express.
 | PB-008-S | Stimulate | Execute the buffer twice without rewriting it | `debug_module.html#program-buffer` | P2 | Not started | |
 | PB-008-C | Check | Second execution behaves identically; buffer contents persisted | `debug_module.html#program-buffer` | P2 | Not started | |
 | PB-009-C | Check | Program buffer executes at the privilege recorded in `dcsr.prv` | `Sdext.html#debugmode` | P1 | Not started | |
-| PB-010-V | Cover | Buffer outcome = {normal `ebreak` return, implicit `ebreak`, exception, illegal instruction, control transfer out} | P1 | Not started | |
+| PB-010-V | Cover | Buffer outcome = {normal `ebreak` return, implicit `ebreak`, exception, illegal instruction, control transfer out} | `debug_module.html#program-buffer` | P1 | Not started | |
+| PB-011-S | Stimulate | Fill 2–7 of the 8 `progbuf` words and execute | `debug_module.html#program-buffer` | P2 | Not started | Coverage: the partial-fill case between one word and a full buffer |
+| PB-011-C | Check | Only the written words execute; unused slots are not fetched | `debug_module.html#program-buffer` | P2 | Not started |  |
+| PB-012-S | Stimulate | Use the program buffer to store to a known memory address | `debug_module.html#program-buffer` | P0 | Not started | Coverage: `memory_write` — PB-002 covers the load, nothing covered the store |
+| PB-012-C | Check | Memory holds the written value, honouring the hart's MMU and PMP | `debug_module.html#program-buffer` | P0 | Not started | Contrast with SBA, which bypasses both — RAP-028 |
+| PB-013-V | Cover | Buffer outcome × operation performed | `debug_module.html#program-buffer` | P1 | Not started | `x_outcome_x_operation` — an exception during a store leaves different state from one during a register read |
+| PB-014-V | Cover | Buffer fill level × outcome | `debug_module.html#abstractcs` | P1 | Not started | `x_fill_x_outcome` — the last slot is where off-by-one errors live |
 
 ## 3.8 System Bus Access
 
@@ -447,7 +479,16 @@ and its PMP.
 | SBA-009-C | Check | `sberror` is sticky and clears only on a write of 1s | `debug_module.html#sbcs` | P1 | Blocked | |
 | SBA-010-S | Stimulate | Perform SBA reads while the hart is running | `debug_module.html#sbcs` | P1 | Blocked | The main reason SBA exists |
 | SBA-010-C | Check | Hart continues undisturbed; `dmstatus.allrunning=1` throughout | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-011-V | Cover | `sbaccess` = {8, 16, 32, 64, 128, unsupported}; `sberror` = {0,1,2,3,4,7} | P1 | Blocked | |
+| SBA-011-V | Cover | `sbaccess` = {8, 16, 32, 64, 128, unsupported}; `sberror` = {0,1,2,3,4,7} | `debug_module.html#sbcs` | P1 | Blocked | |
+| SBA-012-C | Check | A bus that never responds sets `sberror=1` (timeout) rather than hanging the DM | `debug_module.html#sbcs` | P1 | Blocked | Coverage: the timeout bin, distinct from a bus error |
+| SBA-013-C | Check | If `sberror=7` (other) is reported, the condition is investigated and classified | `debug_module.html#sbcs` | P2 | Blocked |  |
+| SBA-014-S | Stimulate | With `sbreadonaddr=0` and `sbreadondata=0`, write `sbaddress0` then explicitly access `sbdata0` | `debug_module.html#sbcs` | P1 | Blocked | Coverage: manual mode — the baseline the triggered modes are compared against |
+| SBA-014-C | Check | No access occurs until the explicit data access | `debug_module.html#sbcs` | P1 | Blocked |  |
+| SBA-015-S | Stimulate | Access an address in the body of mapped RAM, and the last mapped address | `debug_module.html#sbcs` | P1 | Blocked | Coverage: `ram_body` and `ram_top`; SBA-001 only used the base |
+| SBA-015-C | Check | Both succeed with `sberror=0`; one past `ram_top` gives `sberror=2` | `debug_module.html#sbcs` | P1 | Blocked |  |
+| SBA-016-V | Cover | Access size × alignment | `debug_module.html#sbcs` | P1 | Blocked | `x_size_x_alignment` — address 4 is aligned for 32-bit and misaligned for 64-bit; this is where `sberror=3` arises |
+| SBA-017-V | Cover | Trigger mode × `sberror` | `debug_module.html#sbcs` | P1 | Blocked | `x_mode_x_error` — with autoincrement the address has already advanced, so the debugger must tell which word failed |
+| SBA-018-V | Cover | Access size × address region | `debug_module.html#sbcs` | P1 | Blocked | `x_size_x_region` — a wide access near the top of memory straddles the boundary where a narrow one does not |
 
 ## 3.9 Single-step — external, via `dcsr.step`
 
@@ -506,9 +547,16 @@ it explicitly rather than assuming it.
 | SSTEP-013-C | Check | `dpc` advances monotonically; `dcsr.cause=4` every time; no drift | `Sdext.html#csr-dpc` | P1 | Pass | |
 | SSTEP-015-S | Stimulate | Step a load and a store to a mapped address | `Sdext.html#stepbit` | P1 | Not started | Coverage hole: `SSTEP-014-V` listed load/store as a cover bin with no item able to reach it |
 | SSTEP-015-C | Check | The access completes before Debug Mode is re-entered — destination register updated for the load, memory updated for the store; `dcsr.cause=4` | `Sdext.html#stepbit` | P1 | Not started | |
-| SSTEP-014-V | Cover | Stepped instruction class = {ordinary, compressed, taken branch, not-taken branch, `wfi`, trapping, privilege-changing, load, store} | P1 | Not started | Owned by `cg_step.cp_stepped_class` |
-| SSTEP-017-V | Cover | `stepie` × interrupt-pending = {0,0}, {0,1}, {1,0}, {1,1} | P1 | Not started | |
-| SSTEP-018-V | Cover | Privilege at step = {M, S, U} | P1 | Not started | |
+| SSTEP-014-V | Cover | Stepped instruction class = {ordinary, compressed, taken branch, not-taken branch, `wfi`, trapping, privilege-changing, load, store} | `Sdext.html#stepbit` | P1 | Not started | Owned by `cg_step.cp_stepped_class` |
+| SSTEP-017-V | Cover | `stepie` × interrupt-pending = {0,0}, {0,1}, {1,0}, {1,1} | `Sdext.html#csr-dcsr` | P1 | Not started | |
+| SSTEP-018-V | Cover | Privilege at step = {M, S, U} | `Sdext.html#csr-dcsr` | P1 | Not started | |
+| SSTEP-019-S | Stimulate | Step a branch whose condition is false | `Sdext.html#stepbit` | P1 | Not started | Coverage: `not_taken_branch` — SSTEP-003 covers only the taken case |
+| SSTEP-019-C | Check | `dpc` is the sequential next address, not the branch target | `Sdext.html#csr-dpc` | P1 | Not started |  |
+| SSTEP-020-S | Stimulate | Step ~32 consecutive instructions across a loop back-edge | `Sdext.html#stepbit` | P1 | Not started | Coverage: `across_loop_backedge` — drift compounds across repeated taken branches |
+| SSTEP-020-C | Check | `dpc` follows the branch every iteration; no cumulative drift | `Sdext.html#csr-dpc` | P1 | Not started |  |
+| SSTEP-021-V | Cover | Stepped class × privilege | `Sdext.html#stepbit` | P1 | Not started | `x_class_x_privilege` — a trapping instruction from U enters the M handler; from M it stays in M |
+| SSTEP-022-V | Cover | Stepped class × {`stepie`, interrupt pending} | `Sdext.html#csr-dcsr` | P0 | Not started | `x_class_x_stepie` — a `wfi` stepped with `stepie=1` and an interrupt pending may legitimately complete; with `stepie=0` it must be a nop. Testing the `wfi` at one setting leaves the harder half unmeasured |
+| SSTEP-023-V | Cover | Stepped class × consecutive-step count | `Sdext.html#stepbit` | P2 | Not started | `x_class_x_consecutive` |
 
 ## 3.10 Single-step — native, via the `icount` trigger
 
@@ -544,7 +592,8 @@ behaviour:
 | NSTEP-005-S | Stimulate | Step a `wfi` using `icount` with no interrupt pending | `Sdext.html#stepicount` | P2 | Not started | |
 | NSTEP-005-C | Check | The `wfi` is **not** treated as a `nop`; the hart may stall until an interrupt arrives | `Sdext.html#stepicount` | P2 | Not started | **Opposite of SSTEP-004.** Confirm the stall is real rather than assuming §3.9's rule applies |
 | NSTEP-006-C | Check | Stepping in the same privilege mode as the debug stub behaves per §`nativestep` | `debugger_implementation.html#nativestep` | P3 | Not started | Appendix A flags this case as more complicated |
-| NSTEP-007-V | Cover | `icount` step from = {U-mode with M-mode stub, same privilege as stub} | P2 | Not started | |
+| NSTEP-007-V | Cover | `icount` step from = {U-mode with M-mode stub, same privilege as stub} | `Sdext.html#stepicount` | P2 | Not started | |
+| NSTEP-008-V | Cover | Native-step guarantee × privilege relationship | `Sdext.html#stepicount` | P2 | Not started | `x_guarantee_x_privilege` — stepping at the stub's own privilege makes the `mstatus` edit visible to the program being debugged |
 
 ## 3.11 Debug Mode entry and exit
 
@@ -567,6 +616,9 @@ behaviour:
 | DM-009-C | Check | Debug ROM `HALTED`/`GOING`/`RESUMING`/`EXCEPTION` addresses agree with `dm_mem`'s decode | `debug_module.html` | P0 | Pass | The defect above: ROM used an 8-byte stride, `dm_mem` decoded 4 |
 | DM-010-V | Cover | `dcsr.cause` = {1 ebreak, 2 trigger, 3 haltreq, 4 step, 5 resethaltreq} | `Sdext.html#csr-dcsr` | P0 | Not started | Every cause reachable — the real coverage goal |
 | DM-011-V | Cover | Entry privilege `dcsr.prv` = {M, S, U} | `Sdext.html#csr-dcsr` | P1 | Not started | Owned by `cg_debug_entry.cp_prv` |
+| DM-014-V | Cover | `dcsr.cause` × `dpc` origin | `Sdext.html#csr-dpc` | P0 | Not started | `x_cause_x_dpc` — `dpc` means something different per cause; a DM can get it right for `haltreq` and wrong for `ebreak` |
+| DM-015-V | Cover | `dcsr.stopcount` × `dcsr.stoptime` | `Sdext.html#csr-dcsr` | P2 | Not started | `x_stopcount_x_stoptime` — two independent timebases; an implementation wiring them together passes both coverpoints separately while being wrong |
+| DM-016-V | Cover | `dret` context × debug-CSR access context | `Sdext.html#dret` | P1 | Not started | `x_dret_x_csr_access` — confirms the check is on Debug Mode itself rather than on machine privilege |
 | DM-012-S | Stimulate | Enter Debug Mode by each cause from each privilege the cause can occur in: `ebreak` from M/S/U with the matching `ebreak*` bit set, `haltreq` from M/S/U, step from M/S/U | `Sdext.html#csr-dcsr` | P1 | Not started | Coverage hole: no item drove the cause × privilege combination |
 | DM-012-C | Check | `dcsr.cause` and `dcsr.prv` are both correct for every combination reached | `Sdext.html#csr-dcsr` | P1 | Not started | `ebreak` gating is per-privilege, so this cross is where a wrongly-gated `ebreak` shows up — neither coverpoint alone finds it |
 | DM-013-V | Cover | `dcsr.cause` × `dcsr.prv`, excluding `resethaltreq` × {S, U} — reset-halt entry always reports the post-reset privilege, which is M by definition | `Sdext.html#csr-dcsr` | P1 | Not started | Owned by `cg_debug_entry.x_cause_x_prv` |
@@ -597,8 +649,15 @@ untested area in this plan.
 | TRIG-009-S | Stimulate | Configure `itrigger` and `etrigger` | `Sdtrig.html#itrigger` | P2 | Not started | |
 | TRIG-009-C | Check | Fire on the configured interrupt and exception respectively | `Sdtrig.html#itrigger` | P2 | Not started | |
 | TRIG-010-C | Check | Trigger priority against a simultaneous exception matches §5.1.3 | `Sdtrig.html#5-1-3-priority` | P2 | Not started | |
-| TRIG-011-V | Cover | Trigger type = {execute, load, store, `icount`, `itrigger`, `etrigger`} | P1 | Not started | |
-| TRIG-012-V | Cover | Privilege enable bits = {m, s, u} × fired/not-fired | P1 | Not started | |
+| TRIG-011-V | Cover | Trigger type = {execute, load, store, `icount`, `itrigger`, `etrigger`} | `Sdtrig.html` | P1 | Not started | |
+| TRIG-012-V | Cover | Privilege enable bits = {m, s, u} × fired/not-fired | `Sdtrig.html#mcontrol6` | P1 | Not started | |
+| TRIG-015-S | Stimulate | Configure `mcontrol6` with both load and store match, then run each | `Sdtrig.html#mcontrol6` | P1 | Not started | Coverage: `load_and_store` — a watchpoint on any access |
+| TRIG-015-C | Check | The trigger fires on both a load and a store to the address | `Sdtrig.html#mcontrol6` | P1 | Not started |  |
+| TRIG-016-S | Stimulate | Configure a trigger with m, s and u all enabled; execute the match from each privilege | `Sdtrig.html#mcontrol6` | P1 | Not started | Coverage: `all_privileges` |
+| TRIG-016-C | Check | The trigger fires in every privilege mode | `Sdtrig.html#mcontrol6` | P1 | Not started |  |
+| TRIG-017-V | Cover | Match event × privilege enables | `Sdtrig.html#mcontrol6` | P0 | Not started | `x_match_x_privilege` — the filter is applied per access class; a core can get it right for execute and wrong for load |
+| TRIG-018-V | Cover | Trigger type × privilege enables | `Sdtrig.html#mcontrol6` | P1 | Not started | `x_type_x_privilege` — each type applies the filter through its own matching logic |
+| TRIG-019-V | Cover | Trigger type × update context (hart halted vs running) | `Sdtrig.html` | P1 | Not started | `x_type_x_update_context` — each type has a different write path into `tdata1` |
 
 ## 3.13 Halt and resume groups
 
@@ -610,6 +669,7 @@ untested area in this plan.
 | HG-003-S | Stimulate | Assert the external trigger configured in `dmcs2.dmexttrigger` | `debug_module.html#dmcs2` | P2 | Pass | `external_trigger_uvm` (3/3) |
 | HG-003-C | Check | The group halts in response | `debug_module.html#dmcs2` | P2 | Pass | |
 | HG-004-C | Check | A group halt drives the outgoing external trigger | `debug_module.html#dmcs2` | P2 | Not started | |
+| HG-005-V | Cover | Group configuration × propagation path | `debug_module.html#dmcs2` | P2 | Not started | `x_config_x_propagation` — halt and resume groups propagate through separate logic, the external trigger is a third. `hart_to_hart` excluded on a single-hart DUT, retained since it is the primary purpose of halt groups |
 
 ## 3.14 Authentication
 
@@ -618,6 +678,9 @@ untested area in this plan.
 | AUTH-001-C | Check | `dmstatus.authenticated=1` on a DM with no authentication implemented | `debug_module.html#dmstatus` | P1 | Not started | The only row applying to this DUT |
 | AUTH-002-S | Stimulate | Attempt DM register access with `authenticated=0` | `debug_module.html#authdata` | P3 | N/A | Not implemented |
 | AUTH-003-S | Stimulate | Perform the `authdata` challenge/response exchange | `debug_module.html#authdata` | P3 | N/A | |
+| AUTH-004-C | Check | `dmcontrol` remains accessible while `authenticated=0`, so the DM can still be activated | `debug_module.html#authdata` | P3 | N/A | Coverage: the permitted set. Retained for a DUT that implements authentication |
+| AUTH-005-C | Check | `authdata` remains accessible while `authenticated=0` — it is the challenge channel | `debug_module.html#authdata` | P3 | N/A |  |
+| AUTH-006-V | Cover | Authentication state × register reachable in that state | `debug_module.html#authdata` | P3 | N/A | `x_auth_x_gated_access` — a gate is a pairing; a state coverpoint alone cannot say what it gates |
 
 ## 3.15 DTM and DMI transport
 
@@ -637,7 +700,9 @@ untested area in this plan.
 | DTM-007-C | Check | Access is ignored or flagged; no hang | `dtm.html#dmi` | P2 | Not started | |
 | DTM-008-S | Stimulate | Reset the TAP mid-DMI-transaction | `dtm.html` | P2 | Not started | |
 | DTM-008-C | Check | DTM returns to a known state; the next access succeeds | `dtm.html` | P2 | Not started | |
-| DTM-009-V | Cover | `dmi.op` result = {0 success, 2 failed, 3 busy}; `dtmcs.dmistat` = {0, 2, 3} | P1 | Not started | |
+| DTM-009-V | Cover | `dmi.op` result = {0 success, 2 failed, 3 busy}; `dtmcs.dmistat` = {0, 2, 3} | `dtm.html#dmi` | P1 | Not started | |
+| DTM-010-V | Cover | DMI operation × result | `dtm.html#dmi` | P1 | Not started | `x_op_x_result` — a failed read returns stale data, a failed write may partially apply |
+| DTM-011-V | Cover | Idle cycles supplied × DMI result | `dtm.html#dtmcs` | P0 | Not started | `x_idle_x_result` — under-running `dtmcs.idle` is the specified way to provoke busy, the only place that causal link is measured |
 
 ---
 

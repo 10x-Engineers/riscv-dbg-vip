@@ -116,6 +116,7 @@
 
       // Generous idling — the baseline every other test runs at.
       // spec: dtm.html#dtmcs
+      // testplan: DIS-008-C
       bins above_advertised = {99};
     }
 
@@ -245,6 +246,7 @@
       // The highest implemented index — the boundary the DM must still
       // decode.
       // spec: debug_module.html#dmcontrol
+      // testplan: HS-007-C
       bins last_existing = {1};
 
       // One past the end: the DM must report nonexistent, not wrap.
@@ -310,6 +312,7 @@
     cp_all_vs_any: coverpoint {all_bit, any_bit} {
       // No selected hart in this state.
       // spec: debug_module.html#dmstatus
+      // testplan: HS-008-C
       bins neither = {0};
 
       // any set, all clear — only reachable with multiple harts selected.
@@ -403,6 +406,7 @@
     cp_activity_at_reset: coverpoint dm_activity_when_reset_asserted {
       // Baseline.
       // spec: debug_module.html#reset
+      // testplan: RST-056-C
       bins idle = {0};
 
       // The common case.
@@ -625,6 +629,7 @@
     cp_halt_latency: coverpoint cycles_from_haltreq_to_allhalted {
       // The common case on a hart executing ordinary instructions.
       // spec: debug_module.html#dmcontrol
+      // testplan: HALT-011-C
       bins immediate = [0:10];
 
       // Hart was stalled or mid-instruction; still well within bound.
@@ -948,6 +953,7 @@
 
       // Falls through: dpc is the sequential next address.
       // spec: Sdext.html#stepbit
+      // testplan: SSTEP-019-C
       bins not_taken_branch = {4};
 
       // Debug Mode re-entered at the handler's first instruction.
@@ -1060,6 +1066,7 @@
 
       // Stepping past a backward branch, where dpc must follow the branch.
       // spec: Sdext.html#stepbit
+      // testplan: SSTEP-020-C
       bins across_loop_backedge = {32};
     }
 
@@ -1194,6 +1201,7 @@
 
       // Undefined type; must not hang the DM.
       // spec: debug_module.html#abstractcs
+      // testplan: AC-018-C
       bins reserved_cmdtype = {3};
     }
 
@@ -1245,6 +1253,7 @@
 
       // Undefined encodings must be rejected.
       // spec: debug_module.html#access-register
+      // testplan: AC-019-C
       bins reserved_size = {0, 1, 5, 6, 7};
     }
 
@@ -1314,6 +1323,7 @@
       // Catch-all; reaching it means the DM could not classify its own
       // failure.
       // spec: debug_module.html#abstractcs
+      // testplan: AC-020-C
       bins other = {7};
 
       // 6 is not a defined cmderr encoding.
@@ -1421,6 +1431,7 @@
 
       // Ordinary use.
       // spec: debug_module.html#abstractcs
+      // testplan: PB-011-C
       bins partial = [2:7];
 
       // Exactly progbufsize — the boundary.
@@ -1479,6 +1490,7 @@
 
       // Store from the hart's point of view.
       // spec: debug_module.html#program-buffer
+      // testplan: PB-012-C
       bins memory_write = {2};
 
       // How dcsr is written during a step setup.
@@ -1570,6 +1582,7 @@
 
       // The bus did not respond.
       // spec: debug_module.html#sbcs
+      // testplan: SBA-012-C
       bins timeout = {1};
 
       // Unmapped physical address.
@@ -1589,6 +1602,7 @@
 
       // Catch-all.
       // spec: debug_module.html#sbcs
+      // testplan: SBA-013-C
       bins other = {7};
     }
 
@@ -1598,6 +1612,7 @@
     cp_sb_trigger_mode: coverpoint {sbreadonaddr, sbreadondata, sbautoincrement} {
       // Explicit address then explicit data access.
       // spec: debug_module.html#sbcs
+      // testplan: SBA-014-C
       bins manual = {0};
 
       // Writing the address triggers the read.
@@ -1627,10 +1642,12 @@
 
       // Ordinary mapped memory.
       // spec: debug_module.html#sbcs
+      // testplan: SBA-015-C
       bins ram_body = [2147483649:2415919103];
 
       // Last mapped address — the boundary before the decode fails.
       // spec: debug_module.html#sbcs
+      // testplan: SBA-015-C
       bins ram_top = {2415919104};
 
       // Must produce sberror=2 rather than hanging the bus.
@@ -1768,6 +1785,7 @@
 
       // Both set — a watchpoint on any access.
       // spec: Sdtrig.html#mcontrol6
+      // testplan: TRIG-015-C
       bins load_and_store = {3};
     }
 
@@ -1791,6 +1809,7 @@
 
       // Fires anywhere.
       // spec: Sdtrig.html#mcontrol6
+      // testplan: TRIG-016-C
       bins all_privileges = {7};
 
       // Configured but disabled: must never fire.
@@ -1961,10 +1980,12 @@
 
       // Must remain accessible so the DM can be activated.
       // spec: debug_module.html#authdata
+      // testplan: AUTH-004-C
       bins dmcontrol = {1};
 
       // The challenge/response channel itself.
       // spec: debug_module.html#authdata
+      // testplan: AUTH-005-C
       bins authdata = {2};
 
       // Any other DM register: must be inaccessible until authenticated.

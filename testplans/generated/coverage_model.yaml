@@ -75,10 +75,11 @@ covergroups:
           - {name: none, kind: boundary, values: [0], spec: "dtm.html#dtmcs", why: "No idling at all — provokes busy if the DM needs any.", testplan: [DTM-004-S]}
           - {name: below_advertised, kind: boundary, range: [1, 0], spec: "dtm.html#dtmcs", why: "One short of dtmcs.idle. Range resolved at elaboration from the advertised value.", testplan: [DIS-004-S]}
           - {name: exactly_advertised, kind: boundary, range: [0, 0], spec: "dtm.html#dtmcs", why: "Exactly dtmcs.idle — must always succeed.", testplan: [DIS-004-C]}
-          - {name: above_advertised, kind: explicit, values: [99], spec: "dtm.html#dtmcs", why: "Generous idling — the baseline every other test runs at."}
+          - {name: above_advertised, kind: explicit, values: [99], spec: "dtm.html#dtmcs", why: "Generous idling — the baseline every other test runs at.", testplan: [DIS-008-C]}
     crosses:
       - name: x_op_x_result
         of: [cp_dmi_op, cp_dmi_result]
+        testplan: [DTM-010-V]
         rationale: >-
           Reads and writes fail differently: a failed read returns stale data, a
           failed write may partially apply. Both need their failure and busy
@@ -88,6 +89,7 @@ covergroups:
             why: "A nop does no DM work, so it has no path to a busy response."
       - name: x_idle_x_result
         of: [cp_idle_cycles, cp_dmi_result]
+        testplan: [DTM-011-V]
         rationale: >-
           Under-running dtmcs.idle is the specified way to provoke a busy
           response. This cross is the only place that causal link is measured:
@@ -139,6 +141,7 @@ covergroups:
     crosses:
       - name: x_transition_x_post_read
         of: [cp_dmactive_transition, cp_post_activation_read]
+        testplan: [ACT-005-V]
         rationale: >-
           What a register should read depends on which transition preceded it.
           After a full reactivate every register must read its reset value;
@@ -166,7 +169,7 @@ covergroups:
           just past the end, and all-ones (the width probe) behave differently.
         bins:
           - {name: first_existing, kind: boundary, values: [0], spec: "debug_module.html#dmcontrol", why: "Hart 0 always exists.", testplan: [HS-001-S]}
-          - {name: last_existing, kind: boundary, values: [1], spec: "debug_module.html#dmcontrol", why: "The highest implemented index — the boundary the DM must still decode."}
+          - {name: last_existing, kind: boundary, values: [1], spec: "debug_module.html#dmcontrol", why: "The highest implemented index — the boundary the DM must still decode.", testplan: [HS-007-C]}
           - {name: first_nonexistent, kind: boundary, values: [2], spec: "debug_module.html#dmstatus", why: "One past the end: the DM must report nonexistent, not wrap.", testplan: [HS-002-S]}
           - {name: all_ones, kind: explicit, values: [3], spec: "debug_module.html#dmcontrol", why: "The standard width-discovery probe: write all ones, read back the implemented width.", testplan: [DIS-003-S]}
       - name: cp_hart_reported_state
@@ -200,7 +203,7 @@ covergroups:
           combination is architecturally impossible in any system and is worth
           an illegal bin regardless of hart count.
         bins:
-          - {name: neither, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "No selected hart in this state."}
+          - {name: neither, kind: explicit, values: [0], spec: "debug_module.html#dmstatus", why: "No selected hart in this state.", testplan: [HS-008-C]}
           - {name: some_not_all, kind: explicit, values: [1], spec: "debug_module.html#dmstatus", why: "any set, all clear — only reachable with multiple harts selected.", reachable: false, why_unreachable: "Single-hart DUT."}
           - {name: all_and_any, kind: explicit, values: [3], spec: "debug_module.html#dmstatus", why: "Every selected hart in this state.", testplan: [HALT-001-C]}
           - {name: all_without_any, kind: illegal, values: [2], spec: "debug_module.html#dmstatus", why: "all set with any clear is a contradiction in any hart count."}
@@ -208,6 +211,7 @@ covergroups:
     crosses:
       - name: x_hartsel_x_state
         of: [cp_hartsel_class, cp_hart_reported_state]
+        testplan: [HS-009-V]
         rationale: >-
           Selecting a nonexistent index must report nonexistent rather than the
           previously selected hart's state -- a stale-mux bug looks exactly like
@@ -217,6 +221,7 @@ covergroups:
             why: "A nonexistent hart reported as running or halted. Observed on both DUTs -- issue #130."
       - name: x_hartsel_x_all_any
         of: [cp_hartsel_class, cp_all_vs_any]
+        testplan: [HS-010-V]
         rationale: >-
           all/any only diverge with several harts selected, and which harts are
           selected is what hartsel controls. On a multi-hart DUT this is where a
@@ -256,7 +261,7 @@ covergroups:
           in-flight states worth interrupting, and each leaves different
           internal state to recover from.
         bins:
-          - {name: idle, kind: explicit, values: [0], spec: "debug_module.html#reset", why: "Baseline."}
+          - {name: idle, kind: explicit, values: [0], spec: "debug_module.html#reset", why: "Baseline.", testplan: [RST-056-C]}
           - {name: hart_running, kind: explicit, values: [1], spec: "debug_module.html#reset", why: "The common case.", testplan: [RST-013-V]}
           - {name: hart_halted, kind: explicit, values: [2], spec: "debug_module.html#reset", why: "Reset from inside Debug Mode.", testplan: [RST-013-V]}
           - {name: abstract_busy, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "Reset with abstractcs.busy=1 — classic hang source.", testplan: [RST-050-S], needs_directed: true}
@@ -286,6 +291,7 @@ covergroups:
     crosses:
       - name: x_source_x_activity
         of: [cp_reset_source, cp_activity_at_reset]
+        testplan: [RST-065-V]
         rationale: >-
           A reset landing mid-operation is where DMs wedge, and which reset it
           is decides what should survive. ndmreset during an abstract command
@@ -296,6 +302,7 @@ covergroups:
             why: "The DTM resets act on the transport, not the DM, so hart-activity cells carry no information for them."
       - name: x_source_x_havereset
         of: [cp_reset_source, cp_havereset_lifecycle]
+        testplan: [RST-066-V]
         rationale: >-
           The spec requires havereset to be set regardless of which cause reset
           the hart. That is a per-source claim, so only the cross can show a DM
@@ -367,12 +374,13 @@ covergroups:
           boundaries are "immediate" and "longer than any test should wait",
           not an arbitrary bucket split.
         bins:
-          - {name: immediate, kind: boundary, range: [0, 10], spec: "debug_module.html#dmcontrol", why: "The common case on a hart executing ordinary instructions."}
+          - {name: immediate, kind: boundary, range: [0, 10], spec: "debug_module.html#dmcontrol", why: "The common case on a hart executing ordinary instructions.", testplan: [HALT-011-C]}
           - {name: delayed, kind: explicit, values: [100], spec: "debug_module.html#dmcontrol", why: "Hart was stalled or mid-instruction; still well within bound.", testplan: [HALT-003-S]}
           - {name: over_bound, kind: illegal, range: [1000000000, 2000000000], spec: "debug_module.html#dmcontrol", why: "Beyond the spec's one-second bound — a conformance failure, not slow hardware."}
     crosses:
       - name: x_transition_x_resumeack
         of: [cp_hart_transition, cp_resumeack]
+        testplan: [RES-009-V]
         rationale: >-
           resumeack must accompany a real HALTED => RUNNING transition and must
           be cleared by a resumereq that caused no transition. The §3.5
@@ -382,6 +390,7 @@ covergroups:
             why: "A hart that genuinely resumed must acknowledge it; a transition with the ack cleared means the handshake is lost."
       - name: x_request_x_latency
         of: [cp_request_x_prior_state, cp_halt_latency]
+        testplan: [RES-010-V]
         rationale: >-
           Latency is only meaningful for requests that take effect. A halt on a
           running hart has a bound; a halt on an already-halted hart has no
@@ -459,6 +468,7 @@ covergroups:
             why: "Reset-halt entry always reports the post-reset privilege, which is M by definition. The U and S cells are unreachable, not untested."
       - name: x_cause_x_dpc
         of: [cp_cause, cp_dpc_origin]
+        testplan: [DM-014-V]
         rationale: >-
           dpc means something different per cause -- the interrupted PC for
           haltreq, the ebreak's own address, the next instruction after a step,
@@ -527,6 +537,7 @@ covergroups:
     crosses:
       - name: x_stopcount_x_stoptime
         of: [cp_stopcount, cp_stoptime]
+        testplan: [DM-015-V]
         rationale: >-
           dcsr.stopcount and dcsr.stoptime are independent controls over two
           different timebases, and an implementation that wires them together
@@ -534,6 +545,7 @@ covergroups:
           combinations are architecturally legal.
       - name: x_dret_x_csr_access
         of: [cp_dret_context, cp_debug_csr_access_context]
+        testplan: [DM-016-V]
         rationale: >-
           Both measure what the hart may do outside Debug Mode. The cross
           confirms the privilege check is on Debug Mode itself rather than on
@@ -561,7 +573,7 @@ covergroups:
           - {name: compressed, kind: explicit, values: [1], spec: "Sdext.html#stepbit", why: "dpc advances by 2 rather than 4.", testplan: [SSTEP-002-C]}
           - {name: wfi, kind: explicit, values: [2], spec: "Sdext.html#stepbit", why: "A stalling instruction stepped over must be treated as a nop. This is the bin that represents the CVA6 deadlock.", testplan: [SSTEP-004-C2]}
           - {name: taken_branch, kind: explicit, values: [3], spec: "Sdext.html#stepbit", why: "dpc must be the branch target, not the sequential next address.", testplan: [SSTEP-003-C]}
-          - {name: not_taken_branch, kind: explicit, values: [4], spec: "Sdext.html#stepbit", why: "Falls through: dpc is the sequential next address."}
+          - {name: not_taken_branch, kind: explicit, values: [4], spec: "Sdext.html#stepbit", why: "Falls through: dpc is the sequential next address.", testplan: [SSTEP-019-C]}
           - {name: trapping, kind: explicit, values: [5], spec: "Sdext.html#stepbit", why: "Debug Mode re-entered at the handler's first instruction.", testplan: [SSTEP-008-C]}
           - {name: privilege_changing, kind: explicit, values: [6], spec: "Sdext.html#stepbit", why: "ecall/mret/sret: dcsr.prv must reflect the privilege after the transition.", testplan: [SSTEP-009-C]}
           - {name: load_store, kind: explicit, values: [7], spec: "Sdext.html#stepbit", why: "The access must complete before Debug Mode is re-entered.", testplan: [SSTEP-015-C]}
@@ -615,10 +627,11 @@ covergroups:
         bins:
           - {name: single, kind: boundary, values: [1], spec: "Sdext.html#stepbit", why: "The basic case.", testplan: [SSTEP-001-S]}
           - {name: several, kind: range, range: [2, 16], spec: "Sdext.html#stepbit", why: "Enough to expose drift; 14 observed clean.", testplan: [SSTEP-013-C]}
-          - {name: across_loop_backedge, kind: explicit, values: [32], spec: "Sdext.html#stepbit", why: "Stepping past a backward branch, where dpc must follow the branch."}
+          - {name: across_loop_backedge, kind: explicit, values: [32], spec: "Sdext.html#stepbit", why: "Stepping past a backward branch, where dpc must follow the branch.", testplan: [SSTEP-020-C]}
     crosses:
       - name: x_class_x_privilege
         of: [cp_stepped_class, cp_prv_at_step]
+        testplan: [SSTEP-021-V]
         rationale: >-
           Privilege changes what an instruction class does: a trapping
           instruction from U enters the M-mode handler, from M stays in M.
@@ -630,6 +643,7 @@ covergroups:
             why: "These classes behave identically at every privilege; the cross adds cells without adding information. Privilege for them is covered by cp_prv alone."
       - name: x_class_x_stepie
         of: [cp_stepped_class, cp_stepie_x_irq]
+        testplan: [SSTEP-022-V]
         rationale: >-
           Interrupt masking interacts with instruction class, and the stalling
           case is where it matters most: a wfi stepped with stepie=1 and an
@@ -641,6 +655,7 @@ covergroups:
             why: "Zawrs absent on this DUT; retained so a Zawrs DUT is measured across both stepie settings."
       - name: x_class_x_consecutive
         of: [cp_stepped_class, cp_consecutive_steps]
+        testplan: [SSTEP-023-V]
         rationale: >-
           Drift accumulates differently per class. Stepping repeatedly across a
           loop back-edge exercises taken branches many times, where an
@@ -680,6 +695,7 @@ covergroups:
     crosses:
       - name: x_guarantee_x_privilege
         of: [cp_native_step_guarantees, cp_native_step_privilege]
+        testplan: [NSTEP-008-V]
         rationale: >-
           The privilege relationship changes which limitations bite. Stepping a
           less-privileged program lets the M-mode stub edit mstatus freely;
@@ -705,7 +721,7 @@ covergroups:
           - {name: access_register, kind: explicit, values: [0], spec: "debug_module.html#access-register", why: "The only type this DUT implements.", testplan: [AC-001-S]}
           - {name: quick_access, kind: explicit, values: [1], spec: "debug_module.html#quick-access", why: "Must return cmderr=2 when unimplemented.", testplan: [AC-013-S]}
           - {name: access_memory, kind: explicit, values: [2], spec: "debug_module.html#access-memory", why: "Must return cmderr=2 when unimplemented.", testplan: [AC-013-S]}
-          - {name: reserved_cmdtype, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "Undefined type; must not hang the DM."}
+          - {name: reserved_cmdtype, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "Undefined type; must not hang the DM.", testplan: [AC-018-C]}
       - name: cp_regno_class
         type: value
         expression: "regno_class"
@@ -726,7 +742,7 @@ covergroups:
           - {name: size32, kind: explicit, values: [2], spec: "debug_module.html#access-register", why: "32-bit access.", testplan: [AC-017-V]}
           - {name: size64, kind: explicit, values: [3], spec: "debug_module.html#access-register", why: "64-bit access on this RV64 DUT.", testplan: [AC-001-S]}
           - {name: size128, kind: explicit, values: [4], spec: "debug_module.html#access-register", why: "Unsupported here: expect cmderr=2.", testplan: [AC-005-S]}
-          - {name: reserved_size, kind: explicit, values: [0, 1, 5, 6, 7], spec: "debug_module.html#access-register", why: "Undefined encodings must be rejected."}
+          - {name: reserved_size, kind: explicit, values: [0, 1, 5, 6, 7], spec: "debug_module.html#access-register", why: "Undefined encodings must be rejected.", testplan: [AC-019-C]}
       - name: cp_command_flags
         type: value
         expression: "{transfer, postexec, aarpostincrement, write}"
@@ -753,7 +769,7 @@ covergroups:
           - {name: exception, kind: explicit, values: [3], spec: "debug_module.html#abstractcs", why: "The hart faulted executing the command or program buffer.", testplan: [PB-005-C]}
           - {name: halt_resume, kind: explicit, values: [4], spec: "debug_module.html#abstractcs", why: "Command issued while the hart was not halted.", testplan: [AC-007-C]}
           - {name: bus, kind: explicit, values: [5], spec: "debug_module.html#abstractcs", why: "Bus error during the command.", reachable: false, why_unreachable: "Requires abstract memory access, absent on this DUT."}
-          - {name: other, kind: explicit, values: [7], spec: "debug_module.html#abstractcs", why: "Catch-all; reaching it means the DM could not classify its own failure."}
+          - {name: other, kind: explicit, values: [7], spec: "debug_module.html#abstractcs", why: "Catch-all; reaching it means the DM could not classify its own failure.", testplan: [AC-020-C]}
           - {name: reserved_cmderr, kind: illegal, values: [6], spec: "debug_module.html#abstractcs", why: "6 is not a defined cmderr encoding."}
       - name: cp_cmderr_lifecycle
         type: transition
@@ -788,6 +804,7 @@ covergroups:
     crosses:
       - name: x_regno_x_size
         of: [cp_regno_class, cp_aarsize]
+        testplan: [AC-021-V]
         rationale: >-
           Size legality depends on which register is addressed: a 64-bit access
           to a 32-bit CSR must be rejected while the same size on a GPR
@@ -797,6 +814,7 @@ covergroups:
             why: "An unimplemented regno fails on the register, not the size; the size cells add nothing."
       - name: x_cmdtype_x_cmderr
         of: [cp_cmdtype, cp_cmderr]
+        testplan: [AC-022-V]
         rationale: >-
           Each command type fails differently, and an unimplemented type must
           give cmderr=2 rather than whatever the last command left behind.
@@ -805,6 +823,7 @@ covergroups:
             why: "Unimplemented on this DUT, so only the not_supported cell is reachable; the others are excluded by construction rather than untested."
       - name: x_flags_x_cmderr
         of: [cp_command_flags, cp_cmderr]
+        testplan: [AC-023-V]
         rationale: >-
           A command that both transfers and runs the program buffer can fail in
           either phase, and the debugger must be able to tell which. postexec
@@ -831,7 +850,7 @@ covergroups:
           is where an off-by-one in the buffer decode shows up.
         bins:
           - {name: single_word, kind: boundary, values: [1], spec: "debug_module.html#program-buffer", why: "Minimum useful buffer.", testplan: [PB-001-S]}
-          - {name: partial, kind: range, range: [2, 7], spec: "debug_module.html#abstractcs", why: "Ordinary use."}
+          - {name: partial, kind: range, range: [2, 7], spec: "debug_module.html#abstractcs", why: "Ordinary use.", testplan: [PB-011-C]}
           - {name: full, kind: boundary, values: [8], spec: "debug_module.html#abstractcs", why: "Exactly progbufsize — the boundary.", testplan: [PB-003-S]}
           - {name: overflow, kind: explicit, values: [9], spec: "debug_module.html#abstractcs", why: "One past the end: must be ignored, not wrap onto progbuf0.", testplan: [DIS-005-S]}
       - name: cp_progbuf_outcome
@@ -853,7 +872,7 @@ covergroups:
         bins:
           - {name: register_access, kind: explicit, values: [0], spec: "debug_module.html#program-buffer", why: "Reach a register with no abstract encoding.", testplan: [PB-002-C]}
           - {name: memory_read, kind: explicit, values: [1], spec: "debug_module.html#program-buffer", why: "Load from the hart's point of view, honouring its MMU and PMP.", testplan: [PB-002-S]}
-          - {name: memory_write, kind: explicit, values: [2], spec: "debug_module.html#program-buffer", why: "Store from the hart's point of view."}
+          - {name: memory_write, kind: explicit, values: [2], spec: "debug_module.html#program-buffer", why: "Store from the hart's point of view.", testplan: [PB-012-C]}
           - {name: csr_access, kind: explicit, values: [3], spec: "debug_module.html#program-buffer", why: "How dcsr is written during a step setup.", testplan: [RAP-020-S]}
       - name: cp_progbuf_reuse
         type: transition
@@ -864,6 +883,7 @@ covergroups:
     crosses:
       - name: x_outcome_x_operation
         of: [cp_progbuf_outcome, cp_progbuf_operation]
+        testplan: [PB-013-V]
         rationale: >-
           An exception during a memory write leaves different state from one
           during a register read -- a partially-completed store versus a clean
@@ -871,6 +891,7 @@ covergroups:
           must be measured per operation rather than in aggregate.
       - name: x_fill_x_outcome
         of: [cp_progbuf_fill, cp_progbuf_outcome]
+        testplan: [PB-014-V]
         rationale: >-
           The last buffer slot is where off-by-one errors live. An exception
           raised by the final word of a full buffer, and implicit ebreak on a
@@ -908,11 +929,11 @@ covergroups:
         rationale: "Each error class means a different debugger response."
         bins:
           - {name: none, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Success.", testplan: [SBA-001-C]}
-          - {name: timeout, kind: explicit, values: [1], spec: "debug_module.html#sbcs", why: "The bus did not respond."}
+          - {name: timeout, kind: explicit, values: [1], spec: "debug_module.html#sbcs", why: "The bus did not respond.", testplan: [SBA-012-C]}
           - {name: bad_address, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "Unmapped physical address.", testplan: [SBA-008-C]}
           - {name: alignment, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "Misaligned for the selected size.", testplan: [SBA-007-C]}
           - {name: unsupported_size, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "sbaccess named a size the DM does not support.", testplan: [SBA-006-C]}
-          - {name: other, kind: explicit, values: [7], spec: "debug_module.html#sbcs", why: "Catch-all."}
+          - {name: other, kind: explicit, values: [7], spec: "debug_module.html#sbcs", why: "Catch-all.", testplan: [SBA-013-C]}
       - name: cp_sb_trigger_mode
         type: value
         expression: "{sbreadonaddr, sbreadondata, sbautoincrement}"
@@ -921,7 +942,7 @@ covergroups:
           uses. Autoincrement with readondata is how a memory dump works, and it
           is a different path from a single addressed read.
         bins:
-          - {name: manual, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Explicit address then explicit data access."}
+          - {name: manual, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Explicit address then explicit data access.", testplan: [SBA-014-C]}
           - {name: read_on_addr, kind: explicit, values: [4], spec: "debug_module.html#sbcs", why: "Writing the address triggers the read.", testplan: [SBA-003-C]}
           - {name: read_on_data, kind: explicit, values: [2], spec: "debug_module.html#sbcs", why: "Reading data triggers the next read.", testplan: [SBA-004-C]}
           - {name: block_dump, kind: explicit, values: [3], spec: "debug_module.html#sbcs", why: "readondata + autoincrement: the memory-dump mode.", testplan: [SBA-005-C]}
@@ -934,8 +955,8 @@ covergroups:
           address that must produce sberror=2.
         bins:
           - {name: ram_base, kind: boundary, values: [2147483648], spec: "debug_module.html#sbcs", why: "First byte of DRAM (0x8000_0000).", testplan: [SBA-001-S]}
-          - {name: ram_body, kind: range, range: [2147483649, 2415919103], spec: "debug_module.html#sbcs", why: "Ordinary mapped memory."}
-          - {name: ram_top, kind: boundary, values: [2415919104], spec: "debug_module.html#sbcs", why: "Last mapped address — the boundary before the decode fails."}
+          - {name: ram_body, kind: range, range: [2147483649, 2415919103], spec: "debug_module.html#sbcs", why: "Ordinary mapped memory.", testplan: [SBA-015-C]}
+          - {name: ram_top, kind: boundary, values: [2415919104], spec: "debug_module.html#sbcs", why: "Last mapped address — the boundary before the decode fails.", testplan: [SBA-015-C]}
           - {name: unmapped, kind: explicit, values: [0], spec: "debug_module.html#sbcs", why: "Must produce sberror=2 rather than hanging the bus.", testplan: [SBA-008-S]}
       - name: cp_sb_alignment
         type: value
@@ -966,6 +987,7 @@ covergroups:
     crosses:
       - name: x_size_x_alignment
         of: [cp_sbaccess_size, cp_sb_alignment]
+        testplan: [SBA-016-V]
         rationale: >-
           Alignment is only meaningful relative to the access size: address 4 is
           aligned for 32-bit and misaligned for 64-bit. Neither coverpoint alone
@@ -975,6 +997,7 @@ covergroups:
             why: "Every address is aligned for an 8-bit access; the cells carry no information."
       - name: x_mode_x_error
         of: [cp_sb_trigger_mode, cp_sberror]
+        testplan: [SBA-017-V]
         rationale: >-
           An error mid-block-transfer is the interesting case: with
           autoincrement the address has already advanced, so the debugger must
@@ -982,6 +1005,7 @@ covergroups:
           have that problem.
       - name: x_size_x_region
         of: [cp_sbaccess_size, cp_sb_address_region]
+        testplan: [SBA-018-V]
         rationale: >-
           A wide access near the top of mapped memory can straddle the boundary
           while a narrow one at the same address does not. The ram_top cell is
@@ -1017,7 +1041,7 @@ covergroups:
           - {name: execute, kind: explicit, values: [4], spec: "Sdtrig.html#mcontrol6", why: "Instruction fetch at an address.", testplan: [TRIG-003-S]}
           - {name: load, kind: explicit, values: [1], spec: "Sdtrig.html#mcontrol6", why: "Data read at an address.", testplan: [TRIG-004-S]}
           - {name: store, kind: explicit, values: [2], spec: "Sdtrig.html#mcontrol6", why: "Data write at an address.", testplan: [TRIG-005-S]}
-          - {name: load_and_store, kind: explicit, values: [3], spec: "Sdtrig.html#mcontrol6", why: "Both set — a watchpoint on any access."}
+          - {name: load_and_store, kind: explicit, values: [3], spec: "Sdtrig.html#mcontrol6", why: "Both set — a watchpoint on any access.", testplan: [TRIG-015-C]}
       - name: cp_trigger_privilege
         type: value
         expression: "{m, s, u} enable bits"
@@ -1028,7 +1052,7 @@ covergroups:
           - {name: m_only, kind: explicit, values: [4], spec: "Sdtrig.html#mcontrol6", why: "Fires in M only.", testplan: [TRIG-012-V]}
           - {name: s_only, kind: explicit, values: [2], spec: "Sdtrig.html#mcontrol6", why: "Fires in S only.", testplan: [TRIG-012-V]}
           - {name: u_only, kind: explicit, values: [1], spec: "Sdtrig.html#mcontrol6", why: "Fires in U only.", testplan: [TRIG-012-V]}
-          - {name: all_privileges, kind: explicit, values: [7], spec: "Sdtrig.html#mcontrol6", why: "Fires anywhere."}
+          - {name: all_privileges, kind: explicit, values: [7], spec: "Sdtrig.html#mcontrol6", why: "Fires anywhere.", testplan: [TRIG-016-C]}
           - {name: none_enabled, kind: explicit, values: [0], spec: "Sdtrig.html#mcontrol6", why: "Configured but disabled: must never fire.", testplan: [TRIG-006-C]}
       - name: cp_tselect_probe
         type: value
@@ -1049,6 +1073,7 @@ covergroups:
     crosses:
       - name: x_match_x_privilege
         of: [cp_match_event, cp_trigger_privilege]
+        testplan: [TRIG-017-V]
         rationale: >-
           The privilege filter is applied per access class, and a core can get
           it right for execute and wrong for load. This cross is the whole point
@@ -1058,6 +1083,7 @@ covergroups:
             why: "A disabled trigger fires for no access class; the cells are unreachable by construction, and TRIG-006-C owns the disabled case."
       - name: x_type_x_privilege
         of: [cp_trigger_type, cp_trigger_privilege]
+        testplan: [TRIG-018-V]
         rationale: >-
           Each trigger type applies the privilege filter through its own
           matching logic, so a core can honour it for mcontrol6 and ignore it
@@ -1070,6 +1096,7 @@ covergroups:
             why: "v0.13 encoding; this DUT reports v1.0 and implements mcontrol6. Retained so a v0.13 DUT is measured."
       - name: x_type_x_update_context
         of: [cp_trigger_type, cp_trigger_update_context]
+        testplan: [TRIG-019-V]
         rationale: >-
           The spec restricts trigger updates from a running hart. Whether a DUT
           enforces that can differ per trigger type, since each has a different
@@ -1103,6 +1130,7 @@ covergroups:
     crosses:
       - name: x_config_x_propagation
         of: [cp_group_config, cp_group_propagation]
+        testplan: [HG-005-V]
         rationale: >-
           Halt groups and resume groups propagate through separate logic, and
           the external trigger is a third path. Configuring one and observing
@@ -1140,12 +1168,13 @@ covergroups:
           exercised, or the gate is only half tested.
         bins:
           - {name: dmstatus, kind: explicit, values: [0], spec: "debug_module.html#authdata", why: "Must remain readable -- it carries authenticated itself.", testplan: [RAP-041-C]}
-          - {name: dmcontrol, kind: explicit, values: [1], spec: "debug_module.html#authdata", why: "Must remain accessible so the DM can be activated."}
-          - {name: authdata, kind: explicit, values: [2], spec: "debug_module.html#authdata", why: "The challenge/response channel itself."}
+          - {name: dmcontrol, kind: explicit, values: [1], spec: "debug_module.html#authdata", why: "Must remain accessible so the DM can be activated.", testplan: [AUTH-004-C]}
+          - {name: authdata, kind: explicit, values: [2], spec: "debug_module.html#authdata", why: "The challenge/response channel itself.", testplan: [AUTH-005-C]}
           - {name: gated_register, kind: explicit, values: [3], spec: "debug_module.html#authdata", why: "Any other DM register: must be inaccessible until authenticated.", reachable: false, why_unreachable: "Authentication not implemented on this DUT."}
     crosses:
       - name: x_auth_x_gated_access
         of: [cp_auth_state, cp_auth_permitted_register]
+        testplan: [AUTH-006-V]
         rationale: >-
           Authentication is a gate, so the behaviour is the pairing: which
           registers remain reachable in which auth state. dmstatus, dmcontrol
@@ -1222,6 +1251,7 @@ covergroups:
     crosses:
       - name: x_interface_x_register
         of: [cp_interface, cp_register_class]
+        testplan: [RAP-046-V]
         rationale: >-
           The whole point of §2.2: the same register reached from two
           interfaces must honour two different permissions. dcsr from the hart
@@ -1232,6 +1262,7 @@ covergroups:
             why: "SBA reaches system memory, not DM registers; the combination does not exist."
       - name: x_interface_x_access_type
         of: [cp_interface, cp_access_type]
+        testplan: [RAP-047-V]
         rationale: >-
           An access type is declared per field, but enforced per interface. A
           field that is R/W over DMI may be read-only to the hart, and a DM
@@ -1239,6 +1270,7 @@ covergroups:
           while being wrong everywhere else.
       - name: x_class_x_gating
         of: [cp_register_class, cp_gating_state]
+        testplan: [RAP-048-V]
         rationale: >-
           Gating applies unevenly by class: dmcontrol stays reachable with
           dmactive=0 while other DM registers do not, and debug CSRs become
