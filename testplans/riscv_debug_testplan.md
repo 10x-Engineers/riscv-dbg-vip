@@ -447,10 +447,20 @@ and its PMP.
 **Intent.** Execute exactly one instruction and return to Debug Mode unaided,
 **including instructions that would otherwise never complete**.
 
-**Workflow** (Appendix A `#single-step`). Halt → write `dcsr.step=1` →
-`resumereq` → the hart executes one instruction and re-halts on its own → read
-`dcsr.cause`. The debugger must **not** assert `haltreq`: re-halting unaided is
-the property under test.
+**Workflow** (Appendix A `#single-step`). The hart is halted first — that
+halt uses `haltreq` and is a precondition, not part of the test:
+
+1. `haltreq=1` → poll `allhalted` → **`haltreq=0`** (the clear matters, see below)
+2. Access Register write `dcsr.step=1`
+3. `resumereq=1` → hart executes `dret`, retires exactly one instruction
+4. Hart re-enters Debug Mode **on its own**
+5. Read `dcsr.cause`, expect 4
+
+The property under test is step 4: the hart re-halts with `haltreq` deasserted
+throughout steps 3–4. Leaving `haltreq` set would re-halt the hart for the
+original request and the test would pass having proved nothing — which is why
+the `haltreq=0` write in step 1 is load-bearing, and why `SSTEP-001-C` checks
+it explicitly rather than assuming it.
 
 > The published v1.0 HTML renders this paragraph with an empty cross-reference
 > (*"the debugger just sets in before letting the hart run"*). Cite
@@ -458,8 +468,9 @@ the property under test.
 
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
-| SSTEP-001-S | Stimulate | Halt; Access Register write `dcsr.step=1`; write `resumereq=1`; do **not** assert `haltreq` | `Sdext.html#stepbit` | P0 | Pass | `single_step_uvm` (9/9) |
-| SSTEP-001-C | Check | `dmstatus.allhalted=1` without any `haltreq` | `debug_module.html#dmstatus` | P0 | Pass | |
+| SSTEP-001-S | Stimulate | Halt the hart (`haltreq=1`, poll `allhalted`, then `haltreq=0`); Access Register write `dcsr.step=1`; write `resumereq=1` | `Sdext.html#stepbit` | P0 | Pass | `single_step_uvm` (9/9) |
+| SSTEP-001-C0 | Check | `dmcontrol.haltreq` reads 0 before `resumereq` is written, and stays 0 until the hart re-halts | `debug_module.html#dmcontrol` | P0 | Not started | **Guards the whole test.** With `haltreq` still set the hart re-halts for the original request and the step proves nothing |
+| SSTEP-001-C | Check | After `resumereq`, `dmstatus.allhalted` returns to 1 with `haltreq=0` throughout — the hart re-entered Debug Mode on its own | `debug_module.html#dmstatus` | P0 | Pass | |
 | SSTEP-001-C2 | Check | `dcsr.cause == 4` (step) | `Sdext.html#csr-dcsr` | P0 | Pass | Not 3 — a 3 means the hart never stepped |
 | SSTEP-001-C3 | Check | `dpc` advanced by exactly the stepped instruction's length | `Sdext.html#csr-dpc` | P0 | Pass | |
 | SSTEP-002-S | Stimulate | Step a 2-byte compressed instruction | `Sdext.html#stepbit` | P1 | Pass | |
@@ -467,7 +478,7 @@ the property under test.
 | SSTEP-003-S | Stimulate | Step a taken branch | `Sdext.html#stepbit` | P1 | Not started | |
 | SSTEP-003-C | Check | `dpc` == branch target, not the sequential next address | `Sdext.html#csr-dpc` | P1 | Not started | |
 | SSTEP-004-S | Stimulate | Step until `dpc` == address of a `wfi` with no interrupt pending; set `dcsr.step=1`; `resumereq` | `Sdext.html#stepbit` | P0 | Pass | |
-| SSTEP-004-C | Check | `dmstatus.allhalted=1` — the hart re-halted unaided | `debug_module.html#dmstatus` | P0 | Pass | **Found a real CVA6 defect.** Without the fix: `dmstatus=0x00830c83`, `allrunning=1` on three successive reads — the hart never returned |
+| SSTEP-004-C | Check | After `resumereq`, `dmstatus.allhalted` returns to 1 with `haltreq=0` throughout | `debug_module.html#dmstatus` | P0 | Pass | **Found a real CVA6 defect.** Without the fix: `dmstatus=0x00830c83`, `allrunning=1` on three successive reads — the hart never returned |
 | SSTEP-004-C2 | Check | `dcsr.cause == 4`; `dpc` advanced by 4 (the `wfi`'s own length) | `Sdext.html#csr-dcsr` | P0 | Pass | `wfi_ctrl` armed the stall without checking `dcsr.step`. Filed `openhwgroup/cva6#3549` (dup of #3497, PR #3525). Fixed by gating on `!dcsr_q.step` |
 | SSTEP-005-S | Stimulate | Step `wrs.sto` / `wrs.nto` | `Sdext.html#stepbit` | P3 | N/A | Zawrs absent — would decode illegal and test the trap handler instead |
 | SSTEP-006-S | Stimulate | Set `dcsr.stepie=0`, raise an enabled interrupt, then step one instruction | `Sdext.html#csr-dcsr` | P1 | Pass | `stepie=0` is our sequences' default |
