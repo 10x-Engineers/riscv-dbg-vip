@@ -240,7 +240,14 @@ module tb_top_soc;
             dut.i_ariane.i_cva6.commit_instr_id_commit[0].is_compressed;
         automatic logic trapped =
             dut.i_ariane.i_cva6.commit_instr_id_commit[0].ex.valid;
-        automatic logic taken = dut.i_ariane.i_cva6.resolved_branch.is_taken;
+        // is_taken is only meaningful while the branch is actually resolving.
+        // Reading it unconditionally leaves the PREVIOUS branch's outcome
+        // standing, so a not-taken branch following a taken one classifies as
+        // taken and the branch_ntaken bin never fills -- which is exactly what
+        // it did, at 0% with a not-taken branch in the program.
+        automatic logic br_valid = dut.i_ariane.i_cva6.resolved_branch.valid;
+        automatic logic taken = br_valid
+                              & dut.i_ariane.i_cva6.resolved_branch.is_taken;
 
         // A trap outranks the encoding: the interesting property is that the
         // step landed in a handler, whatever the instruction was.

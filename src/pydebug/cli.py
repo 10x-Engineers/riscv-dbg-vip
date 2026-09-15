@@ -68,6 +68,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.cmderr_sequence",
         "builder": "build_cmderr_sequence",
     },
+    "debug_entry": {
+        "module": "pydebug.sequences.debug_entry_sequence",
+        "builder": "build_debug_entry_sequence",
+    },
     "dmi_error": {
         "module": "pydebug.sequences.dmi_error_sequence",
         "builder": "build_dmi_error_sequence",

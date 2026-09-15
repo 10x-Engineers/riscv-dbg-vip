@@ -105,6 +105,29 @@ loop_head:
         addi    a5, a5, 1
         j       main
 
+# ── an ebreak the debugger can jump to on purpose ─────────────────────────
+# cg_debug_entry.cp_cause.ebreak needs a hart that executes `ebreak` in its own
+# program with dcsr.ebreakm set, which is a different entry path from haltreq
+# and cannot be reached by any DMI write. Parked out of the normal flow so it
+# only executes when a sequence sets dpc to it deliberately; the spin after it
+# keeps the hart somewhere harmless if debug entry does not happen.
+        .globl cls_ebreak
+        .globl ebreak_park
+cls_ebreak:
+        ebreak
+ebreak_park:
+        j       ebreak_park
+
+# ── a fixed address for an execute trigger to match ───────────────────────
+# cg_debug_entry.cp_cause.trigger needs a trigger to fire, which needs a known
+# instruction address to arm tdata2 against.
+        .globl cls_trigger_target
+        .globl trigger_park
+cls_trigger_target:
+        addi    a4, a4, 1
+trigger_park:
+        j       trigger_park
+
 never_taken:
         # Only reached if a not-taken branch was taken. Park loudly rather
         # than falling through into the trap handler.

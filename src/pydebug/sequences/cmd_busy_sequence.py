@@ -233,4 +233,53 @@ def build_cmd_busy_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession
         )
     session.add_step("TC-AC-025: keepalive set/clear", tc_ac_025)
 
+    # ── TC-AC-026: abstract-command regno corners ─────────────────────────
+    # dm_mem decodes the regno field in three places nothing else reaches:
+    #   regno[15:14] != 0   -- outside both the CSR and GPR windows
+    #   regno[4:0] == 10    -- a0/x10, which the debug ROM special-cases
+    #   regno[5]            -- the upper half of the register file (f-regs)
+    # Each is an arm of an `if` in dm_mem.sv that has never been taken.
+    def tc_ac_026():
+        probes = [
+            (0xC001, "regno[15:14] set -- outside CSR and GPR windows"),
+            (0x100A, "a0/x10 -- special-cased by the debug ROM"),
+            (0x1020, "regno[5] set -- upper register file (f0)"),
+        ]
+        seen = []
+        for regno, what in probes:
+            _clear_cmderr(dm)
+            dm.t.write(DMI.DATA0, 0x5A5A5A5A)
+            # cmdtype=0, aarsize=2, transfer=1, write=1
+            dm.t.write(DMI.COMMAND, (2 << 20) | (1 << 17) | (1 << 16) | regno)
+            _wait_not_busy(dm)
+            seen.append((regno, _cmderr(dm.t.read(DMI.ABSTRACTCS)), what))
+        _clear_cmderr(dm)
+        usable = dm.read_gpr(X5_REGNO) is not None
+        return StepResult(
+            ok=usable,
+            msg="TC-AC-026: " + "; ".join(
+                f"regno=0x{r:04x} -> cmderr={e}" for r, e, _ in seen)
+                + f"; DM usable after={usable}  "
+                + ("OK" if usable else "DM left unusable"),
+        )
+    session.add_step("TC-AC-026: abstract-command regno corners", tc_ac_026)
+
+    # ── TC-AC-027: resume request while already running ───────────────────
+    # dm_mem's resumereq arm for a hart that is not the selected one, and the
+    # `stayed_running` mode transition in cg_hart_mode -- a resume issued to a
+    # hart that never halted must be a no-op, not a state change.
+    def tc_ac_027():
+        dm.resume()
+        was_running = dm.is_running()
+        dm.resume()                      # second resume, already running
+        still_running = dm.is_running()
+        dm.halt()
+        return StepResult(
+            ok=was_running and still_running,
+            msg=f"TC-AC-027: resume while already running -- running before="
+                f"{was_running}, after={still_running}  "
+                f"{'OK -- no-op' if still_running else 'run control disturbed'}",
+        )
+    session.add_step("TC-AC-027: resume while already running", tc_ac_027)
+
     return session
