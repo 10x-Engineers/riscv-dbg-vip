@@ -95,12 +95,47 @@ compute it.
 That is the next piece of work, and it is bounded: eleven pieces of state, most
 of them a register and an assignment in the monitor that already exists.
 
-## Recommended direction
+## Decision: the implemented file stands
 
-1. Add the eleven derived-state members to the coverage class.
-2. Bind the remaining 35 coverpoints, or mark them explicitly unobservable with
-   a reason — the same discipline the model already applies to bins.
-3. Generate `covergroups.sv` rather than hand-maintaining it, keeping only the
-   sampling process by hand.
-4. Retire the register-centric covergroups, or keep them deliberately as a
-   separate *structural* coverage metric — but stop mixing them into one number.
+**`src/pydebug/sv/fcov/covergroups.sv` is the coverage of record.** It is what
+`debug_pkg.sv` includes, what the regression collects, and the number to quote.
+The generated file is **not** adopted and is not in any build — nothing globs
+`testplans/generated/`, so it compiles nowhere by construction rather than by
+convention.
+
+That is a deliberate call, not a deferral. The implemented set works today,
+against a real DUT, with its holes already characterised in
+[`coverage_analysis.md`](coverage_analysis.md). Swapping it for a generated file
+that still needs eleven pieces of derived state would trade working coverage for
+a cleaner provenance story, and buy nothing measurable this cycle.
+
+### What the generated artifacts are still for
+
+They stay in the tree as the **architectural reference**, and they keep earning
+their place:
+
+- `coverage_model.yaml` remains the spec-traceable model — every bin cites its
+  clause. That is what makes a hole in it mean "the spec asks for this and we do
+  not do it" rather than "nobody wrote a coverpoint".
+- The 12 generated-only covergroups are a **standing gap list** against the
+  implemented file, not dead output.
+- `bindings/cva6.yaml` records what 35 of those map to on this testbench, so
+  picking this up later starts from a map rather than from scratch.
+
+### What this costs, stated plainly
+
+The drift documented above continues. `cg_step_external` diverged within days
+even with one written from the other, and nothing here stops that — the model
+and the implementation are now two hand-maintained artifacts that will keep
+separating. Treat the model as a checklist to review against, not as something
+that stays automatically true.
+
+And the two numbers still do not add. The implemented file's figure is the one
+to report; the model's 52.61% measures a different decomposition of the same DUT
+and belongs in a sentence of its own, never summed with the other.
+
+### If this is picked up again
+
+The order is unchanged and the work is bounded: add the eleven derived-state
+members to the coverage class, bind or explicitly mark the remaining 35
+coverpoints, then generate and keep only the sampling process by hand.

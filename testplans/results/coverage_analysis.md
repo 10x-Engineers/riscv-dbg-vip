@@ -3,8 +3,9 @@
 What is measured, what is reachable, and what stands between the two.
 
 Read alongside:
-- [`testplans/generated/coverage_model.yaml`](../generated/coverage_model.yaml) — the model of record
-- [`src/pydebug/sv/fcov/dm_spec_coverage.sv`](../../src/pydebug/sv/fcov/dm_spec_coverage.sv) — its executable half
+- [`src/pydebug/sv/fcov/covergroups.sv`](../../src/pydebug/sv/fcov/covergroups.sv) — **the coverage of record**; what the regression actually collects
+- [`testplans/generated/coverage_model.yaml`](../generated/coverage_model.yaml) — the architectural model, kept as the spec-traceable reference
+- [`generated_vs_implemented.md`](generated_vs_implemented.md) — how the two relate, and why they are not one number
 - [`cva6_sim/regress/README.md`](../../cva6_sim/regress/README.md) — how to run and collect
 - [`rtl_findings.md`](rtl_findings.md) — the defects blocking some of it
 
@@ -44,16 +45,20 @@ is worth less than one reporting 70% and saying which 30% and why.
 
 ## Where the coverage comes from
 
-Two models run side by side, and the split matters.
+One file: **`src/pydebug/sv/fcov/covergroups.sv`** — 19 covergroups, 72
+coverpoints, 14 crosses, included by `debug_pkg.sv`. It is the coverage of
+record. Nothing else in the tree is compiled for coverage.
 
-**`covergroups.sv`** — 14 covergroups over DMI-visible DM registers. Samples the
-JTAG transaction stream.
+It samples two sources, and the split within it matters:
 
-**`dm_spec_coverage.sv`** — 6 covergroups over Sdext behaviour. Samples the
-**hart backdoor**, because `dcsr`, `dpc` and the hart's privilege live in the
-core and are reachable over DMI only through an abstract command.
+- **DM registers over DMI** (14 covergroups) — the JTAG transaction stream, via
+  `uvm_subscriber #(jtag_txn_c)`.
+- **The hart backdoor** (5 covergroups, merged in from what was
+  `dm_spec_coverage.sv`) — `dcsr`, `dpc`, privilege and which instruction a step
+  stepped over all live in the core and are reachable over DMI only through an
+  abstract command, so they need their own source and a clocked sampling process.
 
-That second one exists because of a concrete failure: the `wfi` single-step
+The second group exists because of a concrete failure: the `wfi` single-step
 deadlock (RTL-001) **could not have appeared as a coverage hole**. No bin
 represented "a step over a stalling instruction", because nothing sampled which
 instruction a step stepped over. It was found by a directed test someone thought
