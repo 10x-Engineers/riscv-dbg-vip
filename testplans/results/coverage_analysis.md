@@ -241,6 +241,67 @@ is a useful cross-check that neither number is an artefact.
 
 ---
 
+## Why the code coverage is low
+
+Not because the stimulus is thin. **90 uncovered blocks and 2376 untoggled bits,
+and they are concentrated, not spread.** Every one was classified from the
+report rather than estimated:
+
+| Root cause | Blocks | Share |
+|---|---:|---:|
+| **System Bus Access — RTL-002** | 38 | **42%** |
+| Register access *while an abstract command is busy* | 20 | 22% |
+| DMI busy/error transport paths | 11 | 12% |
+| Abstract-command register-decode corners | 6 | 7% |
+| Multi-hart only (`haltsum1-3`, `stickyunavail`) | 5 | 6% |
+| Writes to R/O registers being ignored | 3 | 3% |
+| `abstractauto` — never exercised | 2 | 2% |
+| `keepalive` — never driven | 2 | 2% |
+| Other | 3 | 3% |
+
+### One RTL line dominates both metrics
+
+SBA is 42% of the uncovered blocks and **59% of the untoggled bits** — every one
+of the top 22 untoggled signal groups is a 64-bit SBA bus (`sbaddress_*`,
+`sbdata_*`, `master_add_o`, `master_wdata_o`, `master_r_rdata_i`). `i_dm_sba`
+alone sits at **6.38% toggle**, 528 of its 564 bits never driven.
+
+That is the same RTL-002 blockage holding `cg_sba` at 25%. **Functional and code
+coverage independently point at the same line**, which is good evidence neither
+number is an artefact of how it was measured.
+
+Upper bound if SBA were unblocked and fully exercised: block **74.43% → ~85%**,
+toggle **38.79% → ~75%**.
+
+### Toggle is structurally pessimistic on this DUT
+
+`sbasize=64` and `sbaccess64=true`, but the DM is driven over a **32-bit DMI**.
+The upper half of every 64-bit SBA address and data bus needs a target address
+above 4 GB to toggle at all. Some of that gap is not closable by stimulus and
+belongs in a waiver list, which is what issue #87 already anticipates — *"not
+assumed achievable by stimulus alone."*
+
+This is why the summary reports toggle separately instead of averaging it in.
+
+### What is genuinely thin, and cheap to fix
+
+Two categories are real gaps with no RTL blocker, together **34% of uncovered
+blocks**:
+
+- **Access while an abstract command is busy** (20 blocks). The `cmderr` test
+  drives `busy` on back-to-back *commands*, but never a DMI read or write of
+  `data0`, `progbuf` or `abstractauto` *during* a command. Six `if (cmdbusy_i)
+  … else if (cmderr_q == CmdErrNone)` guard sites are untouched.
+- **DMI busy/error transport** (11 blocks) — `DMIBusy`, `dmi_reset`,
+  `test_logic_reset`, and request back-pressure. This is the *same* hole as the
+  unfilled `cp_dmi_result.failed`/`.busy` bins: one directed transport-error test
+  closes both a functional hole and 12% of the code-coverage gap.
+
+By contrast `i_dmi_jtag` is at **94.67% toggle** and 80% block — the transport is
+well exercised. The weakness is specific, not general.
+
+---
+
 ## What would move the number most
 
 In order of coverage gained per unit of work:
