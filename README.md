@@ -434,10 +434,45 @@ behind the cross-model merge trap above.
 ### Code coverage
 
 Block, expression, toggle and FSM coverage come from the **same** `-coverage all`
-build — no separate run. `mk/dm_cov.sh` scopes the report to
-`tb_top_soc.dut.i_dm_top`, recursing into `dm_csrs`, `dm_mem`, `dm_sba` and
-`dmi_jtag`. Whole-SoC code coverage would be dominated by CVA6 itself and would
-say nothing about the DM, which is the DUT here.
+build — no separate run, and no extra flag. `bash mk/dm_cov.sh <cov_dir> <out>`
+reports it and prints a per-instance table.
+
+Whole-SoC code coverage would be dominated by CVA6 itself and say nothing about
+the DM, so the report is scoped to the five instances that **are** the Debug
+Module:
+
+```
+tb_top_soc.dut.i_dm_top
+tb_top_soc.dut.i_dm_top.i_dm_csrs
+tb_top_soc.dut.i_dm_top.i_dm_sba
+tb_top_soc.dut.i_dm_top.i_dm_mem
+tb_top_soc.dut.i_dmi_jtag          # sibling of dm_top, in ariane_testharness
+```
+
+**Each one has to be named.** `report -inst X` covers *only* X — it does not
+recurse, and the legacy `report` command has no `-recursive` option at all
+(`report_metrics` does, which is why the HTML output can be scoped with one
+instance). Naming only `i_dm_top` measured the wrapper's port toggles and **not
+one line** of `dm_csrs`, `dm_mem` or `dm_sba`. An unknown instance path is
+reported as an empty section rather than an error, so `dm_cov.sh` now warns when
+an instance produces nothing.
+
+Current DM-only code coverage, merged across all 22 tests:
+
+| Instance | Block | Expression | Toggle |
+|---|---:|---:|---:|
+| `i_dm_top` | — | — | 33.33% |
+| `i_dm_csrs` | 67.30% | 75.00% | 23.92% |
+| `i_dm_sba` | 61.36% | 77.78% | 6.38% |
+| `i_dm_mem` | 89.36% | 90.00% | 71.88% |
+| `i_dmi_jtag` | 80.00% | 58.82% | 94.67% |
+| **Debug Module total** | **74.43%** | **75.93%** | **38.79%** |
+
+Toggle is reported separately rather than folded into one figure: it is
+dominated by wide buses whose upper bits a single-hart, 32-bit-DMI configuration
+never drives, so averaging it with block coverage produces a number that is
+neither. `i_dm_sba` at 6.38% toggle and 61.36% block is the same RTL-002 blockage
+that holds `cg_sba` down — SBA is reachable but barely exercised.
 
 ### RTL findings
 

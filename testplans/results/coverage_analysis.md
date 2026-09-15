@@ -210,9 +210,34 @@ Two things that silently corrupt the merged number:
   which no longer exists. Re-run the suite from one compile before quoting a
   number.
 
-That scopes the report to `tb_top_soc.dut.i_dm_top`, recursing into `dm_csrs`,
-`dm_mem`, `dm_sba` and `dmi_jtag`. **Whole-SoC code coverage would be dominated
-by CVA6 itself and would say nothing about the DM**, which is the DUT here.
+That scopes the report to the five instances that **are** the Debug Module —
+`i_dm_top`, `i_dm_csrs`, `i_dm_sba`, `i_dm_mem` and `i_dmi_jtag`. Each must be
+named: `report -inst X` covers only X and does not recurse, and the legacy
+`report` command has no `-recursive` option. Naming only `i_dm_top`, as this
+script originally did, measured the wrapper's port toggles and not one line of
+the logic.
+
+**Whole-SoC code coverage would be dominated by CVA6 itself and would say
+nothing about the DM**, which is the DUT here.
+
+Merged across all 22 tests, 2026-09-15:
+
+| Instance | Block | Expression | Toggle |
+|---|---:|---:|---:|
+| `i_dm_top` | — | — | 33.33% |
+| `i_dm_csrs` | 67.30% (107/159) | 75.00% (6/8) | 23.92% (342/1430) |
+| `i_dm_sba` | 61.36% (27/44) | 77.78% (7/9) | 6.38% (36/564) |
+| `i_dm_mem` | 89.36% (84/94) | 90.00% (18/20) | 71.88% (501/697) |
+| `i_dmi_jtag` | 80.00% (44/55) | 58.82% (10/17) | 94.67% (355/375) |
+| **Total** | **74.43%** (262/352) | **75.93%** (41/54) | **38.79%** (1506/3882) |
+
+`i_dm_top` has no block or expression section because it is a wrapper with no
+logic of its own — that is an absent metric, not a hole.
+
+The lowest row is `i_dm_sba`, and it is the same RTL-002 blockage that holds
+`cg_sba` down: the SBA paths are reachable but the scenarios abort before
+exercising them. Functional and code coverage agree on where the gap is, which
+is a useful cross-check that neither number is an artefact.
 
 ---
 

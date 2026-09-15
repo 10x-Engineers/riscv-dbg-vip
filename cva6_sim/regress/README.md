@@ -278,12 +278,27 @@ rather than the whole SoC — which is what matters here, since CVA6's core is n
 the DUT:
 
 ```bash
-IMC=/path/to/imc bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
+bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
 ```
 
-That reports `tb_top_soc.dut.i_dm_top`, recursing into `dm_csrs`, `dm_mem`,
-`dm_sba` and `dmi_jtag`. Whole-SoC code coverage would be dominated by CVA6
-itself and would say nothing about the DM.
+It reports the five instances that **are** the Debug Module — `i_dm_top`,
+`i_dm_csrs`, `i_dm_sba`, `i_dm_mem` and `i_dmi_jtag` (that last one a sibling of
+`dm_top`, in `ariane_testharness`) — and prints a per-instance table plus a DM
+total. Whole-SoC code coverage would be dominated by CVA6 itself and would say
+nothing about the DM.
+
+**Each instance must be named.** `report -inst X` covers only X; it does not
+recurse, and the legacy `report` command has no `-recursive` option (only
+`report_metrics` does). Naming just `i_dm_top` — which this script originally
+did — measured the wrapper's port toggles and not one line of `dm_csrs`,
+`dm_mem` or `dm_sba`. An unknown instance path produces an **empty section, not
+an error**, so the script warns when an instance reports nothing.
+
+Current DM-only figures, merged across all 22 tests: block **74.43%**,
+expression **75.93%**, toggle **38.79%**. Toggle is kept separate because it is
+dominated by wide buses a single-hart, 32-bit-DMI configuration never fully
+drives. Full breakdown in
+[`testplans/results/coverage_analysis.md`](../../testplans/results/coverage_analysis.md).
 
 ---
 
