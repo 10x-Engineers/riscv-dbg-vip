@@ -315,13 +315,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     bit [3:0] dut_version           = VERSION_0_13;
     bit       dut_hasresethaltreq   = 1'b0;
     bit       dut_stickyunavail     = 1'b0;
-    // sbcs.sbaccess is R/W with a spec reset of 2, but a DUT may hardwire it.
-    // When it is not writable exactly one width is ever observable, and
-    // binning the others as holes reports a stimulus gap where the real cause
-    // is the DUT -- see issue #147 (RTL-002).
-    bit       dut_sbaccess_writable = 1'b1;
-    bit [2:0] dut_sbaccess_fixed    = 3'd2;
-    bit       dut_supports_hasel    = 1'b0;
 
     // ── Inferred state, rebuilt from the bus exactly as a debugger would ──────
     int unsigned num_harts       = 1;   // DUT config, from the config_db
@@ -1234,17 +1227,17 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         bins unsupported_written = {7};     // RAP-007-C3
         ignore_bins undefined = {5, 6};
         // A DUT that hardwires sbaccess can only ever read back the one width
-        // it is wired to, so every other bin is a hole whose cause is the DUT
-        // rather than the stimulus. Excluded by DECLARED parameter, not
-        // deleted: a DUT that implements sbaccess as R/W is still measured
-        // against all of them, and when issue #147 is fixed this exclusion
-        // stops applying on its own.
+        // it is wired to, so the other width bins are holes whose cause is the
+        // DUT rather than the stimulus. That exclusion is applied at REPORT
+        // time by mk/dm_cov_exclude.py, not here.
         //
-        // `iff` is not legal on an individual bin -- it guards a whole
-        // coverpoint -- so this is a value-set filter, matching the idiom
-        // cp_hasresethaltreq and cp_stickyunavail already use.
-        ignore_bins hardwired = {[0:7]} with
-            (!dut_sbaccess_writable && item != int'(dut_sbaccess_fixed));
+        // Two SystemVerilog rules force that: `iff` guards a whole coverpoint,
+        // never an individual bin; and a `with` filter may only reference
+        // `item` and constants, so the DUT-config members this would need are
+        // an "Illegal operand for covergroup expression" (19.5). Gating the
+        // whole coverpoint would suppress size64 too -- the one width that IS
+        // covered -- so the model stays DUT-agnostic and the exclusion lives
+        // with the other declared-parameter exclusions.
       }
       cp_sberror: coverpoint s_sberror {
         bins none = {0};                    // SBA-001-C
@@ -1286,9 +1279,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         dut_version         = cfg.get_version();
         dut_hasresethaltreq = cfg.get_bool("hasresethaltreq");
         dut_stickyunavail   = cfg.get_bool("stickyunavail");
-        dut_sbaccess_writable = cfg.get_bool("sbaccess_writable");
-        dut_sbaccess_fixed    = cfg.get_int("sbaccess_reset");
-        dut_supports_hasel    = cfg.get_bool("supports_hasel");
 
         cg_dmi_access      = new();
         cg_dmcontrol_write = new();

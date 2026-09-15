@@ -132,7 +132,7 @@ class python_bridge extends uvm_component;
                         dpi_bridge_put_rsp(0);
                         `uvm_info("BRIDGE", "TAP RESET", UVM_MEDIUM)
                     end
-                    4: begin  // dtmcs access (DTM register, not DMI)
+                    6: begin  // dtmcs access (DTM register, not DMI)
                         // dtmcs lives in the DTM and has no DMI address, so it
                         // cannot go through ops 1/2. Without this op the
                         // dmireset / dmihardreset recovery paths are

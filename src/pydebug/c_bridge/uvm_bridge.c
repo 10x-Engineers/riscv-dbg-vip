@@ -49,10 +49,14 @@
 #define OP_READ     1
 #define OP_WRITE    2
 #define OP_RESET    3
-/* dtmcs is a DTM register with no DMI address, so it needs its own op
- * rather than an addr on OP_READ/OP_WRITE. */
-#define OP_DTMCS    4
 #define OP_SHUTDOWN 4
+/* dtmcs is a DTM register with no DMI address, so it needs its own op rather
+ * than an addr on OP_READ/OP_WRITE. Six, not four: 4 is OP_SHUTDOWN and 5 is
+ * OP_LOG. Defining it as 4 gave the SV dispatch two `4:` arms in one case
+ * statement, and the first match wins -- so shutdown silently ran a dtmcs
+ * sequence instead of ending the test, and every run hung after
+ * "Session complete" until its timeout. */
+#define OP_DTMCS    6
 #define OP_LOG      5   /* Python log record, printed by SV so it carries $time */
 
 /* Log text for OP_LOG. Static because the DPI import returns a const char* that
