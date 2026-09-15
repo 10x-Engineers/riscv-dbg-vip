@@ -1,0 +1,89 @@
+# bindings/cva6.yaml — coverpoint -> real expression, for CVA6.
+#
+# The coverage model is architectural: its `expression` fields are names from
+# the specification (stepped_instruction_class, hart_state), not signals. That
+# is what keeps the model reusable and its holes meaningful, and it is also why
+# emit_sv.py could not previously produce anything that compiles.
+#
+# This file supplies the missing half: what each coverpoint actually samples on
+# THIS testbench. A second DUT gets a second file, not edits to the model.
+#
+# A coverpoint with no entry here is not an error. It means this testbench
+# cannot sample that behaviour yet, and the emitter reports it rather than
+# emitting an expression that will not compile. That list is itself a finding:
+# it is the distance between what the spec asks for and what we can observe.
+
+dut: cva6-10x-fork
+# 35 of 70 modelled coverpoints are bindable today.
+
+bindings:
+  cg_dtm_dmi.cp_dmi_op: "t.dmi_op"
+  cg_dtm_dmi.cp_dmi_result: "t.dmi_status"
+  cg_dtm_dmi.cp_dtmcs_dmistat: "dtmcs_rdata[11:10]"
+  # cg_dtm_dmi.cp_idle_cycles: UNBOUND  (range: run_test_idle_cycles_between_accesses)
+  cg_dm_activation.cp_dmactive_transition: "dm_vif.dmcontrol[0]"
+  # cg_dm_activation.cp_post_activation_read: UNBOUND  (event: register_read_after_activation)
+  # cg_dm_activation.cp_op_while_inactive: UNBOUND  (event: operation_attempted_with_dmactive_0)
+  # cg_hart_selection.cp_hartsel_class: UNBOUND  (value: hartsel_class)
+  cg_hart_selection.cp_hart_reported_state: "decode_hart_state(dm_vif.dmstatus)"
+  cg_hart_selection.cp_nonexistent_runstate: "{dm_vif.dmstatus[DMS_ALLRUNNING], dm_vif.dmstatus[DMS_ANYRUNNING]}"
+  # cg_hart_selection.cp_all_vs_any: UNBOUND  (value: {all_bit, any_bit})
+  # cg_reset.cp_reset_source: UNBOUND  (value: reset_source)
+  # cg_reset.cp_activity_at_reset: UNBOUND  (state: dm_activity_when_reset_asserted)
+  cg_reset.cp_havereset_lifecycle: "dm_vif.dmstatus[DMS_ANYHAVERESET]"
+  cg_reset.cp_reset_pending: "dm_vif.dmstatus[DMS_NDMRESETPENDING]"
+  cg_run_control.cp_haltreq_x_resumereq: "{dm_vif.dmcontrol[DMC_HALTREQ], dm_vif.dmcontrol[DMC_RESUMEREQ]}"
+  # cg_run_control.cp_request_x_prior_state: UNBOUND  (value: {request_type, hart_state_before})
+  cg_run_control.cp_hart_transition: "cur_hart_state"
+  cg_run_control.cp_resumeack: "{dm_vif.dmstatus[DMS_ALLRESUMEACK], dm_vif.dmstatus[DMS_ANYRESUMEACK]}"
+  # cg_run_control.cp_halt_latency: UNBOUND  (range: cycles_from_haltreq_to_allhalted)
+  cg_debug_entry.cp_cause: "hart_vif.cause()"
+  cg_debug_entry.cp_prv: "hart_vif.prv()"
+  # cg_debug_entry.cp_ebreak_enable: UNBOUND  (value: {ebreakm, ebreaks, ebreaku} vs executing privi)
+  cg_debug_entry.cp_dpc_origin: "classify_dpc_origin(hart_vif.cause())"
+  cg_debug_mode.cp_stopcount: "{hart_vif.stopcount(), counters_advanced}"
+  cg_debug_mode.cp_stoptime: "{hart_vif.stoptime(), time_advanced}"
+  # cg_debug_mode.cp_interrupts_in_debug: UNBOUND  (event: interrupt_asserted_while_in_debug_mode)
+  cg_debug_mode.cp_dret_context: "dret_executed_in_debug"
+  # cg_debug_mode.cp_debug_csr_access_context: UNBOUND  (value: debug_csr_read_from_privilege)
+  # cg_debug_mode.cp_debug_rom_flags: UNBOUND  (event: debug_rom_flag_written)
+  cg_step_external.cp_stepped_class: "hart_vif.commit_iclass"
+  # cg_step_external.cp_stepie_x_irq: UNBOUND  (value: {dcsr.stepie, interrupt_pending})
+  cg_step_external.cp_step_transition: "hart_vif.hart_mode()"
+  cg_step_external.cp_haltreq_during_step: "dm_vif.dmcontrol[DMC_HALTREQ]"
+  cg_step_external.cp_prv_at_step: "hart_vif.prv()"
+  # cg_step_external.cp_consecutive_steps: UNBOUND  (range: consecutive_steps_without_resume)
+  # cg_step_native.cp_native_step_guarantees: UNBOUND  (value: native_step_observed_behaviour)
+  # cg_step_native.cp_native_step_privilege: UNBOUND  (value: {stub_privilege, target_privilege})
+  cg_abstract_command.cp_cmdtype: "dm_vif.command[CMD_CMDTYPE_LSB +: 8]"
+  cg_abstract_command.cp_regno_class: "dm_vif.command[CMD_REGNO_LSB +: 16]"
+  cg_abstract_command.cp_aarsize: "dm_vif.command[CMD_AARSIZE_LSB +: 3]"
+  # cg_abstract_command.cp_command_flags: UNBOUND  (value: {transfer, postexec, aarpostincrement, write})
+  cg_abstract_command.cp_cmderr: "dm_vif.abstractcs[ABS_CMDERR_LSB +: 3]"
+  cg_abstract_command.cp_cmderr_lifecycle: "cmderr_state"
+  cg_abstract_command.cp_busy_observed: "dm_vif.abstractcs[ABS_BUSY]"
+  # cg_abstract_command.cp_command_sequence: UNBOUND  (sequence: abstract_command_phase)
+  cg_program_buffer.cp_progbuf_fill: "progbuf_words_written"
+  # cg_program_buffer.cp_progbuf_outcome: UNBOUND  (value: program_buffer_termination)
+  # cg_program_buffer.cp_progbuf_operation: UNBOUND  (value: what_the_buffer_did)
+  # cg_program_buffer.cp_progbuf_reuse: UNBOUND  (transition: progbuf_execution_count)
+  cg_system_bus_access.cp_sbaccess_size: "dm_vif.sbcs[SBCS_SBACCESS_LSB +: 3]"
+  cg_system_bus_access.cp_sberror: "dm_vif.sbcs[SBCS_SBERROR_LSB +: 3]"
+  cg_system_bus_access.cp_sb_trigger_mode: "{dm_vif.sbcs[SBCS_SBREADONADDR], dm_vif.sbcs[SBCS_SBREADONDATA], dm_vif.sbcs[SBCS_SBAUTOINCREMENT]}"
+  # cg_system_bus_access.cp_sb_address_region: UNBOUND  (range: sbaddress)
+  # cg_system_bus_access.cp_sb_alignment: UNBOUND  (value: sbaddress alignment relative to sbaccess size)
+  # cg_system_bus_access.cp_sb_concurrency: UNBOUND  (event: sba_while_hart_running)
+  cg_system_bus_access.cp_sbbusyerror: "dm_vif.sbcs[SBCS_SBBUSYERROR]"
+  cg_triggers.cp_trigger_type: "last_tdata1[TRIG_TYPE_LSB_RV32 +: 4]"
+  # cg_triggers.cp_match_event: UNBOUND  (value: {execute, load, store})
+  # cg_triggers.cp_trigger_privilege: UNBOUND  (value: {m, s, u} enable bits)
+  # cg_triggers.cp_tselect_probe: UNBOUND  (value: tselect_write_vs_readback)
+  # cg_triggers.cp_trigger_update_context: UNBOUND  (value: tdata_written_while)
+  cg_halt_groups.cp_group_config: "{dm_vif.dmcs2[DMCS2_GROUPTYPE], dm_vif.dmcs2[DMCS2_HGSELECT]}"
+  # cg_halt_groups.cp_group_propagation: UNBOUND  (event: group_halt_propagated)
+  cg_authentication.cp_auth_state: "{dm_vif.dmstatus[DMS_AUTHENTICATED], dm_vif.dmstatus[DMS_AUTHBUSY]}"
+  # cg_authentication.cp_auth_permitted_register: UNBOUND  (value: register_class_accessed_while_unauthenticated)
+  # cg_register_access.cp_access_type: UNBOUND  (value: field_access_type)
+  # cg_register_access.cp_interface: UNBOUND  (value: originating_interface)
+  # cg_register_access.cp_register_class: UNBOUND  (value: register_class_being_accessed)
+  # cg_register_access.cp_gating_state: UNBOUND  (state: dm_gating_state_at_access)

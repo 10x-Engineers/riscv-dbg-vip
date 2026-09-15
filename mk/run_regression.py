@@ -106,7 +106,18 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
     errs = RE_UVM_ERR.findall(out)
     uvm_errors = int(errs[-1]) if errs else 0
 
-    if timed_out:
+    # A dead Python client leaves the simulator running with nothing driving
+    # it, so the test reaches its timeout looking exactly like a hung DUT. The
+    # traceback is in the output either way -- say so rather than making
+    # someone read a 900-second log to find a TypeError on line one.
+    client_died = ("Traceback (most recent call last)" in out and
+                   "Session complete" not in out)
+
+    if client_died:
+        last = [ln for ln in out.splitlines()
+                if ln.strip() and not ln.startswith((" ", "\t"))]
+        result = "error"
+    elif timed_out:
         result = "timeout"
     elif m:
         passed, total = int(m.group(1)), int(m.group(2))
@@ -128,6 +139,7 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
         "spec_total": float(tot.group(1)) if tot else None,
         "expect": test.get("expect", defaults.get("expect", "pass")),
         "covers": test.get("covers", []),
+        "note": ("python client died: " + last[-1][:90]) if client_died and last else None,
     }
 
 
