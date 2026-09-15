@@ -87,6 +87,47 @@ not classify its own failure, and not reaching it is arguably correct.
 
 ---
 
+## Measured: merged functional coverage
+
+All 22 tests, one compile, one coverage model, merged with `imc`. Produced by
+`bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/` on 2026-09-15.
+
+| Covergroup | Merged |
+|---|---:|
+| `cg_dmstatus_read` | 100.00% |
+| `cg_hart_transition` | 100.00% |
+| `cg_command_write` | 100.00% |
+| `cg_abstractcs_read` | 100.00% |
+| `cg_progbuf` | 100.00% |
+| `cg_dmcs2_write` | 100.00% |
+| `cg_hartinfo_read` | 100.00% |
+| `cg_haltsum0_read` | 100.00% |
+| `cg_data0_access` | 100.00% |
+| `cg_trigger` | 100.00% |
+| `cg_dmcontrol_write` | 97.37% |
+| `cg_hart_mode` | 87.50% |
+| `cg_abstract_cmd` | 83.33% |
+| `cg_dmi_access` | 65.62% |
+| `cg_step_external` | 52.58% |
+| `cg_debug_entry` | 41.00% |
+| `cg_sb_access` | 33.33% |
+| `cg_sbcs` | 25.00% |
+| `cg_sba` | 25.00% |
+
+This is a **real merge**, not the per-run maxima the regression driver prints —
+those are a lower bound and labelled as such wherever they appear.
+
+Two cautions on reading it. The ten at 100% are the register-centric
+covergroups, and a field that toggled is easier to hit than a behaviour that was
+exercised — see [`generated_vs_implemented.md`](generated_vs_implemented.md).
+And `report -detail` without `-all` emits the *Uncovered* report, where a
+covergroup at 100% is absent rather than missing; the table above used `-all`.
+
+The three lowest — `cg_sba`, `cg_sbcs`, `cg_sb_access` — are all one RTL line
+(RTL-002), not three separate gaps.
+
+---
+
 ## What is still open, honestly
 
 **Privilege bins (`cp_prv`, `cp_prv_at_step`, and the crosses over them).**

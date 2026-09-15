@@ -127,34 +127,120 @@ The suite-level figure is the **maximum per coverpoint across runs**, which is a
 same coverpoint, the max credits only the higher one. It is not the merged
 number and is labelled as such everywhere it appears.
 
-A real merge needs `imc`, which **fails licence authentication on this machine**:
+A real merge needs `imc`, and **it works here** — an earlier version of this
+document said it was licence-blocked, which was wrong in a way worth recording.
+`imc` *is* blocked, but only the **23.03** build: it dies in its Java licence
+layer (`LMF-01513`, FLEXnet `-8 Authentication Failed`) before opening anything,
+while `xrun` authenticates against the very same `license.dat`. That is a
+per-product licence gap, not a broken licence — and "no coverage reporting on
+this machine" never followed from it. Nobody had checked whether another `imc`
+was installed. One is.
 
-```
-Error: (LMF-01513): License call failed.
-FLEXnet ERROR(-513, 4050, 0): ... Authentication Failed (-8,4048)
-```
-
-vManager is licensed separately from Xcelium. `xrun` authenticates against the
-same file and `imc` does not, so this is a property of the licence file rather
-than something fixable from the simulation side. **The coverage data itself is
-intact** — every run writes a real database under
-`cva6_sim/sim_outputs/coverage/scope/<test>/`, collected with `-coverage all`.
-Nothing needs re-simulating.
-
-On a host with a working vManager licence:
+### Merging and reporting with `imc`
 
 ```bash
-# merge every run and report, including code coverage scoped to the DM
-IMC=/path/to/imc bash mk/xcelium_cov_report.sh \
-    cva6_sim/sim_outputs/coverage testplans/results/merged_coverage.txt
-
-# or the DM-scoped script, which also recurses into dm_csrs/dm_mem/dm_sba
-IMC=/path/to/imc bash mk/dm_cov.sh \
-    cva6_sim/sim_outputs/coverage testplans/results/
+export IMC_ROOT=/home/icdesign/cadence/installs/VMANAGER2109
+export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
+imc -version        # IMC: 21.09-s001
 ```
 
-Copying `cva6_sim/sim_outputs/coverage/` to that machine is enough; it is
-self-contained.
+Use **21.09, not 23.03**. It warns that it is older than the 23.03 coverage data
+and then reads it correctly; UCIS is versioned for exactly that. The `PATH`
+export is not optional either — the `imc` wrapper resolves its own installation
+from `PATH`, and without it exits with *Unable to find the Cadence installation
+in your path* even when invoked by absolute path.
+
+Then either use the packaged script:
+
+```bash
+# merge every run; functional coverage + code coverage scoped to the DM
+bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
+#   out/functional.rpt   out/dm_code.rpt
+```
+
+or drive `imc` yourself:
+
+```bash
+imc -batch                      # interactive Tcl shell, no GUI
+imc -execcmd "<tcl>; exit"      # one-liner
+imc -exec script.tcl            # a script
+imc -gui -load <abs run path>   # GUI, needs X11/VNC
+```
+
+```tcl
+# ABSOLUTE paths only -- a relative -run path is silently prefixed with
+# cov_work/ and reports "Directory not found".
+load -run /abs/.../cva6_sim/sim_outputs/coverage/scope/step_classes_uvm
+merge /abs/.../scope/run1 /abs/.../scope/run2 -out /abs/.../merged -overwrite
+load -run /abs/.../merged
+
+report -detail -metrics covergroup -out func.rpt                        ;# text
+report -detail -metrics code -inst tb_top_soc.dut.i_dm_top -out dm.rpt  ;# text
+report_metrics -detail -metrics covergroup -out html_dir                ;# HTML
+report_metrics -summary -out summary_dir                                ;# HTML
+exit
+```
+
+**HTML is the easiest to read**, and needs no GUI or X11:
+
+```bash
+cd cva6_sim/sim_outputs/coverage
+imc -execcmd "load -run $PWD/scope/step_classes_uvm; \
+              report_metrics -detail -metrics covergroup -out /tmp/cov_html; exit"
+firefox /tmp/cov_html/index.html
+```
+
+### `imc` gotchas
+
+Each of these fails quietly or misleadingly rather than with a clear error.
+
+| Gotcha | Symptom |
+|---|---|
+| `-batch` and `-exec` are **mutually exclusive** | prints the usage text and **exits 0** — looks like success |
+| A **relative** `-run` path | silently prefixed with `cov_work/` → *Directory not found* |
+| `report_metrics -summary` takes **no** `-metrics` flag | *Incompatible options specified* |
+| `report` (legacy) **requires** `-metrics` | same error, opposite cause |
+| `-overwrite` on a **text** report | ignored, with a warning |
+| `report -detail` **without `-all`** | emits the *Uncovered* report — a covergroup at 100% is **absent**, not missing. Add `-all` for the full list |
+
+`report` is deprecated but is the one that emits greppable plain text with
+covergroup names, which is why `mk/dm_cov.sh` uses it.
+
+### Two ways a merged number goes wrong silently
+
+- **Never merge across coverage models.** Each compile writes its own `.ucm`,
+  and `merge` keeps only what the models share. Merging 21 runs from one compile
+  with 1 from another reported `cg_step_external` at **0.00%**, where the 21 that
+  share a model give **51.98%**. Check before trusting a merge:
+
+  ```bash
+  ls cva6_sim/sim_outputs/coverage/scope/*.ucm   # must be exactly one file
+  ```
+
+  Nothing clears `sim_outputs/coverage` between runs, so this is easy to hit —
+  `rm -rf sim_outputs/coverage` before a coverage sweep avoids it entirely.
+
+- **Coverage data goes stale against the covergroups.** Databases written before
+  a covergroup change still describe the old model, and nothing warns you. After
+  editing `covergroups.sv`, re-run the suite from one compile before quoting a
+  number. To check what a database actually contains:
+
+  ```bash
+  gunzip -c cva6_sim/sim_outputs/coverage/scope/*.ucm | strings | grep -oE '\bcg_[a-z0-9_]+' | sort -u
+  ```
+
+### Coverage database format
+
+Xcelium writes **UCIS** (Accellera Unified Coverage Interoperability Standard),
+physically a *gzipped Boost serialization archive* — not text:
+
+| File | Contents |
+|---|---|
+| `scope/icc_<hash>_<hash>.ucm` | the coverage **model** — every covergroup, coverpoint and bin, plus the design. One per **compile** |
+| `scope/<test>/icc_<hash>_<hash>.ucd` | the coverage **data** — which bins that run hit. One per test |
+
+A `.ucd` is only readable against its matching `.ucm`, which is the mechanism
+behind the cross-model merge trap above.
 
 ### Closing a hole
 

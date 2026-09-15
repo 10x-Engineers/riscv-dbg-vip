@@ -16,9 +16,21 @@
 # be merged later, or elsewhere. Say so plainly instead of failing blank.
 set -o pipefail
 
-COV_DIR=${1:?usage: xcelium_cov_report.sh <cov_dir> <report_txt>}
+COV_DIR=$(readlink -f "${1:?usage: xcelium_cov_report.sh <cov_dir> <report_txt>}")
 REPORT=${2:?usage: xcelium_cov_report.sh <cov_dir> <report_txt>}
-IMC=${IMC:-imc}
+
+# Default to the 21.09 vManager install, NOT 23.03. Both are installed here and
+# only this one authenticates: 23.03's imc dies in its Java licence layer
+# (LMF-01513 / FLEXnet -8 "Authentication Failed") before opening anything,
+# while xrun authenticates against the same licence file. Per-product gap, not a
+# broken licence. 21.09 warns it is older than the 23.03 data and reads it
+# correctly -- UCIS is versioned for exactly that.
+IMC_ROOT=${IMC_ROOT:-/home/icdesign/cadence/installs/VMANAGER2109}
+IMC=${IMC:-$IMC_ROOT/bin/imc}
+# The imc wrapper resolves its own installation from PATH and exits with
+# "Unable to find the Cadence installation in your path" without this, even when
+# invoked by absolute path.
+export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
 
 runs=("$COV_DIR"/scope/*/)
 if [ ! -e "${runs[0]}" ]; then
@@ -34,9 +46,11 @@ imc not found (looked for: $IMC).
 The coverage databases are collected and intact:
 $(printf '  %s\n' "${runs[@]}")
 
-imc is part of vManager, not Xcelium. Point IMC at it and re-run, e.g.
-    make coverage_merge IMC=/path/to/VMANAGER/bin/imc
-or merge these .ucd files on a machine that has a licensed imc.
+imc is part of vManager, not Xcelium. Point IMC_ROOT at a vManager install
+and re-run, e.g.
+    make coverage_merge IMC_ROOT=/path/to/VMANAGER2109
+Use the 21.09 install where both are present -- 23.03's imc fails licence
+authentication here even though xrun succeeds against the same file.
 EOF
     exit 1
 fi

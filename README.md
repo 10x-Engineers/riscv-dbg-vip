@@ -160,6 +160,13 @@ silicon. Swapping platforms is a config change, not a code change.
 Everything below is about verifying a **DUT's** Debug Module with this
 framework. It is separate from `tests/`, which tests the Python package itself.
 
+If you only want to run something: [Prerequisites](#prerequisites) →
+[Running the regression](#running-the-regression) →
+[Running with functional coverage](#running-with-functional-coverage) →
+[Viewing coverage](#viewing-coverage). Every command is one you can paste; the
+traps called out along the way are ones that fail **silently** rather than with
+an error, which is why they are in the main flow rather than a footnote.
+
 ### The testplan
 
 [`testplans/riscv_debug_testplan.md`](testplans/riscv_debug_testplan.md) — derived
@@ -214,85 +221,220 @@ so a DUT that has the feature still gets measured. A model reporting 100% becaus
 its hard bins were deleted is worth less than one reporting 55% and saying which
 45%. [`coverage_analysis.md`](testplans/results/coverage_analysis.md) says which.
 
-### The regression
+### Prerequisites
+
+Check all four before running anything. Three of the four failure modes here
+present as testbench bugs rather than as setup problems, which is why they are
+worth checking up front.
+
+| Need | Check | If missing |
+|---|---|---|
+| Xcelium | `xrun -version` | source your Cadence setup |
+| RISC-V toolchain | `riscv64-unknown-elf-gcc --version` | `export PATH=/opt/riscv/bin:$PATH` |
+| pydebug, in **python3.9** | `/usr/local/bin/python3 -c "import pydebug"` | see below |
+| PyYAML | `python3 -c "import yaml"` | `python3 -m pip install --user pyyaml` |
+
+**Install pydebug into the interpreter the testbench launches** — `python3` →
+`/usr/local/bin/python3` (3.9) — not whatever `pip` alone resolves to:
+
+```bash
+/usr/local/bin/python3 -m pip install -e . --user
+```
+
+Installing into the wrong interpreter fails at run time with an import error
+*inside the simulator*, which reads like a testbench problem and is not one.
+
+Build the test programs once:
+
+```bash
+make -C cva6_sim/sw
+```
+
+### Running the regression
 
 22 tests, in [`cva6_sim/regress/regression.yaml`](cva6_sim/regress/regression.yaml).
-Full instructions: [`cva6_sim/regress/README.md`](cva6_sim/regress/README.md).
+Deeper detail — per-test rationale, how to add a test, the known-failing list —
+is in [`cva6_sim/regress/README.md`](cva6_sim/regress/README.md).
 
 ```bash
 cd cva6_sim
-make regress          # all 22, no coverage (fast)
-make regress_cov      # all 22 with -coverage all
-make regress_list     # names, expectations, configs
+make regress_list     # what is in the suite and what each is expected to do
+make regress          # all 22, no coverage        (~20 min)
+make regress_cov      # all 22 with -coverage all  (~35 min)
 make regress ONLY=step_classes,cmderr
 ```
+
+A report lands in `testplans/results/regression_report.md`; per-test logs in
+`cva6_sim/sim_outputs/<test>/regress.log`.
 
 Each entry names the ELF it needs, the testplan items it covers, and its
 **known** result — `expect: pass|partial|fail`, currently 17/3/2. The driver
 reports only results that *differ*: a suite where the known failures still fail
-tells you nothing changed. Exit status is non-zero on any difference.
+tells you nothing changed. Exit status is non-zero on any difference, so this
+works in CI as-is.
 
 Every entry names its ELF because a scenario run against the wrong program
 **passes while covering nothing** — which is how `step_stall` once reported 9/9
 against `halt_probe.elf`.
 
-### Collecting and reading coverage
+### Running with functional coverage
 
-Covergroups collect **only** under a `-coverage all` build; `make soc_test`
-reports zeros by construction.
+Covergroups collect **only** under a `-coverage all` build. Plain `make regress`
+reports zeros by construction — not a bug, just an uninstrumented build.
 
-**Database format.** Xcelium writes **UCIS** (Accellera Unified Coverage
-Interoperability Standard), physically a *gzipped Boost serialization archive* —
-not text. Under `cva6_sim/sim_outputs/coverage/scope/`:
+```bash
+cd cva6_sim
+rm -rf sim_outputs/coverage     # see "Clear stale coverage first" below
+make regress_cov
+```
+
+#### Clear stale coverage first
+
+**Nothing in the Makefile clears `sim_outputs/coverage`** — `soc_test_cov` only
+does `mkdir -p`. So recompiling and re-running even one test leaves the
+directory holding runs from *two different builds*, and a merge across them
+silently reports the wrong number (see the traps below). Until that guard
+exists, `rm -rf sim_outputs/coverage` before a coverage sweep is the reliable
+habit.
+
+### Viewing coverage
+
+#### Set up `imc` once
+
+```bash
+export IMC_ROOT=/home/icdesign/cadence/installs/VMANAGER2109
+export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
+imc -version        # IMC: 21.09-s001
+```
+
+Both halves matter:
+
+- **Use 21.09, not 23.03.** Both vManager installs are present and only one
+  works. The 23.03 `imc` dies in its Java licence layer (`LMF-01513`, FLEXnet
+  `-8 Authentication Failed`) before opening anything, while `xrun`
+  authenticates against the very same `license.dat` — a per-product licence gap,
+  not a broken licence. 21.09 warns that it is older than the 23.03 data and
+  reads it correctly; UCIS is versioned for exactly that.
+- **`PATH` is not optional.** The `imc` wrapper resolves its own installation
+  from `PATH`; without it you get `Unable to find the Cadence installation in
+  your path`, even when invoking it by absolute path.
+
+#### The packaged command
+
+```bash
+bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
+#   out/functional.rpt   per-covergroup, per-bin functional coverage
+#   out/dm_code.rpt      code coverage scoped to the DM
+```
+
+Handles the `PATH`, the 21.09 default, the merge and the absolute-path rule.
+
+#### Running `imc` yourself
+
+Three invocation forms:
+
+```bash
+imc -batch                       # interactive Tcl shell, no GUI
+imc -execcmd "<tcl>; exit"       # one-liner
+imc -exec script.tcl             # a script
+imc -gui -load <abs run path>    # GUI (needs X11/VNC)
+```
+
+The Tcl worth knowing:
+
+```tcl
+# Load ONE run. The path must be ABSOLUTE -- a relative path is silently
+# prefixed with cov_work/ and you get "Directory not found".
+load -run /abs/path/cva6_sim/sim_outputs/coverage/scope/step_classes_uvm
+
+# Or merge many runs first, then load the result
+merge /abs/.../scope/run1 /abs/.../scope/run2 -out /abs/.../merged -overwrite
+load -run /abs/.../merged
+
+# Plain-text reports
+report -detail -metrics covergroup -out func.rpt
+report -detail -metrics code -inst tb_top_soc.dut.i_dm_top -out dm_code.rpt
+
+# HTML reports
+report_metrics -detail -metrics covergroup -out html_dir
+report_metrics -summary -out summary_dir
+exit
+```
+
+#### HTML report — the easiest way to read it
+
+`report_metrics` writes a browsable directory; no GUI and no X11 needed:
+
+```bash
+cd cva6_sim/sim_outputs/coverage
+imc -execcmd "load -run $PWD/scope/step_classes_uvm; \
+              report_metrics -detail -metrics covergroup -out /tmp/cov_html; exit"
+firefox /tmp/cov_html/index.html
+```
+
+It carries the full per-bin data with **Overall Average Grade** / **Overall
+Covered** at the top.
+
+#### `imc` gotchas, all of them load-bearing
+
+| Gotcha | Symptom |
+|---|---|
+| `-batch` and `-exec` are **mutually exclusive** | prints the usage text and **exits 0** — looks like success |
+| A **relative** `-run` path | silently prefixed with `cov_work/` → *Directory not found* |
+| `report_metrics -summary` takes **no** `-metrics` flag | *Incompatible options specified* |
+| `report` (legacy) **requires** `-metrics` | same error, opposite cause |
+| `-overwrite` on a **text** report | ignored, with a warning |
+| `report -detail` **without `-all`** | emits the *Uncovered* report — a covergroup at 100% is **absent**, not missing. Add `-all` for the full list |
+
+`report` is deprecated but is the one that emits greppable plain text with
+covergroup names, which is why `mk/dm_cov.sh` uses it.
+
+### Two things that corrupt a coverage number without raising an error
+
+- **Never merge across coverage models.** Each compile writes its own `.ucm`,
+  and `merge` keeps only what the models share. Merging 21 runs from one compile
+  with 1 from another reported `cg_step_external` at **0.00%**, where the 21 that
+  share a model give **51.98%**. Always check first:
+
+  ```bash
+  ls cva6_sim/sim_outputs/coverage/scope/*.ucm   # must be exactly one file
+  ```
+
+- **Coverage data goes stale against the covergroups.** Databases written before
+  a covergroup change still describe the old model, and nothing warns you. After
+  editing `covergroups.sv`, re-run the suite from one compile before quoting a
+  number. To check what a database actually contains:
+
+  ```bash
+  gunzip -c cva6_sim/sim_outputs/coverage/scope/*.ucm | strings | grep -oE '\bcg_[a-z0-9_]+' | sort -u
+  ```
+
+### Without `imc`
+
+`make regress_cov` prints per-coverpoint lines tagged `CG`/`CP`, and
+`run_regression.py` combines them by taking the **max** per coverpoint. That is
+a **lower bound**, not a merge: two runs hitting different bins of one
+coverpoint credit only the higher. Useful for tracking movement; not a number to
+publish.
+
+### Coverage database format
+
+Xcelium writes **UCIS** (Accellera Unified Coverage Interoperability Standard),
+physically a *gzipped Boost serialization archive* — not text. Under
+`cva6_sim/sim_outputs/coverage/scope/`:
 
 | File | Contents |
 |---|---|
 | `icc_<hash>_<hash>.ucm` | The coverage **model** — every covergroup, coverpoint and bin, plus the design. ~2.2 MB uncompressed. One per **compile**, shared by all its runs. |
 | `<test>/icc_<hash>_<hash>.ucd` | The coverage **data** — which bins that run hit. ~480 KB. One per test. |
 
-A `.ucd` is only readable against its matching `.ucm`.
+A `.ucd` is only readable against its matching `.ucm` — which is the mechanism
+behind the cross-model merge trap above.
 
-**Reporting — use the 21.09 `imc`, not 23.03.** Both vManager installs are
-present on this machine and only one works. The 23.03 `imc` dies in its Java
-licence layer (`LMF-01513`, FLEXnet `-8 Authentication Failed`) before opening
-anything, while `xrun` authenticates against the very same `license.dat` — a
-per-product licence gap, not a broken licence. The 21.09 `imc` authenticates,
-warns that it is older than the 23.03 data, and reads it correctly; UCIS is
-versioned for exactly that.
+### Code coverage
 
-```bash
-# CLI — merge every run, report functional coverage + DM-scoped code coverage
-bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
-#   -> out/functional.rpt   out/dm_code.rpt
-
-# GUI
-R=/home/icdesign/cadence/installs/VMANAGER2109
-PATH=$R/tools.lnx86/bin:$R/bin:$PATH $R/bin/imc -gui \
-  -load $PWD/cva6_sim/sim_outputs/coverage/scope/step_classes_uvm
-```
-
-Two `imc` flag traps, both of which `mk/dm_cov.sh` already handles: `-batch` and
-`-exec` are **mutually exclusive** (passing both prints the usage text and exits
-0), and a **relative** `-run` path is silently prefixed with `cov_work/`.
-
-**Two things that corrupt a merged number without raising an error:**
-
-- **Never merge across coverage models.** Each compile writes its own `.ucm`, and
-  `merge` keeps only what the models share. Merging 21 runs from one compile with
-  1 from another reports `cg_step_external` at **0.00%**, where the 21 that share
-  a model give **51.98%**. Check `ls cva6_sim/sim_outputs/coverage/scope/*.ucm`
-  returns a single file before trusting a merge.
-- **Coverage data goes stale against the covergroups.** Databases from before a
-  covergroup change still describe the old model. Re-run the suite from one
-  compile before quoting a number.
-
-Without `imc`, `make regress_cov` still prints per-coverpoint lines tagged
-`CG`/`CP`, and `run_regression.py` merges them by taking the **max** per
-coverpoint. That is a **lower bound**, not a merge: two runs hitting different
-bins of one coverpoint credit only the higher.
-
-**Code coverage** (block, expression, toggle, FSM) comes from the same
-`-coverage all` build — no separate run. `mk/dm_cov.sh` scopes it to
+Block, expression, toggle and FSM coverage come from the **same** `-coverage all`
+build — no separate run. `mk/dm_cov.sh` scopes the report to
 `tb_top_soc.dut.i_dm_top`, recursing into `dm_csrs`, `dm_mem`, `dm_sba` and
 `dmi_jtag`. Whole-SoC code coverage would be dominated by CVA6 itself and would
 say nothing about the DM, which is the DUT here.
