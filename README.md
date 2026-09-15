@@ -307,12 +307,18 @@ it.
 | ID | Finding | Status |
 |---|---|---|
 | RTL-001 | Single-step over `wfi` deadlocks the hart | filed, `openhwgroup/cva6#3549` (duplicate of `#3497`; PR `#3525` open) |
-| RTL-002 | `sbcs.sbaccess` hardwired, and reset to 3 rather than 2 | unfiled — blocks all SBA coverage |
-| RTL-003 | `allrunning`/`anyrunning` asserted for a nonexistent hart | unfiled, tracked internally as `#130` |
-| RTL-004 | Halt-on-reset not implemented | not a defect — optional feature, recorded so it is not re-diagnosed |
+| RTL-002 | `sbcs.sbaccess` hardwired, and its spec reset value lost | filed — [10x-Engineers/riscv-dbg PR #4](https://github.com/10x-Engineers/riscv-dbg/pull/4#issuecomment-5677436187); blocks all SBA coverage |
+| RTL-003 | `allrunning`/`anyrunning` asserted for a nonexistent hart | already filed upstream by a third party — [pulp-platform/riscv-dbg#200](https://github.com/pulp-platform/riscv-dbg/issues/200); internal `#130` |
+| RTL-004 | Halt-on-reset not implemented | not a defect — optional feature; also upstream [#187](https://github.com/pulp-platform/riscv-dbg/issues/187) |
+
+RTL defects are deliberately **not** attached to any milestone — milestones track
+development work. RTL findings are tracked in that file and upstream.
 
 The file also records observations that are **not** defects but cost time to
-diagnose, so nobody re-diagnoses them.
+diagnose, so nobody re-diagnoses them — and, for RTL-002 and RTL-003, which
+repository each actually belongs to. RTL-002 was introduced by 10x PR #4;
+RTL-003 is inherited from pulp upstream unchanged. Checking *which branch* a
+blaming commit belongs to, not just which commit, is what separates the two.
 
 ## Running the package's own tests
 

@@ -46,9 +46,10 @@ so a regression of this is a coverage failure rather than a timeout.
 
 ---
 
-## RTL-002 — `sbcs.sbaccess` hardwired, and reset to 3 rather than 2
+## RTL-002 — `sbcs.sbaccess` hardwired, and its reset value lost
 
-**Status:** unfiled
+**Status:** filed · [`10x-Engineers/riscv-dbg` PR #4 review comment](https://github.com/10x-Engineers/riscv-dbg/pull/4#issuecomment-5677436187)
+(issues are disabled on that repository, and the code is that PR's)
 **Component:** `riscv-dbg` `src/dm_csrs.sv:618`
 **Severity:** medium — blocks all System Bus Access verification
 
@@ -59,8 +60,11 @@ sbcs_d.sbaccess = (BusWidth == 32'd64) ? 3'd3 : 3'd2;
 ```
 
 **Reset value.** The spec gives `sbaccess` a reset of **constant 2**, not
-`Preset`, with no exception for a DM that lacks 32-bit support. This DUT resets
-it to 3.
+`Preset`, with no exception for a DM that lacks 32-bit support. Upstream honours
+this with `sbcs_q <= '{default: '0, sbaccess: 3'd2}` at both reset points
+(`dm_csrs.sv:612,640`). PR #4 changed those to a plain `'0` (`:694,728`), so the
+register now resets to **0**; the 2-or-3 a debugger observes comes only from line
+618 overwriting it combinationally every cycle.
 
 **Writability.** `sbaccess` is declared **`R/W`**. Line 513 applies the DMI
 write, then line 618 unconditionally overwrites it later in the same
@@ -73,10 +77,25 @@ unsupported value when the DM starts a bus access, the access is not performed
 and `sberror` is set to 4."* That clause presupposes the field can hold an
 unsupported value.
 
-**Not a PR #4 regression.** `git log -L 618,618:src/dm_csrs.sv` attributes the
-line to `17e912c "Updated 1.0 debug module"`, which replaced the old v0.13
-support-bit block. An earlier note in this project claimed PR #4 introduced it
-and that pulp upstream lacks it; neither follows from the history.
+**This IS a PR #4 regression** — an earlier revision of this file said it was
+not, and that was wrong. `git log -L 618,618:src/dm_csrs.sv` attributes the line
+to `17e912c "Updated 1.0 debug module"`, and `17e912c` is one of PR #4's five
+commits (`gh api repos/10x-Engineers/riscv-dbg/compare/master...features/riscv-debug-update`).
+It is not an ancestor of `pulp-platform/riscv-dbg` master. The mistake was
+stopping at "which commit" without then asking which branch that commit belongs
+to.
+
+Upstream comparison, measured rather than assumed:
+
+| | `pulp-platform/riscv-dbg` | PR #4 (`17e912c`) |
+|---|---|---|
+| Reset | `'{default:'0, sbaccess: 3'd2}` (`:612,640`) | `'0` (`:694,728`) |
+| Comb. writes to bare `sbcs_d.sbaccess` | **none** — field is writable | `:618`, unconditional |
+| `sbaccessN` support bits | `BusWidth >= N` (`:551-555`) | `sbaccess16/8` forced `1'b0` (`:616-617`) |
+
+Upstream assigns only the `sbaccessN` **support** bits combinationally and leaves
+the `sbaccess` **size-select** field alone. PR #4 added an assignment to the
+size-select field itself, which is the behavioural change.
 
 Spec adjudication with quoted clauses: `debug_module.html#dm-sbcs`,
 `introduction.html#1-1-3-3-register-definition-format` (Table 1, Register Access
@@ -88,7 +107,15 @@ Blocks `SBA-001` through `SBA-018` and `cg_sba` closure.
 
 ## RTL-003 — `allrunning`/`anyrunning` asserted for a nonexistent hart
 
-**Status:** unfiled · tracked internally as issue #130
+**Status:** filed upstream — **independently, by a third party** ·
+[`pulp-platform/riscv-dbg#200`](https://github.com/pulp-platform/riscv-dbg/issues/200)
+· tracked internally as issue #130
+
+Do **not** file this again. It was reported upstream on 2026-08-12 as *"DMStatus
+reports overlapping states for invalid and unselectable harts"*, with the same
+root cause: the zero-filled aligned slot reads as running. We
+[added our reproduction](https://github.com/pulp-platform/riscv-dbg/issues/200#issuecomment-5677439402)
+to that issue rather than opening a second one.
 **Component:** DM `dmstatus` assembly
 **Severity:** low — misleads a debugger enumerating harts
 
@@ -98,7 +125,9 @@ A hart that does not exist is not running, and a debugger enumerating harts by
 walking `hartsel` will conclude it found one.
 
 Reproduces on **both** project DUTs, which suggests a shared assembly pattern
-rather than a CVA6-specific slip.
+rather than a CVA6-specific slip — confirmed: the two lines are character-identical
+in PR #4's DM (`dm_csrs.sv:319-320`) and in pulp upstream as vendored by Ibex
+(`:250-251`), so unlike RTL-002 this one is **inherited, not introduced**.
 
 Carried as an illegal cross cell,
 `cg_hart_selection.x_hartsel_x_state`, so it cannot silently return.
@@ -107,7 +136,8 @@ Carried as an illegal cross cell,
 
 ## RTL-004 — halt-on-reset not implemented
 
-**Status:** not a defect — optional feature, recorded so it is not re-diagnosed
+**Status:** not a defect — optional feature, recorded so it is not re-diagnosed.
+Also tracked upstream as [`pulp-platform/riscv-dbg#187`](https://github.com/pulp-platform/riscv-dbg/issues/187)
 **Component:** DM
 
 `dmstatus.hasresethaltreq=0`, so `setresethaltreq` does nothing and
