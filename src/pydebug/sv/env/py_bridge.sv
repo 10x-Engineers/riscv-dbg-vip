@@ -132,6 +132,20 @@ class python_bridge extends uvm_component;
                         dpi_bridge_put_rsp(0);
                         `uvm_info("BRIDGE", "TAP RESET", UVM_MEDIUM)
                     end
+                    4: begin  // dtmcs access (DTM register, not DMI)
+                        // dtmcs lives in the DTM and has no DMI address, so it
+                        // cannot go through ops 1/2. Without this op the
+                        // dmireset / dmihardreset recovery paths are
+                        // unreachable from a Python scenario.
+                        jtag_dtmcs_seq d_seq;
+                        d_seq = jtag_dtmcs_seq::type_id::create("d_seq");
+                        d_seq.wdata = data;
+                        d_seq.start(sqr);
+                        dpi_bridge_put_rsp(d_seq.rdata);
+                        `uvm_info("DMI_REQ", $sformatf(
+                            "DTMCS access wdata=0x%08h -> rdata=0x%08h",
+                            data, d_seq.rdata), UVM_MEDIUM)
+                    end
                     5: begin  // Python log record
                         // Printed here rather than by Python so it flows
                         // through the same report server as everything else:

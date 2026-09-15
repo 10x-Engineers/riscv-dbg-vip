@@ -179,3 +179,22 @@ tests:
     config: configs/mem_scan_uvm.json
     covers: [PB-002, PB-003]
     why: Memory read through the program buffer.
+
+  - name: cmd_busy
+    config: configs/cmd_busy_uvm.json
+    covers: [AC-020, AC-021, AC-022, AC-023, AC-024, AC-025]
+    why: >-
+      DMI access while an abstract command is in flight. Six busy-guard sites in
+      dm_csrs.sv were dead because every other scenario waits for its command;
+      this one holds cmdbusy with a Program Buffer delay loop and races it.
+      Also covers writes to R/O registers, abstractauto, and keepalive.
+    expect: pass
+
+  - name: dmi_error
+    config: configs/dmi_error_uvm.json
+    covers: [DTM-010, DTM-011, DTM-012, DTM-013, DTM-014]
+    why: >-
+      DTM sticky-error and reset recovery. dtmcs has no DMI address, so it needed
+      a new transport op; without it dmireset, dmihardreset and the DTM's whole
+      error-recovery path were unreachable from a scenario.
+    expect: pass

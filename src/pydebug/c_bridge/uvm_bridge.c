@@ -49,6 +49,9 @@
 #define OP_READ     1
 #define OP_WRITE    2
 #define OP_RESET    3
+/* dtmcs is a DTM register with no DMI address, so it needs its own op
+ * rather than an addr on OP_READ/OP_WRITE. */
+#define OP_DTMCS    4
 #define OP_SHUTDOWN 4
 #define OP_LOG      5   /* Python log record, printed by SV so it carries $time */
 
@@ -188,12 +191,15 @@ static void handle_request(int client_fd, const char *line) {
         return;
     }
 
-    if (strcmp(op, "read") == 0 || strcmp(op, "write") == 0 || strcmp(op, "reset") == 0) {
+    if (strcmp(op, "read") == 0 || strcmp(op, "write") == 0 ||
+        strcmp(op, "reset") == 0 || strcmp(op, "dtmcs") == 0) {
         pthread_mutex_lock(&g_mutex);
         if (strcmp(op, "read") == 0) {
             g_req_op = OP_READ; g_req_addr = addr; g_req_data = 0;
         } else if (strcmp(op, "write") == 0) {
             g_req_op = OP_WRITE; g_req_addr = addr; g_req_data = data;
+        } else if (strcmp(op, "dtmcs") == 0) {
+            g_req_op = OP_DTMCS; g_req_addr = 0; g_req_data = data;
         } else {
             g_req_op = OP_RESET; g_req_addr = 0; g_req_data = 0;
         }
@@ -201,7 +207,7 @@ static void handle_request(int client_fd, const char *line) {
         g_rsp_valid = 0;
         while (!g_rsp_valid) { pthread_cond_wait(&g_cond, &g_mutex); }
 
-        if (strcmp(op, "read") == 0) {
+        if (strcmp(op, "read") == 0 || strcmp(op, "dtmcs") == 0) {
             snprintf(send_buf, sizeof(send_buf),
                      "{\"id\":%lld,\"status\":\"ok\",\"data\":%u}\n", id, g_rsp_data);
         } else {

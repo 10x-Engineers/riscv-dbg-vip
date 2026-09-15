@@ -169,6 +169,21 @@ class UVMTransport(DebugTransport):
         self._transact({"op": "reset"})
         log.info("[UVMTransport] reset issued")
 
+    def dtmcs(self, wdata: int = 0) -> int:
+        """
+        Read, and optionally write, the DTM's dtmcs register (JTAG IR 0x10).
+
+        dtmcs belongs to the Debug Transport Module, not the Debug Module, so
+        it has no DMI address and cannot go through read()/write(). Its two
+        control bits are W1 -- `dmireset` (16) clears the sticky DMI error
+        state, `dmihardreset` (17) also cancels outstanding transactions -- so
+        the default wdata=0 is a pure status read with no side effect.
+        """
+        rsp = self._transact({"op": "dtmcs", "data": wdata & 0xFFFFFFFF})
+        val = rsp.get("data", 0)
+        log.debug("[UVMTransport] dtmcs: wrote 0x%08x, read 0x%08x", wdata, val)
+        return val
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _next_id(self) -> int:

@@ -12,6 +12,7 @@ package debug_pkg;
 
   `include "../sequences/dmi_read_seq.sv"
   `include "../sequences/dmi_write_seq.sv"
+  `include "../sequences/dtmcs_seq.sv"
   `include "../sequences/reset_tap_seq.sv"
   `include "scoreboard.sv"
   // Must precede covergroups.sv AND dm_checker.sv: both instantiate
