@@ -141,15 +141,33 @@ Block, expression, toggle and FSM coverage is collected by the same
 `.ucd` databases plus the `.ucm` design model, about 3.2 MB, under
 `cva6_sim/sim_outputs/coverage/scope/`.
 
-**Reporting it is blocked**, not the collection. `imc` fails FLEXnet
-authentication on this machine while `xrun` authenticates against the same
-licence file, so this is a property of the licence rather than something fixable
-from the simulation side. The data is intact and self-contained; copy the
-`coverage/` directory to a host with a vManager licence and run:
+**Reporting works locally** — an earlier version of this document said it was
+licence-blocked, and that was wrong in a way worth recording. `imc` *is* blocked,
+but only the **23.03** build: it dies in its Java licence layer (LMF-01513,
+FLEXnet `-8 Authentication Failed`) before opening anything, while `xrun`
+authenticates against the very same `license.dat`. That is a per-product licence
+gap, not a broken licence, and the conclusion "no coverage reporting on this
+machine" did not follow from it.
+
+The **21.09** vManager install on the same machine authenticates and reads the
+23.03 databases correctly — it prints a version-difference note and proceeds,
+which is what UCIS versioning is for. `mk/dm_cov.sh` now defaults to it:
 
 ```bash
-IMC=/path/to/imc bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
+bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
 ```
+
+Two things that silently corrupt the merged number:
+
+- **Never merge across coverage models.** Each compile writes its own `.ucm`, and
+  `merge` keeps only what the models share. Merging 21 runs from one compile with
+  1 run from another reported `cg_step_external` at **0.00%** when the same runs
+  merged on their own model give **51.98%**. Check `scope/*.ucm` is a single file
+  before trusting a merge.
+- **Coverage data goes stale against the covergroups.** The databases currently
+  on disk predate the covergroup consolidation and still contain `cg_dtm_dmi`,
+  which no longer exists. Re-run the suite from one compile before quoting a
+  number.
 
 That scopes the report to `tb_top_soc.dut.i_dm_top`, recursing into `dm_csrs`,
 `dm_mem`, `dm_sba` and `dmi_jtag`. **Whole-SoC code coverage would be dominated

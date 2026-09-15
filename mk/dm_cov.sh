@@ -2,9 +2,20 @@
 # Report (a) code coverage for the Debug Module instance only and
 # (b) overall functional (covergroup) coverage, from the merged sweep data.
 set -o pipefail
-COV_DIR=${1:?usage: dm_cov.sh <cov_dir> <out_dir>}
-OUT=${2:?usage: dm_cov.sh <cov_dir> <out_dir>}
-IMC=${IMC:-/home/icdesign/cadence/installs/VMANAGER2303/bin/imc}
+COV_DIR=$(readlink -f "${1:?usage: dm_cov.sh <cov_dir> <out_dir>}")
+OUT=$(mkdir -p "${2:?usage: dm_cov.sh <cov_dir> <out_dir>}" && readlink -f "$2")
+# Use the 21.09 vManager install, NOT 23.03. Both are installed; only this one
+# authenticates against this site's licence file. The 23.03 imc dies in its Java
+# licence layer (LMF-01513 / FLEXnet -8 "Authentication Failed") before it opens
+# anything, while xrun authenticates against the very same file -- so this is a
+# per-product licence gap, not a broken licence. 21.09 warns that it is older
+# than the 23.03 coverage data and then reads it correctly; UCIS is versioned for
+# exactly this.
+IMC_ROOT=${IMC_ROOT:-/home/icdesign/cadence/installs/VMANAGER2109}
+IMC=${IMC:-$IMC_ROOT/bin/imc}
+# The imc wrapper resolves its own installation from PATH and exits with
+# "Unable to find the Cadence installation in your path" without this.
+export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
 DM_INST=tb_top_soc.dut.i_dm_top
 
 mkdir -p "$OUT"
