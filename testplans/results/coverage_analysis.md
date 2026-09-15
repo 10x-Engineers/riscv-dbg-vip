@@ -89,42 +89,40 @@ not classify its own failure, and not reaching it is arguably correct.
 
 ## Measured: merged functional coverage
 
-All 22 tests, one compile, one coverage model, merged with `imc`. Produced by
-`bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/` on 2026-09-15.
+All 25 tests, one compile, one coverage model, merged with `imc`
+(2026-09-15). **13 of 19 covergroups are at 100%**; 208 of 295
+bins covered.
 
 | Covergroup | Merged |
 |---|---:|
+| `cg_dmcontrol_write` | 100.00% |
 | `cg_dmstatus_read` | 100.00% |
 | `cg_hart_transition` | 100.00% |
 | `cg_command_write` | 100.00% |
 | `cg_abstractcs_read` | 100.00% |
 | `cg_progbuf` | 100.00% |
+| `cg_sbcs` | 100.00% |
+| `cg_sb_access` | 100.00% |
 | `cg_dmcs2_write` | 100.00% |
 | `cg_hartinfo_read` | 100.00% |
 | `cg_haltsum0_read` | 100.00% |
 | `cg_data0_access` | 100.00% |
 | `cg_trigger` | 100.00% |
-| `cg_dmcontrol_write` | 97.37% |
 | `cg_hart_mode` | 87.50% |
 | `cg_abstract_cmd` | 83.33% |
-| `cg_dmi_access` | 65.62% |
+| `cg_dmi_access` | 67.71% |
 | `cg_step_external` | 52.58% |
-| `cg_debug_entry` | 41.00% |
-| `cg_sb_access` | 33.33% |
-| `cg_sbcs` | 25.00% |
+| `cg_debug_entry` | 49.33% |
 | `cg_sba` | 25.00% |
 
-This is a **real merge**, not the per-run maxima the regression driver prints —
-those are a lower bound and labelled as such wherever they appear.
+Movement from unblocking SBA and adding the busy-guard and DTM tests:
+`cg_sbcs` 25% → 100%, `cg_sb_access` 33% → 100%, `cg_dmcontrol_write`
+97.37% → 100%.
 
-Two cautions on reading it. The ten at 100% are the register-centric
-covergroups, and a field that toggled is easier to hit than a behaviour that was
-exercised — see [`generated_vs_implemented.md`](generated_vs_implemented.md).
-And `report -detail` without `-all` emits the *Uncovered* report, where a
-covergroup at 100% is absent rather than missing; the table above used `-all`.
-
-The three lowest — `cg_sba`, `cg_sbcs`, `cg_sb_access` — are all one RTL line
-(RTL-002), not three separate gaps.
+`cg_sba` at 25% is **not** a stimulus gap: the width bins other than the
+hardwired one cannot be reached while #147 stands, and are excluded at report
+time by `mk/dm_cov_exclude.py` rather than in the covergroup — see the note in
+`cp_sbaccess` for why SystemVerilog forces that.
 
 ---
 
@@ -220,16 +218,20 @@ the logic.
 **Whole-SoC code coverage would be dominated by CVA6 itself and would say
 nothing about the DM**, which is the DUT here.
 
-Merged across all 22 tests, 2026-09-15:
+Merged across all 25 tests, 2026-09-15:
 
 | Instance | Block | Expression | Toggle |
 |---|---:|---:|---:|
-| `i_dm_top` | — | — | 33.33% |
-| `i_dm_csrs` | 67.30% (107/159) | 75.00% (6/8) | 23.92% (342/1430) |
-| `i_dm_sba` | 61.36% (27/44) | 77.78% (7/9) | 6.38% (36/564) |
-| `i_dm_mem` | 89.36% (84/94) | 90.00% (18/20) | 71.88% (501/697) |
-| `i_dmi_jtag` | 80.00% (44/55) | 58.82% (10/17) | 94.67% (355/375) |
-| **Total** | **74.43%** (262/352) | **75.93%** (41/54) | **38.79%** (1506/3882) |
+| `i_dm_top` | — | — | 61.52% (502/816) |
+| `i_dm_csrs` | 86.79% (138/159) | 75.00% (6/8) | 44.48% (636/1430) |
+| `i_dm_sba` | 86.36% (38/44) | 88.89% (8/9) | 46.81% (264/564) |
+| `i_dm_mem` | 92.55% (87/94) | 95.00% (19/20) | 75.32% (525/697) |
+| `i_dmi_jtag` | 85.45% (47/55) | 64.71% (11/17) | 97.07% (364/375) |
+| **Total** | **88.07%** (310/352) | **81.48%** (44/54) | **59.02%** (2291/3882) |
+
+Up from 74.43% / 75.93% / 38.79% at the start of this closure pass. The gain is
+almost entirely SBA: `i_dm_sba` toggle went 6.38% → 46.81% once the scenarios
+stopped aborting.
 
 `i_dm_top` has no block or expression section because it is a wrapper with no
 logic of its own — that is an absent metric, not a hole.

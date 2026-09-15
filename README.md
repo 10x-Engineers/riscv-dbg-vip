@@ -461,18 +461,17 @@ Current DM-only code coverage, merged across all 22 tests:
 
 | Instance | Block | Expression | Toggle |
 |---|---:|---:|---:|
-| `i_dm_top` | — | — | 33.33% |
-| `i_dm_csrs` | 67.30% | 75.00% | 23.92% |
-| `i_dm_sba` | 61.36% | 77.78% | 6.38% |
-| `i_dm_mem` | 89.36% | 90.00% | 71.88% |
-| `i_dmi_jtag` | 80.00% | 58.82% | 94.67% |
-| **Debug Module total** | **74.43%** | **75.93%** | **38.79%** |
+| `i_dm_top` | — | — | 61.52% |
+| `i_dm_csrs` | 86.79% | 75.00% | 44.48% |
+| `i_dm_sba` | 86.36% | 88.89% | 46.81% |
+| `i_dm_mem` | 92.55% | 95.00% | 75.32% |
+| `i_dmi_jtag` | 85.45% | 64.71% | 97.07% |
+| **Debug Module total** | **88.07%** | **81.48%** | **59.02%** |
 
 Toggle is reported separately rather than folded into one figure: it is
 dominated by wide buses whose upper bits a single-hart, 32-bit-DMI configuration
 never drives, so averaging it with block coverage produces a number that is
-neither. `i_dm_sba` at 6.38% toggle and 61.36% block is the same RTL-002 blockage
-that holds `cg_sba` down — SBA is reachable but barely exercised.
+neither.
 
 ### RTL findings
 
