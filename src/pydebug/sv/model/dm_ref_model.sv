@@ -243,8 +243,42 @@ class dm_ref_model;
     return idx >= num_harts;
   endfunction
 
+  // ── Abstract-command busy guard ───────────────────────────────────────────
+  // #3.7.1: while abstractcs.busy is set the debugger must not write command,
+  // abstractcs, data* or progbuf*; a DM that sees such a write sets
+  // cmderr=1 (busy) and leaves the register alone.
+  //
+  // This model is untimed and cannot know when a command is in flight, so the
+  // checker feeds it the RTL's own busy bit from the backdoor before applying
+  // each write. Without it the model applies writes the DM correctly refused
+  // and then reports the DM as wrong -- which is exactly what a racing access
+  // test produces.
+  local bit observed_cmdbusy;
+
+  function void set_observed_cmdbusy(bit b);
+    observed_cmdbusy = b;
+  endfunction
+
+  local function bit guarded_while_busy(bit [6:0] addr);
+    return addr inside {dm_defines_pkg::DM_ADDR_COMMAND,
+                        dm_defines_pkg::DM_ADDR_ABSTRACTCS,
+                        dm_defines_pkg::DM_ADDR_ABSTRACTAUTO}
+        || (addr >= dm_defines_pkg::DM_ADDR_DATA0
+            && addr <= dm_defines_pkg::DM_ADDR_DATA11)
+        || (addr >= dm_defines_pkg::DM_ADDR_PROGBUF0
+            && addr <= dm_defines_pkg::DM_ADDR_PROGBUF15);
+  endfunction
+
   // ── Write dispatch ─────────────────────────────────────────────────────────
   function void on_write(bit [6:0] addr, bit [31:0] value);
+    if (observed_cmdbusy && guarded_while_busy(addr)) begin
+      // Dropped, exactly as the DM drops it. The resulting cmderr=1 is not
+      // set here: cmderr is excluded from predict_mask() and tracked
+      // front-door by the checker, so inventing it in the model would create
+      // a second source of truth for a field this model deliberately does not
+      // own.
+      return;
+    end
     case (addr)
       dm_defines_pkg::DM_ADDR_DMCONTROL:  write_dmcontrol(value);
       dm_defines_pkg::DM_ADDR_DATA0:      staged_data0 = value;

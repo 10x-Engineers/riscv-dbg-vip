@@ -68,6 +68,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.cmderr_sequence",
         "builder": "build_cmderr_sequence",
     },
+    "cmd_busy": {
+        "module": "pydebug.sequences.cmd_busy_sequence",
+        "builder": "build_cmd_busy_sequence",
+    },
     "priv_irq": {
         "module": "pydebug.sequences.priv_irq_sequence",
         "builder": "build_priv_irq_sequence",

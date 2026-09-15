@@ -74,6 +74,9 @@ class dm_checker extends uvm_component;
   // Backdoor view of the DM's registers. Optional: an SoC that does not expose
   // it simply runs without the model-vs-RTL comparison.
   virtual dbg_dm_backdoor_if backdoor_vif;
+
+  // abstractcs.busy (#3.14.13)
+  localparam int ABS_BUSY_BIT = 12;
   bit                     backdoor_en;
   event                   dmi_settled;
   // The transaction that triggered it: a register is compared when it is read,
@@ -354,6 +357,14 @@ class dm_checker extends uvm_component;
         // same thing to stay meaningfully comparable to what's actually
         // being driven, not a stricter protocol than the real debugger
         // implements.
+        // #3.7.1: a write to command/abstractcs/data*/progbuf* while an
+        // abstract command is in flight is REFUSED by the DM (cmderr=busy),
+        // not applied. The model is untimed and cannot know when that is, so
+        // hand it the RTL's own busy bit. Without this the model applies a
+        // write the DM correctly dropped and then reports the DM as wrong --
+        // which is what any test that deliberately races a command produces.
+        if (backdoor_vif != null)
+          model.set_observed_cmdbusy(backdoor_vif.abstractcs[ABS_BUSY_BIT]);
         model.on_write(txn.dmi_addr, txn.dmi_wdata);
         pending_valid = 1'b1;
         pending_addr  = txn.dmi_addr;
