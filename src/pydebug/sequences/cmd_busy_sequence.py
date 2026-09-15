@@ -42,6 +42,17 @@ CMDERR_NONE, CMDERR_BUSY = 0, 1
 
 ABSTRACTAUTO = 0x18
 
+#: dmcontrol bit positions (#3.14.2). Named, because the first version of
+#: TC-AC-025 wrote bits 6 and 5 for set/clrkeepalive -- they are 5 and 4 -- and
+#: the test passed anyway: it only asserts the hart stays halted, which writing
+#: the wrong bits also satisfies. The miss showed up as two blocks still
+#: uncovered in dm_csrs, not as a failing check.
+DMC_HASEL           = 26
+DMC_SETKEEPALIVE    = 5
+DMC_CLRKEEPALIVE    = 4
+DMC_SETRESETHALTREQ = 3
+DMC_CLRRESETHALTREQ = 2
+
 #: Abstract-command regno space (#3.7.1.1): 0x0000-0x0fff are CSRs and
 #: 0x1000-0x101f are the GPRs. Passing a bare 5 addresses CSR 0x005, which
 #: CVA6 does not implement, and the DM correctly answers cmderr=3 (exception)
@@ -219,16 +230,16 @@ def build_cmd_busy_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession
     # arms in dm_csrs.sv are dead. The DM may ignore them (keepalive is a hint).
     def tc_ac_025():
         base = dm.t.read(DMI.DMCONTROL)
-        dm.t.write(DMI.DMCONTROL, base | (1 << 6))    # setkeepalive
+        dm.t.write(DMI.DMCONTROL, base | (1 << DMC_SETKEEPALIVE))
         with_set = dm.t.read(DMI.DMCONTROL)
-        dm.t.write(DMI.DMCONTROL, base | (1 << 5))    # clrkeepalive
+        dm.t.write(DMI.DMCONTROL, base | (1 << DMC_CLRKEEPALIVE))
         with_clr = dm.t.read(DMI.DMCONTROL)
         # hasel=1 as well. cg_dmcontrol_write samples the WRITE, not its
         # effect, so this bin is reachable even on a single-hart DUT that
         # ties hasel off -- the debugger is still allowed to ask.
-        dm.t.write(DMI.DMCONTROL, base | (1 << 26))   # hasel
-        dm.t.write(DMI.DMCONTROL, base | (1 << 3))    # setresethaltreq
-        dm.t.write(DMI.DMCONTROL, base | (1 << 2))    # clrresethaltreq
+        dm.t.write(DMI.DMCONTROL, base | (1 << DMC_HASEL))
+        dm.t.write(DMI.DMCONTROL, base | (1 << DMC_SETRESETHALTREQ))
+        dm.t.write(DMI.DMCONTROL, base | (1 << DMC_CLRRESETHALTREQ))
         dm.t.write(DMI.DMCONTROL, base)
         ok = dm.is_halted()
         return StepResult(

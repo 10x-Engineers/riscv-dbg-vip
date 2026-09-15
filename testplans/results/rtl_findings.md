@@ -150,6 +150,36 @@ reset is held, release. The hart enters Debug Mode on release and reports
 
 ---
 
+## RTL-005 — `setkeepalive`/`clrkeepalive` cleared before they are tested
+
+**Status:** filed · [`10x-Engineers/riscv-dbg-vip#148`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148)
+**Component:** `riscv-dbg` `src/dm_csrs.sv:590-591` vs `:602-607`
+**Severity:** low — `keepalive` is a hint, but its control bits are specified writable
+
+```systemverilog
+590:    dmcontrol_d.setkeepalive = '0;      // cleared here...
+602:    if(dmcontrol_d.setkeepalive) begin  // ...then tested here, in the SAME always_comb
+```
+
+Last-assignment-wins inside one `always_comb`, so both conditions are constant
+zero and `keepalive` can never be set or cleared.
+
+**Found by code coverage, not by a failing check** — which is the part worth
+keeping. `TC-AC-025` writes both bits and asserts the hart stays halted. It
+**passes**, because ignoring keepalive does not disturb run control. The defect
+appeared only as two blocks that stayed uncovered after the test was added, with
+the DMI writes confirmed correct on the wire (`0x21`, `0x11`) and the bit
+positions matching `dm_pkg.sv`'s own `dmcontrol_t` packing.
+
+A test that passes while proving nothing is exactly what a coverage model is
+supposed to catch.
+
+**Same shape as RTL-002.** Second instance in this file of a later unconditional
+assignment in one `always_comb` killing an earlier one. Worth sweeping
+`dm_csrs.sv` for more rather than fixing the two in isolation.
+
+---
+
 ## Observations that are NOT RTL defects
 
 Recorded because each cost time to diagnose and would otherwise be re-diagnosed.

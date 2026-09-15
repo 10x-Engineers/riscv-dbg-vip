@@ -7,7 +7,7 @@ Generated 2026-09-15.
 | discovery | pass | pass | 2/2 | 0 | `DIS-001`, `DIS-002`, `RST-025` |
 | dm_activation | pass | pass | 3/3 | 0 | `ACT-001`, `ACT-002`, `ACT-003`, `RAP-040` |
 | read_dmstatus | pass | pass | 1/1 | 0 | `RST-031`, `DIS-001` |
-| halt | partial | partial | - | 1 | `HALT-001`, `HALT-002`, `RC-001` |
+| halt | pass ⚠ | partial | 8/8 | 0 | `HALT-001`, `HALT-002`, `RC-001` |
 | run_control | pass | pass | 9/9 | 0 | `HALT-001`, `RES-001`, `RES-002`, `RES-003` |
 | report_halt_status | pass | pass | 4/4 | 0 | `HALT-006`, `DIS-007` |
 | hart_selection | partial | partial | - | 1 | `HS-001`, `HS-002` |
@@ -24,8 +24,11 @@ Generated 2026-09-15.
 | priv_irq | fail | fail | 7/10 | 1 | `DM-011-V`, `SSTEP-006`, `SSTEP-007`, `SSTEP-018-V` |
 | trigger | pass | pass | 13/13 | 0 | `TRIG-001`, `TRIG-002`, `TRIG-006` |
 | external_trigger | pass | pass | 3/3 | 0 | `HG-003`, `RST-041` |
-| sba | partial | partial | - | 1 | `SBA-001`, `SBA-002` |
-| mem_scan | partial ⚠ | pass | - | 1 | `PB-002`, `PB-003` |
+| sba | pass ⚠ | partial | 10/10 | 0 | `SBA-001`, `SBA-002` |
+| mem_scan | pass | pass | 18/18 | 0 | `PB-002`, `PB-003` |
+| cmd_busy | pass | pass | 10/10 | 0 | `AC-020`, `AC-021`, `AC-022`, `AC-023` |
+| dmi_error | pass | pass | 6/6 | 0 | `DTM-010`, `DTM-011`, `DTM-012`, `DTM-013` |
+| debug_entry | fail | fail | 5/7 | 1 | `DCSR-010`, `DCSR-011`, `DCSR-012` |
 
 ## Functional coverage
 
