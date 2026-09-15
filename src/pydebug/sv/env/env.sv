@@ -16,11 +16,11 @@ class debug_env extends uvm_env;
     // an SoC that does not expose its DMI simply runs without the DTM check.
     dbg_dmi_agent    m_dmi_agent;
     debug_scoreboard m_scoreboard;
+    // One coverage component. It samples both the DMI stream and the hart
+    // backdoor: the DM-register covergroups need the former, the Sdext ones
+    // need the latter, and splitting them across two subscribers made the
+    // per-run numbers unmergeable.
     debug_coverage   m_coverage;
-    // Spec-derived coverage. Separate component from m_coverage because it
-    // samples the hart backdoor as well as the DMI stream -- the DM-register
-    // model cannot see dcsr, dpc or which instruction a step stepped over.
-    dm_spec_coverage m_spec_coverage;
     dm_checker       m_model_checker;
 
     function new(string name, uvm_component parent);
@@ -32,7 +32,6 @@ class debug_env extends uvm_env;
         m_agent         = jtag_agent::type_id::create("m_agent", this);
         m_scoreboard    = debug_scoreboard::type_id::create("m_scoreboard", this);
         m_coverage      = debug_coverage::type_id::create("m_coverage", this);
-        m_spec_coverage = dm_spec_coverage::type_id::create("m_spec_coverage", this);
         m_model_checker = dm_checker::type_id::create("m_model_checker", this);
 
         build_axi_taps();
@@ -47,7 +46,6 @@ class debug_env extends uvm_env;
         // observed transaction stream, per VERIFICATION_STRATEGY.md.
         m_agent.monitor.analysis_port.connect(m_scoreboard.analysis_export);
         m_agent.monitor.analysis_port.connect(m_coverage.analysis_export);
-        m_agent.monitor.analysis_port.connect(m_spec_coverage.analysis_export);
         m_agent.monitor.analysis_port.connect(m_model_checker.dmi_export);
 
         // Every AXI tap feeds the same checker port. The correlator filters by

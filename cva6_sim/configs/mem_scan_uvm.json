@@ -1,16 +1,24 @@
 {
     "_comment": [
-        "Read memory through the program buffer.",
+        "Read memory through the program buffer and compare against the ELF.",
         "",
-        "This config was listed in regress/regression.yaml before it existed.",
-        "The Python client died on the missing file, the simulator kept running",
-        "with nothing driving it, and the test burned its whole 900s timeout --",
-        "a missing config looked exactly like a hung DUT.",
+        "base_addr is REQUIRED by the builder -- it has no default. An earlier",
+        "version of this config omitted it, the client died on a TypeError, and",
+        "the simulator ran on with nothing driving it until the test burned its",
+        "whole timeout. A malformed config presented as a hung DUT.",
+        "",
+        "DRAMBase, where the test program is loaded. 16 words is enough to",
+        "exercise the program-buffer read path without spending JTAG time on a",
+        "scan whose length proves nothing extra.",
         "",
         "  make soc_test_cov CFG_FILE=configs/mem_scan_uvm.json"
     ],
     "scenario":  "mem_scan",
     "transport": "uvm",
     "mode":      "batch",
+    "params": {
+        "base_addr":  2147483648,
+        "word_count": 16
+    },
     "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 600.0 }
 }
