@@ -56,6 +56,22 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.halt_sequence",
         "builder": "build_halt_sequence",
     },
+    "step_stall": {
+        "module": "pydebug.sequences.step_stall_sequence",
+        "builder": "build_step_stall_sequence",
+    },
+    "step_classes": {
+        "module": "pydebug.sequences.step_classes_sequence",
+        "builder": "build_step_classes_sequence",
+    },
+    "cmderr": {
+        "module": "pydebug.sequences.cmderr_sequence",
+        "builder": "build_cmderr_sequence",
+    },
+    "priv_irq": {
+        "module": "pydebug.sequences.priv_irq_sequence",
+        "builder": "build_priv_irq_sequence",
+    },
     "read_dmstatus": {
         "module": "pydebug.sequences.read_dmstatus_sequence",
         "builder": "build_read_dmstatus_sequence",

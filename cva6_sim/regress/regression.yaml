@@ -1,0 +1,181 @@
+# regression.yaml — the full CVA6 Debug VIP regression.
+#
+# One entry per test. `make regress` (see mk/regress.mk) runs them all, collects
+# each run's output under sim_outputs/<name>/, and reports a verdict table plus
+# merged functional coverage.
+#
+# Every entry names the ELF it needs. A scenario running against the wrong
+# program does not fail -- it passes while covering nothing, which is how
+# step_stall once reported 9/9 against halt_probe.elf. The ELF is part of the
+# test, not a default.
+#
+# `expect` is the known state today, not an aspiration:
+#   pass     every step passes
+#   fail     a known RTL defect makes it fail; see testplans/results/rtl_findings.md
+#   partial  runs but aborts before its verdict, blocked behind a known defect
+#
+# A test whose result differs from `expect` is what the regression is for.
+
+suite: cva6-debug-vip
+description: >-
+  RISC-V Debug Module verification against CVA6 (cv64a6_imafdc_sv39) with the
+  10x-Engineers riscv-dbg fork. Functional coverage is collected per run and
+  merged across the suite.
+
+defaults:
+  elf: sw/halt_probe.elf
+  timeout_s: 900
+  expect: pass
+
+tests:
+
+  # ── Discovery and activation ──────────────────────────────────────────
+  - name: discovery
+    config: configs/discovery_uvm.json
+    covers: [DIS-001, DIS-002, RST-025]
+    why: Version detection and IDCODE, before anything else is trusted.
+
+  - name: dm_activation
+    config: configs/dm_activation_uvm.json
+    covers: [ACT-001, ACT-002, ACT-003, RAP-040]
+    why: >-
+      Activation, and the check that registers beyond dmstatus.version read
+      sanely -- version reads correctly even on a dead DM.
+
+  - name: read_dmstatus
+    config: configs/read_dmstatus_uvm.json
+    covers: [RST-031, DIS-001]
+    why: The minimal smoke test; if this fails nothing else is meaningful.
+
+  # ── Run control ───────────────────────────────────────────────────────
+  - name: halt
+    config: configs/halt_uvm.json
+    covers: [HALT-001, HALT-002, RC-001]
+    expect: partial
+    why: Aborts on the RTL-002 sbcs mismatch before reaching its verdict.
+
+  - name: run_control
+    config: configs/run_control_uvm.json
+    covers: [HALT-001, RES-001, RES-002, RES-003, RES-007-V]
+    why: Halt and resume, including the section 3.5 resumeack asymmetry.
+
+  - name: report_halt_status
+    config: configs/report_halt_status_uvm.json
+    covers: [HALT-006, DIS-007]
+    why: haltsum0 reflects the halted hart.
+
+  - name: hart_selection
+    config: configs/hart_selection_uvm.json
+    covers: [HS-001, HS-002]
+    expect: partial
+    why: >-
+      RTL-003 -- a nonexistent hart reports allrunning=1. It aborts on that
+      mismatch before reaching a verdict, so `partial` rather than `fail`.
+      Kept in the suite rather than waived so a fix is visible.
+
+  # ── Reset ─────────────────────────────────────────────────────────────
+  - name: reset_ctrl
+    config: configs/reset_ctrl_uvm.json
+    covers: [RST-010, RST-011, RST-060, RST-062, RST-064-V]
+    why: ndmreset and hartreset scope, and the havereset lifecycle.
+
+  - name: halt_on_reset
+    config: configs/halt_on_reset_uvm.json
+    covers: [RST-053, HALT-013]
+    why: >-
+      hasresethaltreq=0 on this DUT (RTL-004), so this exercises the portable
+      substitute: haltreq asserted while ndmreset is held.
+
+  # ── Abstract commands and program buffer ──────────────────────────────
+  - name: gpr_write
+    config: configs/gpr_write_uvm.json
+    covers: [AC-001, AC-002, RAP-025]
+    why: Access Register read and write round-trip.
+
+  - name: csr_access
+    config: configs/csr_access_uvm.json
+    covers: [AC-004, RAP-020, RAP-023]
+    expect: fail
+    why: >-
+      TC-DCSR-003 asserts dscratch0/1 survive a program-buffer command. With
+      hartinfo.nscratch=2 the DM owns them, so the expectation is wrong rather
+      than the RTL. Re-specify the row, then this becomes a pass.
+
+  - name: cmderr
+    config: configs/cmderr_uvm.json
+    covers: [AC-005, AC-006, AC-007, AC-008, AC-009, AC-013, AC-018, AC-019, AC-022-V]
+    why: >-
+      Every abstract-command error class, and the stickiness of cmderr across a
+      subsequent VALID command.
+
+  - name: program_buffer
+    config: configs/program_buffer_uvm.json
+    covers: [PB-001, PB-002, PB-004, AC-010]
+    why: Program buffer execution and the implicit ebreak.
+
+  - name: sw_breakpoint_progbuf
+    config: configs/sw_breakpoint_progbuf_uvm.json
+    covers: [PB-005, DM-001, DM-003]
+    why: ebreak entry and an exception raised inside the buffer.
+
+  # ── Single-step ───────────────────────────────────────────────────────
+  - name: single_step
+    config: configs/single_step_uvm.json
+    covers: [SSTEP-001, SSTEP-012, SSTEP-013]
+    why: The basic step, and that clearing dcsr.step returns to free running.
+
+  - name: step_stall
+    config: configs/step_stall_uvm.json
+    elf: sw/step_stall_probe.elf
+    covers: [SSTEP-004, RTL-001]
+    why: >-
+      The wfi step. Regression for RTL-001 -- it passes only with the
+      csr_regfile fix applied, and deadlocks without it.
+
+  - name: step_classes
+    config: configs/step_classes_uvm.json
+    elf: sw/step_classes.elf
+    covers: [SSTEP-014-V, SSTEP-019, SSTEP-015]
+    why: >-
+      One instruction of every class the step coverage bins: ordinary,
+      compressed, load, store, taken and not-taken branch, trap, privilege
+      change, wfi.
+
+  - name: priv_irq
+    config: configs/priv_irq_uvm.json
+    elf: sw/priv_walk.elf
+    timeout_s: 600
+    covers: [DM-011-V, SSTEP-006, SSTEP-007, SSTEP-018-V, SSTEP-022-V]
+    expect: fail
+    why: >-
+      Cycles M -> S -> U and steps in each. Currently FAILS: the halt phase
+      catches S but never U, and the step walk stays in M, so the privilege
+      bins are only partly filled. dcsr.prv itself is correct -- a separate
+      priv_lvl_q diagnostic confirmed that -- so this is the test not yet
+      driving the hart where it needs to go, not an RTL defect. Recorded as
+      failing rather than relaxed to make the suite green.
+
+  # ── Triggers and external ─────────────────────────────────────────────
+  - name: trigger
+    config: configs/trigger_uvm.json
+    covers: [TRIG-001, TRIG-002, TRIG-006]
+    why: Trigger enumeration and disable.
+
+  - name: external_trigger
+    config: configs/external_trigger_uvm.json
+    covers: [HG-003, RST-041]
+    why: dmcs2 external trigger into a halt group.
+
+  # ── System bus ────────────────────────────────────────────────────────
+  - name: sba
+    config: configs/sba_uvm.json
+    covers: [SBA-001, SBA-002]
+    expect: partial
+    why: >-
+      Blocked behind RTL-002. Kept in the suite so the day sbaccess becomes
+      writable the coverage moves without anyone remembering to re-enable it.
+
+  - name: mem_scan
+    config: configs/mem_scan_uvm.json
+    covers: [PB-002, PB-003]
+    why: Memory read through the program buffer.

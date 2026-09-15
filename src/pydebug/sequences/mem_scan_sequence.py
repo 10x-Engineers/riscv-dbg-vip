@@ -7,6 +7,8 @@ them against an optional expected pattern.
 Shows how the same library (riscv_dm) is reused without any changes.
 """
 
+from __future__ import annotations
+
 from pydebug.api import RISCVDebug, DebugSession, StepResult
 
 

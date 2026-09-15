@@ -16,6 +16,10 @@ class debug_env extends uvm_env;
     // an SoC that does not expose its DMI simply runs without the DTM check.
     dbg_dmi_agent    m_dmi_agent;
     debug_scoreboard m_scoreboard;
+    // One coverage component. It samples both the DMI stream and the hart
+    // backdoor: the DM-register covergroups need the former, the Sdext ones
+    // need the latter, and splitting them across two subscribers made the
+    // per-run numbers unmergeable.
     debug_coverage   m_coverage;
     dm_checker       m_model_checker;
 
