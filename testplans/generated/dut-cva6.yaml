@@ -1,0 +1,74 @@
+# DUT profile — the version/RTL axis for a generated testplan.
+#
+# Without one, every row is written against the target spec and nothing is
+# marked rtl-unsupported, which reads as "all of this is tested" when it is not.
+#
+# This example describes the CVA6 fork used by riscv-dbg-vip. Copy and edit.
+
+name: cva6-10x-fork
+description: >-
+  CVA6 (cv64a6_imafdc_sv39) with the 10x-Engineers riscv-dbg fork as its Debug
+  Module. Reports dmstatus.version=3.
+
+target_spec: "1.0"        # what the plan is written against
+rtl_spec: "1.0"           # what the RTL claims, read from dmstatus.version
+
+# Discovered, not assumed. Read these from the DUT rather than trusting docs.
+discovered:
+  dmstatus.version: 3
+  dmstatus.impebreak: 1
+  dmstatus.hasresethaltreq: 0     # halt-on-reset unavailable on this DUT
+  hartinfo.nscratch: 2            # DM uses dscratch0/1 -- see known_deviations
+  abstractcs.progbufsize: 8
+  abstractcs.datacount: 2
+
+implemented:
+  - abstract_access_register
+  - program_buffer
+  - system_bus_access
+  - halt_groups
+  - triggers_sdtrig
+
+absent:
+  - quick_access                  # command cmdtype=1
+  - abstract_access_memory        # command cmdtype=2
+  - hart_array                    # hasel / hawindow
+  - zawrs                         # so wrs.sto / wrs.nto rows are rtl-unsupported
+
+# Places the RTL and the spec disagree. Every entry must name where it was
+# raised. A deviation recorded here and nowhere else is a bug being buried.
+known_deviations:
+  - id: DEV-SBCS-001
+    field: sbcs.sbaccess
+    observed: "sbaccess=3 (from sbcs=0x20160808)"
+    expected: "sbaccess=2 (spec reset constant; model predicts sbcs=0x20140808)"
+    note: >-
+      Bit 17 is sbaccess[0] -- the 3-bit size-select field -- NOT one of the
+      sbaccess8/16/32/64/128 support bits, as previously recorded here.
+      The spec declares sbaccess R/W with a reset value of constant 2 (not
+      "Preset"), and grants no permission anywhere to tie or legalise it.
+      dm_csrs.sv:618 forces `(BusWidth == 64) ? 3 : 2` unconditionally, later
+      in the same always_comb than the DMI write at :513, so no debugger write
+      can stick. This also makes the spec's sberror=4 path unreachable.
+      NOT a PR #4 regression: git log -L attributes the line to 17e912c
+      "Updated 1.0 debug module", which replaced the v0.13 support-bit block.
+    raised: "unfiled"
+
+  - id: DEV-WFI-STEP-001
+    field: csr_regfile.sv wfi_ctrl
+    observed: "hart stalls on a stepped wfi; dmstatus.allrunning stays 1"
+    expected: "stepped wfi treated as a nop (Sdext #stepbit)"
+    note: >-
+      wfi_ctrl arms the stall without checking dcsr.step. Fixed by gating on
+      !dcsr_q.step.
+    raised: "openhwgroup/cva6#3549 (duplicate of #3497, PR #3525)"
+
+# Scenarios known to abort before reaching their verdict, so coverage from them
+# is partial. Stating this stops a coverage number being read as complete.
+partial_scenarios:
+  - name: sba_uvm
+    reason: "aborts on DEV-SBCS-001; sbcs/sb_access covergroups stay at 0%"
+  - name: halt_uvm
+    reason: "aborts on DEV-SBCS-001"
+  - name: hart_selection_uvm
+    reason: "aborts on a dmstatus model/RTL mismatch (0x0080c083 vs 0x0080cc83)"
