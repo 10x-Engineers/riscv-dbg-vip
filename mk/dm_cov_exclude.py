@@ -60,6 +60,31 @@ RULES = [
 ]
 
 
+#: Toggle exclusions are stated per signal, not per bit. A 64-bit bus whose
+#: upper half can never be driven is one fact about the DUT, not 32 facts.
+TOGGLE_RULES = [
+    ("sba-64bit-upper-half",
+     r"^(sbaddress|sbdata|master_add_o|master_wdata_o|master_r_rdata_i|address)",
+     "the System Bus is 64 bits wide (sbasize=64, sbaccess64) but the DM is "
+     "driven over a 32-bit DMI against a memory map below 4 GB, so the upper "
+     "half of every SBA address and data bus has no reachable value",
+     "a target with memory above 4 GB, or a 64-bit DMI"),
+]
+
+
+def parse_toggles(report: Path):
+    """Yield (instance, signal, bit) for every signal bit that never toggled."""
+    txt = report.read_text(encoding="utf-8", errors="replace")
+    for name, body in zip(*[iter(re.split(r"^== (\S+)$", txt, flags=re.M)[1:])] * 2):
+        sec = re.search(r"Toggle Detail Report.*", body, re.S)
+        if not sec:
+            continue
+        for full, _rise, _fall, sig in re.findall(
+                r"^(\d)\s+(\d)\s+(\d)\s+(\S+)\s*$", sec.group(0), re.M):
+            if full == "0":
+                yield name, sig
+
+
 def parse(report: Path):
     """Yield (instance, block_index, source) for every uncovered block."""
     txt = report.read_text(encoding="utf-8", errors="replace")
@@ -114,10 +139,46 @@ def main() -> int:
             out.append(f'exclude -inst {{{inst}}} -block {idx} '
                        f'-comment {{{rule}: {why}}}')
         out.append("")
+    # ── toggle exclusions ────────────────────────────────────────────────
+    tog = list(parse_toggles(Path(a.report)))
+    tmatched: dict[str, list] = {r[0]: [] for r in TOGGLE_RULES}
+    tunmatched = []
+    for inst, sig in tog:
+        base = re.sub(r"\[\d+\].*$", "", sig).split(".")[0]
+        for rule, pat, _why, _when in TOGGLE_RULES:
+            if re.match(pat, base):
+                tmatched[rule].append((inst, sig))
+                break
+        else:
+            tunmatched.append((inst, base))
+    if tog:
+        out += ["", "# " + "=" * 74,
+                "# Toggle exclusions -- stated per signal, because a 64-bit bus whose",
+                "# upper half can never be driven is one fact about the DUT, not 32.",
+                "# " + "=" * 74, ""]
+        for rule, _pat, why, when in TOGGLE_RULES:
+            hits = tmatched[rule]
+            out.append(f"# ---- {rule} ({len(hits)} bit(s)) ----")
+            out += [f"#   why       : {why}", f"#   reachable : {when}"]
+            if not hits:
+                out.append("#   NO LONGER MATCHES -- delete this rule.")
+            for inst, sig in hits:
+                total += 1
+                out.append(f'exclude -inst {{{inst}}} -toggle {{{sig}}} '
+                           f'-comment {{{rule}: {why}}}')
+            out.append("")
+
     Path(a.out).write_text("\n".join(out) + "\n", encoding="utf-8")
 
     print(f"wrote {a.out}: {total} exclusion(s) across "
           f"{sum(1 for r in RULES if matched[r[0]])} rule(s)")
+    if tunmatched:
+        import collections
+        c = collections.Counter(b for _i, b in tunmatched)
+        print(f"\n{len(tunmatched)} untoggled bit(s) NOT excluded -- real toggle "
+              f"holes, top signal groups:")
+        for base, n in c.most_common(12):
+            print(f"  {base:<34} {n:>5} bits")
     if unmatched:
         print(f"\n{len(unmatched)} uncovered block(s) NOT excluded -- these are real "
               f"coverage holes, not unreachable code:")

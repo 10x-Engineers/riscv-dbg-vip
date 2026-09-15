@@ -198,3 +198,23 @@ tests:
       a new transport op; without it dmireset, dmihardreset and the DTM's whole
       error-recovery path were unreachable from a scenario.
     expect: pass
+
+  - name: debug_entry
+    config: configs/debug_entry_uvm.json
+    elf: sw/step_classes.elf
+    covers: [DCSR-010, DCSR-011, DCSR-012]
+    why: >-
+      dcsr.cause values that come from the hart's own execution rather than from
+      a DMI write: ebreak (1) and a fired trigger (2). Sets dpc to a parked label
+      in the program and resumes into it. Checks the ebreakm=0 negative case
+      first, or the positive test passes for the wrong reason.
+    expect: fail
+    known: >-
+      5/7. The ebreakm=0 negative case passes, so dcsr and dpc are being written
+      and the hart does run through the ebreak. What does not happen is debug
+      entry with ebreakm=1 -- the hart runs past the ebreak and the next command
+      then hits a running hart (cmderr=4). Unresolved: either the dcsr write is
+      not persisting across the resume, or CVA6 gates ebreak entry on something
+      this sequence is not setting. Instrumented to report dcsr/dpc read-back
+      and the post-halt state, so the next run says which. Recorded as a known
+      failure rather than left silently red.

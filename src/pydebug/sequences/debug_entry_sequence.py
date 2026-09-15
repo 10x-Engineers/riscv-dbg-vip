@@ -139,8 +139,23 @@ def build_debug_entry_sequence(
             return StepResult(ok=False, msg="hart would not halt")
         dcsr = dm.read_gpr(DCSR_REGNO)
         dm.write_gpr(DCSR_REGNO, dcsr | DCSR_EBREAKM)
+        wrote = dm.read_gpr(DCSR_REGNO)          # did ebreakm actually stick?
         dm.write_gpr(DPC_REGNO, addrs["cls_ebreak"])
+        dpc_set = dm.read_gpr(DPC_REGNO)         # did dpc actually stick?
         entered = _run_to_debug(dm)
+        if not entered:
+            # Reading any CSR now would hit a running hart and answer
+            # cmderr=4, which says nothing about why the hart did not stop.
+            _ensure_halted(dm)
+            cause = _cause(dm.read_gpr(DCSR_REGNO))
+            dpc = dm.read_gpr(DPC_REGNO)
+            return StepResult(
+                ok=False,
+                msg=f"TC-DCSR-010: hart did not enter Debug Mode. "
+                    f"ebreakm write: dcsr 0x{dcsr:08x} -> 0x{wrote:08x} "
+                    f"(ebreakm={'1' if wrote & DCSR_EBREAKM else '0'}); "
+                    f"dpc set to 0x{dpc_set:08x} (wanted 0x{addrs['cls_ebreak']:08x}); "
+                    f"after forcing a halt: cause={cause} dpc=0x{dpc:08x}")
         cause = _cause(dm.read_gpr(DCSR_REGNO))
         dpc = dm.read_gpr(DPC_REGNO)
         ok = entered and cause == CAUSE_EBREAK

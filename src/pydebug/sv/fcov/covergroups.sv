@@ -1229,15 +1229,22 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       // the reason rather than deleted, so a DUT that implements sbaccess as
       // the spec requires is still measured against all of them.
       cp_sbaccess: coverpoint s_sbaccess {
-        bins size8   = {0} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd0);
-        bins size16  = {1} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd1);
-        bins size32  = {2} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd2);
-        bins size64  = {3} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd3);
-        bins size128 = {4} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd4);
-        // RAP-007-C3 needs an unsupported value to be RETAINED, which a
-        // hardwired field cannot do.
-        bins unsupported_written = {7} iff (dut_sbaccess_writable);
+        bins size8 = {0}; bins size16 = {1}; bins size32 = {2};
+        bins size64 = {3}; bins size128 = {4};
+        bins unsupported_written = {7};     // RAP-007-C3
         ignore_bins undefined = {5, 6};
+        // A DUT that hardwires sbaccess can only ever read back the one width
+        // it is wired to, so every other bin is a hole whose cause is the DUT
+        // rather than the stimulus. Excluded by DECLARED parameter, not
+        // deleted: a DUT that implements sbaccess as R/W is still measured
+        // against all of them, and when issue #147 is fixed this exclusion
+        // stops applying on its own.
+        //
+        // `iff` is not legal on an individual bin -- it guards a whole
+        // coverpoint -- so this is a value-set filter, matching the idiom
+        // cp_hasresethaltreq and cp_stickyunavail already use.
+        ignore_bins hardwired = {[0:7]} with
+            (!dut_sbaccess_writable && item != int'(dut_sbaccess_fixed));
       }
       cp_sberror: coverpoint s_sberror {
         bins none = {0};                    // SBA-001-C
