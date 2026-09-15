@@ -394,13 +394,24 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             bins write = {dm_defines_pkg::DMI_WRITE};
         }
 
+        // failed and busy are reached only by error injection -- an
+        // unimplemented-address access, or back-to-back scans with insufficient
+        // idle. They were ignore_bins here, which waived precisely the two bins
+        // a transport-error test exists to hit. Binned properly instead, so the
+        // gap shows as coverage rather than as a silent exclusion.
         cp_status : coverpoint status {
             bins success = {dm_defines_pkg::DMI_STAT_SUCCESS};
-            // failed/busy are DMI error/back-pressure conditions reached only by
-            // error injection (unimplemented-address access, back-to-back scans
-            // with insufficient idle) — corner cases with no stimulus in this pass.
-            ignore_bins failed = {dm_defines_pkg::DMI_STAT_FAILED};
-            ignore_bins busy   = {dm_defines_pkg::DMI_STAT_BUSY};
+            bins failed  = {dm_defines_pkg::DMI_STAT_FAILED};
+            bins busy    = {dm_defines_pkg::DMI_STAT_BUSY};
+            illegal_bins reserved = {1};   // 1 is not a defined response encoding
+        }
+
+        // Reads and writes fail differently: a failed read returns stale data, a
+        // failed write may have partially applied. Neither coverpoint alone
+        // separates those.  DTM-010-V
+        x_op_x_status : cross cp_op, cp_status {
+            ignore_bins nop_cannot_be_busy =
+                binsof(cp_op.nop) && binsof(cp_status.busy);
         }
 
         // The cross exists only to assert the one architecturally-illegal combo: a
@@ -817,10 +828,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cp_busy : coverpoint r[ABS_BUSY] { bins idle = {0}; bins busy = {1}; }
         // A clean completion is the basic case. cmderr!=0 error codes are the
         // corner-case (negative) paths and are not binned in this pass.
-        cp_cmderr_none : coverpoint (r[ABS_CMDERR_LSB +: 3] == CMDERR_NONE) {
-            bins clean = {1};
-            ignore_bins error = {0};
-        }
         // Whether a Program Buffer exists at all (discovery). Its exact slot count
         // is not a basic-feature distinction. `none` is unreachable on any DUT that
         // implements a Program Buffer (both project DUTs do, progbufsize>0), so it
@@ -862,9 +869,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         // sbaccess only carries the debugger's choice on a write; on a read it
         // reflects current config. Either way, seeing the 32-bit selection is the
         // basic case.
-        cp_access32 : coverpoint (w[SBCS_SBACCESS_LSB +: 3] == SBACCESS_32) {
-            bins acc32 = {1};
-        }
         cp_readonaddr : coverpoint w[SBCS_SBREADONADDR] { bins off = {0}; bins on = {1}; }
         // sbbusy is only meaningful on a status read; gate the sample so a config
         // write's (busy=0) word doesn't count as "saw idle" spuriously.
@@ -1013,8 +1017,7 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     logic [1:0]  s_mode_prev, s_mode_curr;
     logic        s_haltreq_during_step;
     logic        s_stepping;        // dcsr.step set when the transition happened
-    logic [2:0]  s_dmi_op, s_dmi_result;
-    logic [2:0]  s_cmderr;
+      logic [2:0]  s_cmderr;
     logic [2:0]  s_sbaccess;
     logic [2:0]  s_sberror;
     logic [1:0]  s_dpc_origin;
@@ -1186,29 +1189,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       }
     endgroup
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // cg_dtm_dmi -- the transport carries every operation and reports every
-    // outcome. spec: dtm.html#dmi
-    // ══════════════════════════════════════════════════════════════════════════
-    covergroup cg_dtm_dmi;
-      option.per_instance = 1;
-
-      cp_dmi_op: coverpoint s_dmi_op {
-        bins nop = {0}; bins read = {1}; bins write = {2}; bins reserved = {3};
-      }
-      cp_dmi_result: coverpoint s_dmi_result {
-        bins success = {0};                 // DTM-003-C
-        bins failed  = {2};                 // DTM-005-C
-        bins busy    = {3};                 // DTM-004-C
-        illegal_bins reserved_result = {1}; // 1 is not a defined response
-      }
-      // Reads and writes fail differently: a failed read returns stale data, a
-      // failed write may partially apply.  DTM-010-V
-      x_op_x_result: cross cp_dmi_op, cp_dmi_result {
-        ignore_bins nop_cannot_be_busy =
-            binsof(cp_dmi_op.nop) && binsof(cp_dmi_result.busy);
-      }
-    endgroup
 
     // ══════════════════════════════════════════════════════════════════════════
     // cg_abstract_cmd -- every failure mode distinct enough for a debugger to
@@ -1303,7 +1283,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cg_debug_entry   = new();
         cg_step_external = new();
         cg_hart_mode     = new();
-        cg_dtm_dmi       = new();
         cg_abstract_cmd  = new();
         cg_sba           = new();
     endfunction
@@ -1522,10 +1501,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         // from the DM backdoor rather than from a decoded DMI read, so a
         // failing command is binned even when the sequence never reads
         // abstractcs back.
-        s_dmi_op     = t.dmi_op;
-        s_dmi_result = t.dmi_status;
-        cg_dtm_dmi.sample();
-
         if (dm_vif != null) begin
             s_cmderr   = dm_vif.abstractcs[10:8];
             cg_abstract_cmd.sample();
@@ -1774,11 +1749,6 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       report_cp("  cp_mode_transition", cg_hart_mode.cp_mode_transition.get_inst_coverage());
       report_cp("  cp_haltreq_guard",   cg_hart_mode.cp_haltreq_guard.get_inst_coverage());
 
-      report_cg("cg_dtm_dmi", cg_dtm_dmi.get_inst_coverage());
-      report_cp("  cp_dmi_op",     cg_dtm_dmi.cp_dmi_op.get_inst_coverage());
-      report_cp("  cp_dmi_result", cg_dtm_dmi.cp_dmi_result.get_inst_coverage());
-      report_cp("  x_op_x_result", cg_dtm_dmi.x_op_x_result.get_inst_coverage());
-
       report_cg("cg_abstract_cmd", cg_abstract_cmd.get_inst_coverage());
       report_cp("  cp_cmderr", cg_abstract_cmd.cp_cmderr.get_inst_coverage());
 
@@ -1806,8 +1776,8 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
 
     function real overall();
       return (cg_debug_entry.get_inst_coverage() + cg_step_external.get_inst_coverage()
-            + cg_hart_mode.get_inst_coverage()   + cg_dtm_dmi.get_inst_coverage()
-            + cg_abstract_cmd.get_inst_coverage()+ cg_sba.get_inst_coverage()) / 6.0;
+            + cg_hart_mode.get_inst_coverage()
+            + cg_abstract_cmd.get_inst_coverage()+ cg_sba.get_inst_coverage()) / 5.0;
     endfunction
 
 
