@@ -77,6 +77,12 @@ def _ensure_halted(dm, limit: int = 200) -> bool:
     just a missing precondition, and it then poisons every later step because
     cmderr is sticky.
     """
+    # cmderr is sticky (#3.14.13): once any command fails, every later one is
+    # refused with the SAME error until it is cleared. A single command issued
+    # to a running hart therefore poisons the whole rest of the sequence, and
+    # each later step reports cmderr=4 as though it had made the mistake
+    # itself. Clear it before checking anything else.
+    dm.t.write(DMI.ABSTRACTCS, 0x7 << 8)
     if dm.is_halted():
         return True
     dm.halt()

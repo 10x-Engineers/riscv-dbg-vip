@@ -315,6 +315,13 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     bit [3:0] dut_version           = VERSION_0_13;
     bit       dut_hasresethaltreq   = 1'b0;
     bit       dut_stickyunavail     = 1'b0;
+    // sbcs.sbaccess is R/W with a spec reset of 2, but a DUT may hardwire it.
+    // When it is not writable exactly one width is ever observable, and
+    // binning the others as holes reports a stimulus gap where the real cause
+    // is the DUT -- see issue #147 (RTL-002).
+    bit       dut_sbaccess_writable = 1'b1;
+    bit [2:0] dut_sbaccess_fixed    = 3'd2;
+    bit       dut_supports_hasel    = 1'b0;
 
     // ── Inferred state, rebuilt from the bus exactly as a debugger would ──────
     int unsigned num_harts       = 1;   // DUT config, from the config_db
@@ -1217,10 +1224,19 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     covergroup cg_sba;
       option.per_instance = 1;
 
+      // When the DUT hardwires sbaccess, the only width a debugger can ever
+      // observe is the one it is wired to. The other bins are excluded with
+      // the reason rather than deleted, so a DUT that implements sbaccess as
+      // the spec requires is still measured against all of them.
       cp_sbaccess: coverpoint s_sbaccess {
-        bins size8 = {0}; bins size16 = {1}; bins size32 = {2};
-        bins size64 = {3}; bins size128 = {4};
-        bins unsupported_written = {7};     // RAP-007-C3
+        bins size8   = {0} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd0);
+        bins size16  = {1} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd1);
+        bins size32  = {2} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd2);
+        bins size64  = {3} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd3);
+        bins size128 = {4} iff (dut_sbaccess_writable || dut_sbaccess_fixed == 3'd4);
+        // RAP-007-C3 needs an unsupported value to be RETAINED, which a
+        // hardwired field cannot do.
+        bins unsupported_written = {7} iff (dut_sbaccess_writable);
         ignore_bins undefined = {5, 6};
       }
       cp_sberror: coverpoint s_sberror {
@@ -1263,6 +1279,9 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         dut_version         = cfg.get_version();
         dut_hasresethaltreq = cfg.get_bool("hasresethaltreq");
         dut_stickyunavail   = cfg.get_bool("stickyunavail");
+        dut_sbaccess_writable = cfg.get_bool("sbaccess_writable");
+        dut_sbaccess_fixed    = cfg.get_int("sbaccess_reset");
+        dut_supports_hasel    = cfg.get_bool("supports_hasel");
 
         cg_dmi_access      = new();
         cg_dmcontrol_write = new();

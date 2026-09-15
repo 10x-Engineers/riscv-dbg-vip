@@ -223,6 +223,12 @@ def build_cmd_busy_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession
         with_set = dm.t.read(DMI.DMCONTROL)
         dm.t.write(DMI.DMCONTROL, base | (1 << 5))    # clrkeepalive
         with_clr = dm.t.read(DMI.DMCONTROL)
+        # hasel=1 as well. cg_dmcontrol_write samples the WRITE, not its
+        # effect, so this bin is reachable even on a single-hart DUT that
+        # ties hasel off -- the debugger is still allowed to ask.
+        dm.t.write(DMI.DMCONTROL, base | (1 << 26))   # hasel
+        dm.t.write(DMI.DMCONTROL, base | (1 << 3))    # setresethaltreq
+        dm.t.write(DMI.DMCONTROL, base | (1 << 2))    # clrresethaltreq
         dm.t.write(DMI.DMCONTROL, base)
         ok = dm.is_halted()
         return StepResult(
