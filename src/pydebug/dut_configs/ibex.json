@@ -21,6 +21,8 @@
     "nextdm": "0x0",
     "sbversion": 1,
     "sbasize": 32,
+    "sbaccess_reset": 2,
+    "sbaccess_writable": true,
     "sbaccess128": false,
     "sbaccess64": false,
     "sbaccess32": true,

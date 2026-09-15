@@ -128,6 +128,8 @@ class dm_checker extends uvm_component;
     c.dataaddr           = r.get_int("dataaddr");
     c.sbversion          = r.get_int("sbversion");
     c.sbasize            = r.get_int("sbasize");
+    c.sbaccess_reset     = r.get_int("sbaccess_reset")[2:0];
+    c.sbaccess_writable  = r.get_bool("sbaccess_writable");
     c.sbaccess128        = r.get_bool("sbaccess128");
     c.sbaccess64         = r.get_bool("sbaccess64");
     c.sbaccess32         = r.get_bool("sbaccess32");
@@ -401,6 +403,13 @@ class dm_checker extends uvm_component;
           "DMI addr=0x%02h: RTL returned 0x%08h, dm_ref_model expected 0x%08h (compared over 0x%08h) -- reported only, not auto-resolved (author decides RTL vs model vs accepted difference; see VERIFICATION_STRATEGY.md)",
           addr, actual, model.predict(addr), model.predict_mask(addr)))
     end
+
+    // #3.10: with sbreadondata set, the act of READING sbdata0 starts the next
+    // system bus read. That side effect is driven by the read itself, so it
+    // has to be applied here -- after the comparison, or this read would be
+    // checked against the value the NEXT one will return.
+    if (addr == dm_defines_pkg::DM_ADDR_SBDATA0)
+      model.observe_sbdata0_read();
   endfunction
 
   // ── Model vs RTL, by backdoor ───────────────────────────────────────────
