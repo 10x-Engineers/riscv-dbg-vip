@@ -10,7 +10,7 @@ Generated 2026-09-15.
 | halt | partial | partial | - | 1 | `HALT-001`, `HALT-002`, `RC-001` |
 | run_control | pass | pass | 9/9 | 0 | `HALT-001`, `RES-001`, `RES-002`, `RES-003` |
 | report_halt_status | pass | pass | 4/4 | 0 | `HALT-006`, `DIS-007` |
-| hart_selection | partial ⚠ | fail | - | 1 | `HS-001`, `HS-002` |
+| hart_selection | partial | partial | - | 1 | `HS-001`, `HS-002` |
 | reset_ctrl | pass | pass | 11/11 | 0 | `RST-010`, `RST-011`, `RST-060`, `RST-062` |
 | halt_on_reset | pass | pass | 6/6 | 0 | `RST-053`, `HALT-013` |
 | gpr_write | pass | pass | 4/4 | 0 | `AC-001`, `AC-002`, `RAP-025` |
@@ -21,11 +21,11 @@ Generated 2026-09-15.
 | single_step | pass | pass | 9/9 | 0 | `SSTEP-001`, `SSTEP-012`, `SSTEP-013` |
 | step_stall | pass | pass | 9/9 | 0 | `SSTEP-004`, `RTL-001` |
 | step_classes | pass | pass | 9/9 | 0 | `SSTEP-014-V`, `SSTEP-019`, `SSTEP-015` |
-| priv_irq | fail ⚠ | pass | 7/10 | 1 | `DM-011-V`, `SSTEP-006`, `SSTEP-007`, `SSTEP-018-V` |
+| priv_irq | fail | fail | 7/10 | 1 | `DM-011-V`, `SSTEP-006`, `SSTEP-007`, `SSTEP-018-V` |
 | trigger | pass | pass | 13/13 | 0 | `TRIG-001`, `TRIG-002`, `TRIG-006` |
 | external_trigger | pass | pass | 3/3 | 0 | `HG-003`, `RST-041` |
 | sba | partial | partial | - | 1 | `SBA-001`, `SBA-002` |
-| mem_scan | timeout ⚠ | pass | - | 0 | `PB-002`, `PB-003` |
+| mem_scan | partial ⚠ | pass | - | 1 | `PB-002`, `PB-003` |
 
 ## Functional coverage
 
@@ -37,15 +37,12 @@ coverpoint credit only the higher. A true merge needs `imc`.
 |---|---:|
 | `cg_abstract_cmd` | 83.33% |
 | `cg_debug_entry` | 32.67% |
-| `cg_dtm_dmi` | 45.20% |
 | `cg_hart_mode` | 87.50% |
 | `cg_sba` | 25.00% |
 | `cg_step_external` | 41.96% |
 | `cp_cause` | 50.00% |
 | `cp_cmderr` | 83.33% |
 | `cp_consecutive` | 100.00% |
-| `cp_dmi_op` | 75.00% |
-| `cp_dmi_result` | 33.33% |
 | `cp_dpc_origin` | 50.00% |
 | `cp_haltreq_guard` | 100.00% |
 | `cp_mode_transition` | 75.00% |
@@ -60,4 +57,3 @@ coverpoint credit only the higher. A true merge needs `imc`.
 | `x_class_x_consecutive` | 43.75% |
 | `x_class_x_prv` | 16.67% |
 | `x_class_x_stepie` | 12.50% |
-| `x_op_x_result` | 27.27% |
