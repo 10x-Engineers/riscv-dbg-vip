@@ -158,6 +158,13 @@ class UVMTransport(DebugTransport):
         if "data" not in resp:
             raise TransportError(f"UVMTransport read: no data in response: {resp}")
         val = resp["data"]
+        # The simulator reports X/Z bits separately: they arrive in `data` as 0,
+        # and a register that reads X is a defect however the value looks.
+        xmask = resp.get("xmask", 0)
+        if xmask:
+            raise TransportError(
+                f"UVMTransport read addr=0x{addr:02x}: X/Z in bits 0x{xmask:08x} "
+                f"(2-state value 0x{val:08x})")
         log.debug("[UVMTransport] read  addr=0x%02x -> 0x%08x", addr, val)
         return val
 
@@ -168,6 +175,79 @@ class UVMTransport(DebugTransport):
     def reset(self) -> None:
         self._transact({"op": "reset"})
         log.info("[UVMTransport] reset issued")
+
+    def dtmcs(self, wdata: int = 0) -> int:
+        """
+        Read, and optionally write, the DTM's dtmcs register (JTAG IR 0x10).
+
+        dtmcs belongs to the Debug Transport Module, not the Debug Module, so
+        it has no DMI address and cannot go through read()/write(). Its two
+        control bits are W1 -- `dmireset` (16) clears the sticky DMI error
+        state, `dmihardreset` (17) also cancels outstanding transactions -- so
+        the default wdata=0 is a pure status read with no side effect.
+        """
+        rsp = self._transact({"op": "dtmcs", "data": wdata & 0xFFFFFFFF})
+        val = rsp.get("data", 0)
+        log.debug("[UVMTransport] dtmcs: wrote 0x%08x, read 0x%08x", wdata, val)
+        return val
+
+    #: DMI op field values for dmi_scan() (spec #6.1.5).
+    DMI_NOP, DMI_READ, DMI_WRITE = 0, 1, 2
+
+    def dmi_scan(self, op: int, addr: int = 0, data: int = 0) -> int:
+        """
+        One raw DMI DR scan with no IR scan in front and no retry on busy.
+
+        Returns the dmistat this scan captured -- the status of the PREVIOUS
+        request (#6.1.5), 3 if it was still in flight. read()/write() can
+        never return 3: their IR scan gives the DTM time to finish, and they
+        retry. This is how a scenario provokes the DTM's sticky busy on
+        purpose. The IR must already select DMI, and the scenario must clear
+        the error with dtmcs(dmireset) afterwards -- until it does, the
+        scoreboard treats busy as expected.
+        """
+        rsp = self._transact({"op": "dmi_scan", "dmiop": op & 0x3,
+                              "addr": addr & 0x7F, "data": data & 0xFFFFFFFF})
+        stat = rsp.get("data", 0) & 0x3
+        log.debug("[UVMTransport] dmi_scan op=%d addr=0x%02x -> dmistat=%d", op, addr, stat)
+        return stat
+
+    #: JTAG instructions (spec #6.1.2; 0x00 and 0x1f both select BYPASS).
+    IR_IDCODE, IR_BYPASS0, IR_BYPASS1 = 0x01, 0x00, 0x1F
+
+    def jtag_scan(self, ir: int, dr_len: int, data: int = 0, pause: bool = False) -> int:
+        """
+        Select `ir`, then shift `dr_len` (1-32) bits of `data` through the DR it
+        selects, returning the bits captured. With pause=True both shifts go
+        through Pause and Exit2. This reaches the TAP's own registers (IDCODE,
+        BYPASS), which read()/write()/dtmcs() never select.
+        """
+        if not 1 <= dr_len <= 32:
+            raise ValueError(f"jtag_scan: dr_len {dr_len} outside 1..32")
+        rsp = self._transact({"op": "jtag_scan", "ir": ir & 0x1F, "drlen": dr_len,
+                              "pause": int(pause), "data": data & 0xFFFFFFFF})
+        val = rsp.get("data", 0) & ((1 << dr_len) - 1)
+        log.debug("[UVMTransport] jtag_scan ir=0x%02x len=%d -> 0x%08x", ir, dr_len, val)
+        return val
+
+    def sim_time_s(self) -> float:
+        """
+        The simulator's current time, in seconds (ns resolution). Timing
+        bounds the spec states in real time apply to simulated time here;
+        host wall-clock time measures only how fast the simulator runs.
+        """
+        return self._transact({"op": "sim_time"}).get("data", 0) * 1e-9
+
+    def tms_walk(self, tms: list) -> None:
+        """
+        Clock the TAP through `tms` (up to 32 values) with TDI held at 1. Must
+        start and end in Run-Test/Idle; select BYPASS first (see
+        tms_walk_seq.sv) so any Update-DR on the way is harmless.
+        """
+        if not 1 <= len(tms) <= 32:
+            raise ValueError(f"tms_walk: {len(tms)} bits, expected 1..32")
+        bits = sum(int(b) << i for i, b in enumerate(tms))
+        self._transact({"op": "tms_walk", "addr": len(tms), "data": bits})
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

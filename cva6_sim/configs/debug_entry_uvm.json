@@ -1,0 +1,10 @@
+{
+    "scenario":  "debug_entry",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": { "elf": "sw/step_classes.elf" },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout":     300.0
+    }
+}

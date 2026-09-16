@@ -138,6 +138,9 @@ class jtag_monitor extends uvm_monitor;
           dr_bit   = 0;
           dr_reset = 1;
         end
+        // Test-Logic-Reset selects IDCODE, so a DR-only scan after a TMS
+        // reset is not a DMI access however the IR was last set.
+        TAP_TEST_LOGIC_RESET: curr_ir = JTAG_IDCODE;
         default: ;
       endcase
 

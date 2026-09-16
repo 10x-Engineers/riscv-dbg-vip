@@ -184,7 +184,7 @@ class dm_ref_model;
     hawindowsel     = '0;
     authdata        = '0;
     sbreadonaddr    = 1'b0;
-    sbaccess        = 3'd2;
+    sbaccess        = cfg.sbaccess_reset;   // spec 2; DUT may declare otherwise
     sbautoincrement = 1'b0;
     sbreadondata    = 1'b0;
     relaxedpriv     = cfg.relaxedpriv_reset;
@@ -243,8 +243,42 @@ class dm_ref_model;
     return idx >= num_harts;
   endfunction
 
+  // ── Abstract-command busy guard ───────────────────────────────────────────
+  // #3.7.1: while abstractcs.busy is set the debugger must not write command,
+  // abstractcs, data* or progbuf*; a DM that sees such a write sets
+  // cmderr=1 (busy) and leaves the register alone.
+  //
+  // This model is untimed and cannot know when a command is in flight, so the
+  // checker feeds it the RTL's own busy bit from the backdoor before applying
+  // each write. Without it the model applies writes the DM correctly refused
+  // and then reports the DM as wrong -- which is exactly what a racing access
+  // test produces.
+  local bit observed_cmdbusy;
+
+  function void set_observed_cmdbusy(bit b);
+    observed_cmdbusy = b;
+  endfunction
+
+  local function bit guarded_while_busy(bit [6:0] addr);
+    return addr inside {dm_defines_pkg::DM_ADDR_COMMAND,
+                        dm_defines_pkg::DM_ADDR_ABSTRACTCS,
+                        dm_defines_pkg::DM_ADDR_ABSTRACTAUTO}
+        || (addr >= dm_defines_pkg::DM_ADDR_DATA0
+            && addr <= dm_defines_pkg::DM_ADDR_DATA11)
+        || (addr >= dm_defines_pkg::DM_ADDR_PROGBUF0
+            && addr <= dm_defines_pkg::DM_ADDR_PROGBUF15);
+  endfunction
+
   // ── Write dispatch ─────────────────────────────────────────────────────────
   function void on_write(bit [6:0] addr, bit [31:0] value);
+    if (observed_cmdbusy && guarded_while_busy(addr)) begin
+      // Dropped, exactly as the DM drops it. The resulting cmderr=1 is not
+      // set here: cmderr is excluded from predict_mask() and tracked
+      // front-door by the checker, so inventing it in the model would create
+      // a second source of truth for a field this model deliberately does not
+      // own.
+      return;
+    end
     case (addr)
       dm_defines_pkg::DM_ADDR_DMCONTROL:  write_dmcontrol(value);
       dm_defines_pkg::DM_ADDR_DATA0:      staged_data0 = value;
@@ -498,26 +532,60 @@ class dm_ref_model;
     // (dm_registers.xml 0x38). sbbusy/sberror/sbbusyerror are dynamic and
     // excluded from prediction -- see predict_mask().
     sbreadonaddr    = value[20];
-    sbaccess        = value[19:17];
+    // A DUT that hardwires sbaccess keeps its own value; the write is dropped
+    // here so the model predicts what the RTL will actually read back.
+    if (cfg.sbaccess_writable) sbaccess = value[19:17];
     sbautoincrement = value[16];
     sbreadondata    = value[15];
+  endfunction
+
+  // #3.10: "If sbautoincrement is set, sbaddress is incremented by the access
+  // size (in bytes) selected in sbaccess after every system bus access."
+  // Applies to reads and writes alike. Without this the model predicts every
+  // access of a burst against the first address, which reads as an RTL
+  // mismatch on the second word of any autoincrementing transfer.
+  local function void sba_autoincrement();
+    if (sbautoincrement) sbaddress0_q = sbaddress0_q + (32'd1 << sbaccess);
+  endfunction
+
+  // Arms the pending sbdata0 value for `a`, or marks it unpredictable when
+  // this model has never written that address. A shadow, not a memory model:
+  // it only knows words we put there ourselves.
+  local function void sba_arm_read(bit [31:0] a);
+    if (shadow_mem.exists(a)) begin
+      sbdata0_pending_valid = 1'b1;
+      sbdata0_pending_value = shadow_mem[a];
+    end else begin
+      sbdata0_pending_valid = 1'b0;
+    end
   endfunction
 
   local function void write_sbaddress0(bit [31:0] value);
     sbaddress0_q = value;
     // #3.10: writing sbaddress0 while sbreadonaddr=1 triggers a read.
     if (sbcs_read_on_addr_armed) begin
-      if (shadow_mem.exists(value)) begin
-        sbdata0_pending_valid = 1'b1;
-        sbdata0_pending_value = shadow_mem[value];
-      end else begin
-        sbdata0_pending_valid = 1'b0;
-      end
+      sba_arm_read(value);
+      sba_autoincrement();
     end
   endfunction
 
   local function void write_sbdata0(bit [31:0] value);
     shadow_mem[sbaddress0_q] = value;
+    sba_autoincrement();
+  endfunction
+
+  // #3.10: with sbreadondata set, READING sbdata0 starts the next read. The
+  // trigger is the data read rather than the address write, so it has its own
+  // entry point -- dm_checker calls this after sampling a DMI read of sbdata0.
+  function void observe_sbdata0_read();
+    // Order matters: the triggered read happens at the address sbaddress0
+    // holds NOW, and only then does the autoincrement advance it. Incrementing
+    // first leaves the model one access ahead of the DM for the rest of the
+    // burst.
+    if (sbreadondata) begin
+      sba_arm_read(sbaddress0_q);
+      sba_autoincrement();
+    end
   endfunction
 
   // ── Read prediction ────────────────────────────────────────────────────────

@@ -1,0 +1,18 @@
+{
+    "_comment": [
+        "Step through every instruction class the coverage model bins.",
+        "",
+        "cg_step_external.cp_stepped_class has a bin per class the spec makes",
+        "interesting. A program of li instructions fills two of them; this one",
+        "walks sw/step_classes.S, which carries one instruction of each.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/step_classes_uvm.json ELF=sw/step_classes.elf"
+    ],
+    "scenario":  "step_classes",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {
+        "elf": "sw/step_classes.elf"
+    },
+    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 600.0 }
+}

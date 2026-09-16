@@ -19,7 +19,10 @@ class debug_scoreboard extends uvm_scoreboard;
 
     function void write(jtag_txn_c item);
         total_checked++;
-        if (item.dmi_status == 2'b10 || item.dmi_status == 2'b11) begin
+        if (item.dmi_status == 2'b11 && dmi_busy_expected) begin
+            `uvm_info("SCB", $sformatf("[tx#%0d] provoked DMI busy on %s",
+                       total_checked, item.convert2string()), UVM_MEDIUM)
+        end else if (item.dmi_status == 2'b10 || item.dmi_status == 2'b11) begin
             total_errors++;
             `uvm_error("SCB", $sformatf("DMI error status=%02b on %s",
                         item.dmi_status, item.convert2string()))

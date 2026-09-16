@@ -1,0 +1,15 @@
+{
+    "_comment": [
+        "Provoke every abstract-command error class.",
+        "",
+        "cp_cmderr has a bin per failure encoding and a debugger reacts",
+        "differently to each. A suite that only runs commands that succeed",
+        "leaves all of it untested.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/cmderr_uvm.json"
+    ],
+    "scenario":  "cmderr",
+    "transport": "uvm",
+    "mode":      "batch",
+    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 600.0 }
+}

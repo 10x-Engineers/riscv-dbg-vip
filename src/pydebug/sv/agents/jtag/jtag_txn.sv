@@ -23,9 +23,14 @@ class jtag_txn_c extends uvm_sequence_item;
   logic      [31:0] dmi_rdata;
   logic      [1:0]  dmi_status;
 
-  // Phase flag: IR_ONLY | DR_ONLY | IR_THEN_DR
-  typedef enum { PH_IR_ONLY, PH_DR_ONLY, PH_IR_THEN_DR } txn_phase_e;
+  // Phase flag: IR_ONLY | DR_ONLY | IR_THEN_DR | TAP_RESET (TMS=1 x5, no shift)
+  // | TMS_WALK (dr_len TMS bits from dr_data_in, LSB first, TDI held at 1)
+  typedef enum { PH_IR_ONLY, PH_DR_ONLY, PH_IR_THEN_DR, PH_TAP_RESET, PH_TMS_WALK } txn_phase_e;
   rand txn_phase_e phase;
+
+  // Route each shift through Pause and Exit2 (Exit1 -> Pause -> Exit2 ->
+  // Update) instead of Exit1 -> Update. Only raw scans set it.
+  bit pause = 0;
 
   constraint default_dr_len_c {
     // For DMI instruction, DR is 41 bits
@@ -70,6 +75,7 @@ class jtag_txn_c extends uvm_sequence_item;
     dmi_rdata   = rhs_.dmi_rdata;
     dmi_status  = rhs_.dmi_status;
     phase       = rhs_.phase;
+    pause       = rhs_.pause;
   endfunction
 
   function string convert2string();

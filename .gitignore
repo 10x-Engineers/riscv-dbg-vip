@@ -86,3 +86,7 @@ ibex_sim/xrun.key
 # Per-scenario simulation logs, replaced on every run
 cva6_sim/sim_outputs/
 ibex_sim/sim_outputs/
+
+# mk/dm_cov.sh output and imc session state (regenerable)
+/out/
+imc.key

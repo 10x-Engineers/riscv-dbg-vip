@@ -59,6 +59,13 @@ typedef struct {
     // ── sbcs (0x38) ─────────────────────────────────────────────────────────
     bit [2:0]    sbversion;          // spec reset = 1
     bit [6:0]    sbasize;            // 0 when no system bus access
+    // sbaccess (sbcs[19:17]) is R/W with a spec reset of constant 2. A DUT that
+    // deviates declares it here rather than having the model quietly agree:
+    // the deviation stays visible in the config, and the SBA logic underneath
+    // still gets exercised instead of every scenario aborting on the mismatch.
+    // CVA6 sets reset=3 / writable=0 -- see issue #147 (RTL-002).
+    bit [2:0]    sbaccess_reset;     // spec: 2
+    bit          sbaccess_writable;  // spec: 1 (R/W)
     bit          sbaccess128;
     bit          sbaccess64;
     bit          sbaccess32;
