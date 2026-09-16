@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Report (a) code coverage for the Debug Module instance only and
-# (b) overall functional (covergroup) coverage, from the merged sweep data.
+# Report (a) code coverage for the Debug Module instances only, (b) overall
+# functional (covergroup) coverage, (c) both as HTML, and (d) the code-coverage
+# text and HTML reports again with the unreachable-code exclusions applied.
 set -o pipefail
 COV_DIR=$(readlink -f "${1:?usage: dm_cov.sh <cov_dir> <out_dir>}")
 OUT=$(mkdir -p "${2:?usage: dm_cov.sh <cov_dir> <out_dir>}" && readlink -f "$2")
@@ -21,16 +22,68 @@ export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
 # at all. Naming just i_dm_top therefore measured the wrapper's port toggles and
 # none of the logic: 816 signal bits and not one line of dm_csrs, dm_mem or
 # dm_sba. Every instance has to be named.
+#
+# That includes everything below them. An earlier list stopped at these five
+# and quoted 100% while the DTM's TAP sat at 68/78 blocks, uncounted.
+DM=tb_top_soc.dut.i_dm_top
+DTM=tb_top_soc.dut.i_dmi_jtag      # sibling of dm_top in ariane_testharness
 DM_INSTS=(
-    tb_top_soc.dut.i_dm_top
-    tb_top_soc.dut.i_dm_top.i_dm_csrs
-    tb_top_soc.dut.i_dm_top.i_dm_sba
-    tb_top_soc.dut.i_dm_top.i_dm_mem
-    tb_top_soc.dut.i_dmi_jtag      # sibling of dm_top in ariane_testharness
+    $DM
+    $DM.i_dm_csrs
+    $DM.i_dm_csrs.gen_haltsum0_single
+    $DM.i_dm_sba
+    $DM.i_dm_mem
+    $DM.i_dm_mem.gen_rom_snd_scratch.i_debug_rom
+    $DTM
+    $DTM.i_dmi_jtag_tap
+    $DTM.i_dmi_jtag_tap.i_tck_inv
+    $DTM.i_dmi_jtag_tap.i_tck_inv.i_tc_clk_inverter
+    $DTM.i_dmi_jtag_tap.i_dft_tck_mux
+    $DTM.i_dmi_jtag_tap.i_dft_tck_mux.i_tc_clk_mux2
+    $DTM.i_dmi_cdc
+    # cdc_2phase is type-parameterised: scored only because of
+    # mk/xcelium_cov.ccf, and reported as missing here if that ever lapses.
+    $DTM.i_dmi_cdc.i_cdc_req
+    $DTM.i_dmi_cdc.i_cdc_req.i_src
+    $DTM.i_dmi_cdc.i_cdc_req.i_dst
+    $DTM.i_dmi_cdc.i_cdc_resp
+    $DTM.i_dmi_cdc.i_cdc_resp.i_src
+    $DTM.i_dmi_cdc.i_cdc_resp.i_dst
 )
-DM_INST=${DM_INSTS[0]}
+# `code` is block, expression and toggle only; FSM has to be asked for.
+METRICS=code:fsm
+# Roots of the HTML reports. report_metrics -recursive accepts exactly one
+# -inst (*E,report.recursive.mult_entities otherwise), and i_dmi_jtag is not
+# under i_dm_top, so each root gets its own report directory.
+declare -A HTML_ROOTS=(
+    [dm]=tb_top_soc.dut.i_dm_top
+    [dmi_jtag]=tb_top_soc.dut.i_dmi_jtag
+)
+
+# report_metrics refuses to write into an existing directory
+# (*E,report.dir_exist) and imc still exits 0, so a rerun would leave the
+# previous run's HTML in place looking current.
+emit_html() {   # emit_html <suffix>
+    local key
+    for key in "${!HTML_ROOTS[@]}"; do
+        rm -rf "$OUT/${key}_code_html$1"
+        printf 'report_metrics -detail -metrics %s -inst %s -recursive -out %s/%s_code_html%s\n' \
+               "$METRICS" "${HTML_ROOTS[$key]}" "$OUT" "$key" "$1"
+    done
+}
+
+emit_parts() {   # emit_parts <tag>: one legacy text report per DM instance
+    local inst
+    for inst in "${DM_INSTS[@]}"; do
+        printf 'report -detail -all -inst %s -metrics %s -out %s/.part%s.%s.rpt\n' \
+               "$inst" "$METRICS" "$OUT" "$1" "$inst"
+    done
+}
 
 mkdir -p "$OUT"
+# Step (d) is conditional; do not let a previous run's output stand in for it.
+rm -rf "$OUT"/*_code_html_excl "$OUT"/imc_excl.* "$OUT/dm_exclusions.tcl" \
+       "$OUT/dm_code_excl.rpt"
 runs=("$COV_DIR"/scope/*/)
 [ -e "${runs[0]}" ] || { echo "no runs under $COV_DIR/scope/" >&2; exit 1; }
 echo "merging ${#runs[@]} run(s)"
@@ -47,10 +100,7 @@ trap 'rm -f "$tcl"' EXIT
     # and silently produced a report containing only the first instance -- no
     # error, just missing data, which is the worst possible failure for a
     # coverage number someone is going to quote.
-    for inst in "${DM_INSTS[@]}"; do
-        printf 'report -detail -all -inst %s -metrics code -out %s/.part.%s.rpt\n' \
-               "$inst" "$OUT" "$inst"
-    done
+    emit_parts ""
     # (b) functional coverage across the whole testbench. -all matters: without
     # it this is the *Uncovered* report, where a covergroup at 100% is absent
     # rather than listed, and the reader cannot tell the two apart.
@@ -59,8 +109,8 @@ trap 'rm -f "$tcl"' EXIT
     # -recursive, unlike the legacy report command. (There is no report_summary
     # command in imc 21.09 -- an earlier version of this script called one and
     # it failed silently, producing no summary at all.)
-    printf 'report_metrics -detail -metrics code -inst %s -recursive -out %s/dm_code_html\n' \
-           "$DM_INST" "$OUT"
+    emit_html ""
+    rm -rf "$OUT/functional_html"
     printf 'report_metrics -detail -metrics covergroup -out %s/functional_html\n' "$OUT"
     printf 'exit\n'
 } > "$tcl"
@@ -72,29 +122,54 @@ echo "imc exit=$rc  (see $OUT/imc.log)"
 # Stitch the per-instance reports into one, and fail loudly if an instance
 # produced nothing -- a renamed or moved instance would otherwise just vanish
 # from the report and quietly inflate the DM's coverage.
-: > "$OUT/dm_code.rpt"
-missing=()
-for inst in "${DM_INSTS[@]}"; do
-    part="$OUT/.part.$inst.rpt"
-    if [ -s "$part" ] && grep -q '^Instance name:' "$part"; then
-        {
-            printf '\n%s\n== %s\n%s\n' "$(printf '=%.0s' {1..78})" "$inst" \
-                   "$(printf '=%.0s' {1..78})"
-            cat "$part"
-        } >> "$OUT/dm_code.rpt"
-    else
-        missing+=("$inst")
+stitch() {   # stitch <tag> <report>
+    local inst part missing=()
+    : > "$2"
+    for inst in "${DM_INSTS[@]}"; do
+        part="$OUT/.part$1.$inst.rpt"
+        if [ -s "$part" ] && grep -q '^Instance name:' "$part"; then
+            {
+                printf '\n%s\n== %s\n%s\n' "$(printf '=%.0s' {1..78})" "$inst" \
+                       "$(printf '=%.0s' {1..78})"
+                cat "$part"
+            } >> "$2"
+        else
+            missing+=("$inst")
+        fi
+        rm -f "$part"
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        printf 'WARNING: no coverage reported for %s\n' "${missing[@]}" >&2
+        echo "  Check the instance path in DM_INSTS -- imc reports an unknown" >&2
+        echo "  instance as an empty section rather than as an error." >&2
     fi
-    rm -f "$part"
-done
-if [ ${#missing[@]} -gt 0 ]; then
-    printf 'WARNING: no coverage reported for %s\n' "${missing[@]}" >&2
-    echo "  Check the instance path in DM_INSTS -- imc reports an unknown" >&2
-    echo "  instance as an empty section rather than as an error." >&2
-fi
-echo "DM instances reported: $(( ${#DM_INSTS[@]} - ${#missing[@]} ))/${#DM_INSTS[@]}"
+    echo "DM instances reported: $(( ${#DM_INSTS[@]} - ${#missing[@]} ))/${#DM_INSTS[@]}"
+}
+stitch "" "$OUT/dm_code.rpt"
 
 # imc states counts, never percentages, and has no notion of "the Debug Module"
 # as a unit -- so sum across the instances that make it up.
 python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_summary.py" "$OUT/dm_code.rpt" || true
+
+# (d) The same reports with the unreachable-code exclusions applied. The
+# exclusions are generated from dm_code.rpt, so this needs a second imc pass.
+if python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_exclude.py" "$OUT/dm_code.rpt" \
+        --out "$OUT/dm_exclusions.tcl"; then
+    {
+        printf 'load -run %s/merged\n' "$COV_DIR"
+        printf 'source %s/dm_exclusions.tcl\n' "$OUT"
+        emit_parts ".excl"
+        emit_html "_excl"
+        printf 'exit\n'
+    } > "$tcl"
+    "$IMC" -exec "$tcl" -nostdout -logfile "$OUT/imc_excl.log" > "$OUT/imc_excl.stdout" 2>&1
+    echo "imc (exclusions) exit=$?  (see $OUT/imc_excl.log)"
+    stitch ".excl" "$OUT/dm_code_excl.rpt"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_summary.py" "$OUT/dm_code_excl.rpt" \
+        "Debug Module code coverage, unreachable code excluded" || true
+fi
+# imc exits 0 on command errors, so its log is the only place they show up.
+# NOMATCH is only a warning, but it means an exclusion named nothing and was
+# dropped -- the excluded numbers are then wrong without saying so.
+grep -hE '\*E,|\*W,NOMATCH' "$OUT/imc.log" "$OUT/imc_excl.log" 2>/dev/null >&2
 ls -la "$OUT"

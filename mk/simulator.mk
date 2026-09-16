@@ -36,6 +36,9 @@ SIM ?= $(if $(filter none,$(SIM_DETECTED)),questa,$(SIM_DETECTED))
 
 TB_TOP         ?= $(error TB_TOP must be set before including mk/simulator.mk)
 SIM_OUTPUT_DIR ?= ./sim_outputs
+# Captured now: MAKEFILE_LIST grows with every later include, so a lazy
+# $(lastword ...) inside a recipe variable would name the wrong file.
+SIM_MK_DIR     := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 COV_LIB        ?= work_cov
 COV_DIR        ?= $(SIM_OUTPUT_DIR)/coverage
 DPI_LIB_NAME   ?= uvm_bridge_soc
@@ -123,7 +126,8 @@ SIM_COMPILE_POST     = -top $(TB_TOP) -sv_lib $(DPI_LIB_NAME).so
 
 SIM_PRE_COMPILE_COV  = @mkdir -p $(COV_DIR)
 SIM_COMPILE_COV      = $(XRUN_COMMON) -elaborate -xmlibdirname $(XRUN_LIB_COV) \
-                       -coverage all -covoverwrite
+                       -coverage all -covoverwrite \
+                       -covfile $(SIM_MK_DIR)/xcelium_cov.ccf
 SIM_COMPILE_COV_POST = -top $(TB_TOP) -sv_lib $(DPI_LIB_NAME).so
 
 SIM_RUN = $(XRUN) $(XRUN_FLAGS) -R -xmlibdirname $(XRUN_LIB) -sv_lib $(DPI_LIB_NAME).so

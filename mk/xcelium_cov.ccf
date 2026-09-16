@@ -1,0 +1,14 @@
+# Coverage configuration for the Xcelium -coverage all build.
+#
+# Xcelium does not score block, expression, toggle or FSM coverage in
+# type-parameterised modules by default ("By default, Block, Expression,
+# Toggle, and FSM coverage types are not supported for type-parameterized
+# modules"). The DTM's clock-domain crossing is one -- cdc_2phase #(.T(...)),
+# instantiated twice in dmi_cdc -- so without this the Debug Module's CDC was
+# silently absent from every coverage number, not reported as uncovered.
+set_parameterized_module_coverage -type_parameters_only
+
+# Toggle coverage also skips multi-dimensional arrays and vectors by default
+# (*W,COVMDD), which in the Debug Module means progbuf, the abstract-command
+# slots, hartinfo and the haltsum trees were never toggle-scored at all.
+set_toggle_scoring -sv_mda
