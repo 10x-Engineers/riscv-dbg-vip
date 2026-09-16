@@ -10,10 +10,19 @@ package debug_pkg;
   import dbg_dmi_pkg::*;
   `include "uvm_macros.svh"
 
+  // Set while a scenario is deliberately provoking a DMI busy (py_bridge op 7)
+  // and cleared by the dmireset/dmihardreset that must follow. BUSY is a
+  // legal DTM answer to an early scan, not a DUT fault, so the scoreboard
+  // only reports it when nobody asked for it.
+  bit dmi_busy_expected;
+
   `include "../sequences/dmi_read_seq.sv"
   `include "../sequences/dmi_write_seq.sv"
   `include "../sequences/dtmcs_seq.sv"
   `include "../sequences/reset_tap_seq.sv"
+  `include "../sequences/dmi_scan_seq.sv"
+  `include "../sequences/jtag_scan_seq.sv"
+  `include "../sequences/tms_walk_seq.sv"
   `include "scoreboard.sv"
   // Must precede covergroups.sv AND dm_checker.sv: both instantiate
   // dut_config_reader directly (`new()`, not just a handle), which needs the

@@ -20,6 +20,7 @@ import "DPI-C" function int  uvm_bridge_start();
 import "DPI-C" function void uvm_bridge_stop();
 import "DPI-C" function int  dpi_bridge_get_req(output int op, output int addr, output int unsigned data);
 import "DPI-C" function void dpi_bridge_put_rsp(int unsigned data);
+import "DPI-C" function void dpi_bridge_put_rsp_x(int unsigned data, int unsigned xmask);
     // Text for an OP_LOG request. Valid only until the next get_req, which is
     // fine: it is read immediately, under the same handshake as a DMI op.
     import "DPI-C" function string dpi_bridge_get_text();
@@ -107,7 +108,18 @@ class python_bridge extends uvm_component;
                         r_seq = jtag_dmi_read_seq::type_id::create("r_seq");
                         r_seq.addr = addr[6:0];
                         r_seq.start(sqr);
-                        dpi_bridge_put_rsp(r_seq.rsp_data);
+                        // Passing rsp_data through a 2-state int reads X as 0,
+                        // so an undriven register looked like a clean zero.
+                        begin
+                            int unsigned xmask = 0;
+                            foreach (r_seq.rsp_data[i])
+                                if ($isunknown(r_seq.rsp_data[i])) xmask[i] = 1'b1;
+                            if (xmask != 0)
+                                `uvm_warning("DMI_X", $sformatf(
+                                    "DMI read of 0x%02h returned X/Z in bits 0x%08h: 0x%08h",
+                                    addr, xmask, r_seq.rsp_data))
+                            dpi_bridge_put_rsp_x(r_seq.rsp_data, xmask);
+                        end
                         `uvm_info("DMI_REQ", $sformatf(
                             "DMI  READ  addr=0x%02h → data=0x%08h", addr, r_seq.rsp_data),
                             UVM_MEDIUM)
@@ -142,9 +154,55 @@ class python_bridge extends uvm_component;
                         d_seq.wdata = data;
                         d_seq.start(sqr);
                         dpi_bridge_put_rsp(d_seq.rdata);
+                        // dmireset (16) / dmihardreset (17) end the provoked
+                        // busy; a busy seen after this is a real one.
+                        if (data[17:16] != 0) dmi_busy_expected = 0;
                         `uvm_info("DMI_REQ", $sformatf(
                             "DTMCS access wdata=0x%08h -> rdata=0x%08h",
                             data, d_seq.rdata), UVM_MEDIUM)
+                    end
+                    7: begin  // Raw DMI DR scan: no IR scan, no busy retry
+                        // addr[8:7] carries the DMI op. Returns the captured
+                        // dmistat, which is what the caller is probing.
+                        jtag_dmi_scan_seq s_seq;
+                        s_seq = jtag_dmi_scan_seq::type_id::create("s_seq");
+                        s_seq.op   = addr[8:7];
+                        s_seq.addr = addr[6:0];
+                        s_seq.data = data;
+                        dmi_busy_expected = 1;
+                        s_seq.start(sqr);
+                        dpi_bridge_put_rsp(s_seq.status);
+                        `uvm_info("DMI_REQ", $sformatf(
+                            "DMI  SCAN  op=%0d addr=0x%02h data=0x%08h -> dmistat=%0d",
+                            s_seq.op, s_seq.addr, data, s_seq.status), UVM_MEDIUM)
+                    end
+                    8: begin  // Arbitrary IR + DR scan (IDCODE, BYPASS, Pause states)
+                        // addr = {pause[11], dr_len[10:5], ir[4:0]}
+                        jtag_scan_seq j_seq;
+                        j_seq = jtag_scan_seq::type_id::create("j_seq");
+                        j_seq.ir     = addr[4:0];
+                        j_seq.dr_len = addr[10:5];
+                        j_seq.pause  = addr[11];
+                        j_seq.wdata  = data;
+                        j_seq.start(sqr);
+                        dpi_bridge_put_rsp(j_seq.rdata);
+                        `uvm_info("DMI_REQ", $sformatf(
+                            "JTAG SCAN ir=0x%02h dr_len=%0d pause=%0b wdata=0x%08h -> 0x%08h",
+                            j_seq.ir, j_seq.dr_len, j_seq.pause, data, j_seq.rdata), UVM_MEDIUM)
+                    end
+                    9: begin  // TMS walk: addr = count, data = TMS bits
+                        jtag_tms_walk_seq w_seq;
+                        w_seq = jtag_tms_walk_seq::type_id::create("tms_seq");
+                        w_seq.count = addr;
+                        w_seq.bits  = data;
+                        w_seq.start(sqr);
+                        dpi_bridge_put_rsp(0);
+                        `uvm_info("DMI_REQ", $sformatf("TMS WALK %0d bits 0x%08h", addr, data),
+                                  UVM_MEDIUM)
+                    end
+                    10: begin  // Simulated time in ns, for timing checks that
+                               // would otherwise measure the simulator's speed
+                        dpi_bridge_put_rsp(int'($time / 1ns));
                     end
                     5: begin  // Python log record
                         // Printed here rather than by Python so it flows

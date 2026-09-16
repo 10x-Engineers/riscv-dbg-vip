@@ -88,9 +88,45 @@ class jtag_driver extends uvm_driver #(jtag_txn_c);
       jtag_txn_c::PH_IR_ONLY:    drive_ir(txn);
       jtag_txn_c::PH_DR_ONLY:    drive_dr(txn);
       jtag_txn_c::PH_IR_THEN_DR: begin drive_ir(txn); drive_dr(txn); end
+      jtag_txn_c::PH_TAP_RESET:  drive_tap_reset();
+      jtag_txn_c::PH_TMS_WALK:   drive_tms_walk(txn);
       default: `uvm_error("JTAG_DRV", "Unknown txn phase")
     endcase
     `uvm_info("JTAG_DRV", txn.convert2string(), UVM_HIGH)
+  endtask
+
+  // ---------------------------------------------------------------------------
+  // Test-Logic-Reset by TMS alone (IEEE 1149.1: five TMS=1 clocks reach it
+  // from any state), then back to RTI. Unlike TRST this leaves the DTM's
+  // flops alone, so it is the only way to reach dmi_jtag's test_logic_reset
+  // arm. The TAP comes out with IDCODE selected.
+  // ---------------------------------------------------------------------------
+  task drive_tap_reset();
+    repeat (5) drive_bit_notdo(1'b1, 1'b0);
+    drive_bit_notdo(1'b0, 1'b0);   // RTI
+  endtask
+
+  // ---------------------------------------------------------------------------
+  // An arbitrary TMS sequence, for TAP transitions no scan takes (a shift of
+  // zero bits, resuming a shift from Exit2, Update straight to Select-DR).
+  // The walk must start and end in Run-Test/Idle: every other task assumes it.
+  // ---------------------------------------------------------------------------
+  task drive_tms_walk(jtag_txn_c txn);
+    for (int i = 0; i < txn.dr_len; i++)
+      drive_bit_notdo(txn.dr_data_in[i], 1'b1);
+    if (tap_state != TAP_RUN_TEST_IDLE)
+      `uvm_error("JTAG_DRV", $sformatf("TMS walk ended in %s, not Run-Test/Idle",
+                                       tap_state.name()))
+  endtask
+
+  // ---------------------------------------------------------------------------
+  // From Exit1 (IR or DR): Pause, one clock held in Pause, then Exit2. The
+  // caller's next TMS=1 goes on to Update exactly as it would from Exit1.
+  // ---------------------------------------------------------------------------
+  task drive_pause();
+    drive_bit_notdo(1'b0, 1'b0);   // Pause
+    drive_bit_notdo(1'b0, 1'b0);   // stay in Pause
+    drive_bit_notdo(1'b1, 1'b0);   // Exit2
   endtask
 
   // ---------------------------------------------------------------------------
@@ -109,6 +145,7 @@ class jtag_driver extends uvm_driver #(jtag_txn_c);
       logic tms_out = (i == txn.ir_len - 1) ? 1'b1 : 1'b0;
       drive_bit_notdo(tms_out, txn.ir_val[i]);
     end
+    if (txn.pause) drive_pause();
     drive_bit_notdo(1'b1, 1'b0);   // Update-IR
     drive_bit_notdo(1'b0, 1'b0);   // RTI
   endtask
@@ -136,6 +173,7 @@ class jtag_driver extends uvm_driver #(jtag_txn_c);
       txn.dr_data_out[i] = tdo_bit;
     end
 
+    if (txn.pause) drive_pause();
     drive_bit_notdo(1'b1, 1'b0);   // Update-DR
     drive_bit_notdo(1'b0, 1'b0);   // RTI
 

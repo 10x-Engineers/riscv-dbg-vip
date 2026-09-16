@@ -58,6 +58,16 @@
  * "Session complete" until its timeout. */
 #define OP_DTMCS    6
 #define OP_LOG      5   /* Python log record, printed by SV so it carries $time */
+/* Raw DMI DR scan, no IR scan and no busy retry. The DMI op rides in
+ * addr[8:7]; the response is the captured dmistat. Seven because 1-6 are
+ * taken -- see OP_DTMCS for what reusing one costs. */
+#define OP_DMI_SCAN 7
+/* Arbitrary IR + DR scan: addr = {pause[11], dr_len[10:5], ir[4:0]}. */
+#define OP_JTAG_SCAN 8
+/* TMS walk: addr = number of TMS bits, data = the bits, LSB first. */
+#define OP_TMS_WALK  9
+/* Simulated time in ns (32 bits: about 4.29 s of simulated time). */
+#define OP_SIM_TIME 10
 
 /* Log text for OP_LOG. Static because the DPI import returns a const char* that
    SV copies into a string on return; it only has to stay valid for that call,
@@ -78,6 +88,7 @@ static unsigned int g_req_data = 0;
 
 static int g_rsp_valid = 0;
 static unsigned int g_rsp_data = 0;
+static unsigned int g_rsp_xmask = 0;
 
 /* ── Simple JSON helpers (no external library dependency) ───────────────── */
 
@@ -175,6 +186,11 @@ static void handle_request(int client_fd, const char *line) {
     json_get_str(line, "op",   op, sizeof(op));
     json_get_int(line, "addr", &addr);
     json_get_int(line, "data", &data);
+    long long dmiop = 0, ir = 0, drlen = 0, pause = 0;
+    json_get_int(line, "dmiop", &dmiop);
+    json_get_int(line, "ir", &ir);
+    json_get_int(line, "drlen", &drlen);
+    json_get_int(line, "pause", &pause);
 
     if (strcmp(op, "shutdown") == 0) {
         /* Shutdown: signal SV to exit its command loop */
@@ -196,7 +212,9 @@ static void handle_request(int client_fd, const char *line) {
     }
 
     if (strcmp(op, "read") == 0 || strcmp(op, "write") == 0 ||
-        strcmp(op, "reset") == 0 || strcmp(op, "dtmcs") == 0) {
+        strcmp(op, "reset") == 0 || strcmp(op, "dtmcs") == 0 ||
+        strcmp(op, "dmi_scan") == 0 || strcmp(op, "jtag_scan") == 0 ||
+        strcmp(op, "tms_walk") == 0 || strcmp(op, "sim_time") == 0) {
         pthread_mutex_lock(&g_mutex);
         if (strcmp(op, "read") == 0) {
             g_req_op = OP_READ; g_req_addr = addr; g_req_data = 0;
@@ -204,6 +222,18 @@ static void handle_request(int client_fd, const char *line) {
             g_req_op = OP_WRITE; g_req_addr = addr; g_req_data = data;
         } else if (strcmp(op, "dtmcs") == 0) {
             g_req_op = OP_DTMCS; g_req_addr = 0; g_req_data = data;
+        } else if (strcmp(op, "sim_time") == 0) {
+            g_req_op = OP_SIM_TIME; g_req_addr = 0; g_req_data = 0;
+        } else if (strcmp(op, "tms_walk") == 0) {
+            g_req_op = OP_TMS_WALK; g_req_addr = (int)(addr & 0x3F); g_req_data = data;
+        } else if (strcmp(op, "jtag_scan") == 0) {
+            g_req_op = OP_JTAG_SCAN;
+            g_req_addr = (int)((ir & 0x1F) | ((drlen & 0x3F) << 5) | ((pause & 1) << 11));
+            g_req_data = data;
+        } else if (strcmp(op, "dmi_scan") == 0) {
+            g_req_op = OP_DMI_SCAN;
+            g_req_addr = (int)((addr & 0x7F) | ((dmiop & 0x3) << 7));
+            g_req_data = data;
         } else {
             g_req_op = OP_RESET; g_req_addr = 0; g_req_data = 0;
         }
@@ -211,9 +241,12 @@ static void handle_request(int client_fd, const char *line) {
         g_rsp_valid = 0;
         while (!g_rsp_valid) { pthread_cond_wait(&g_cond, &g_mutex); }
 
-        if (strcmp(op, "read") == 0 || strcmp(op, "dtmcs") == 0) {
+        if (strcmp(op, "read") == 0 || strcmp(op, "dtmcs") == 0 ||
+            strcmp(op, "dmi_scan") == 0 || strcmp(op, "jtag_scan") == 0 ||
+            strcmp(op, "sim_time") == 0) {
             snprintf(send_buf, sizeof(send_buf),
-                     "{\"id\":%lld,\"status\":\"ok\",\"data\":%u}\n", id, g_rsp_data);
+                     "{\"id\":%lld,\"status\":\"ok\",\"data\":%u,\"xmask\":%u}\n",
+                     id, g_rsp_data, g_rsp_xmask);
         } else {
             snprintf(send_buf, sizeof(send_buf),
                      "{\"id\":%lld,\"status\":\"ok\"}\n", id);
@@ -306,9 +339,22 @@ int dpi_bridge_get_req(int *op, int *addr, unsigned int *data) {
     return ret;
 }
 
+/* A DMI read whose data holds X or Z. DPI's 2-state int turns those bits into
+ * 0, so a read of an undriven register looked like a clean zero; the mask
+ * travels beside the value so the client can refuse it. */
+void dpi_bridge_put_rsp_x(unsigned int data, unsigned int xmask) {
+    pthread_mutex_lock(&g_mutex);
+    g_rsp_data = data;
+    g_rsp_xmask = xmask;
+    g_rsp_valid = 1;
+    pthread_cond_signal(&g_cond);
+    pthread_mutex_unlock(&g_mutex);
+}
+
 void dpi_bridge_put_rsp(unsigned int data) {
     pthread_mutex_lock(&g_mutex);
     g_rsp_data = data;
+    g_rsp_xmask = 0;
     g_rsp_valid = 1;
     pthread_cond_signal(&g_cond);
     pthread_mutex_unlock(&g_mutex);
