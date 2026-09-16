@@ -1,10 +1,12 @@
 {
-    "scenario":  "dmi_error",
+    "scenario": "dmi_error",
     "transport": "uvm",
-    "mode":      "batch",
-    "params": {},
+    "mode": "batch",
+    "params": {
+        "idcode": "0x00000001"
+    },
     "uvm": {
         "socket_path": "/tmp/uvm_bridge.sock",
-        "timeout":     300.0
+        "timeout": 300.0
     }
 }

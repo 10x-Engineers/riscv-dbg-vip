@@ -18,7 +18,8 @@ counted delay loop and starts it with postexec, which keeps the hart executing
 — and `cmdbusy` asserted — for thousands of cycles.
 
 Traces to: TC-AC-020 (busy guard), TC-AC-021 (cmderr=busy sticky),
-TC-AC-022 (DM usable after a busy collision).
+TC-AC-022 (DM usable after a busy collision), TC-AC-028 (command reads 0,
+unmapped write ignored).
 """
 
 from pydebug.api import RISCVDebug, DebugSession, StepResult
@@ -58,6 +59,10 @@ DMC_CLRRESETHALTREQ = 2
 #: CVA6 does not implement, and the DM correctly answers cmderr=3 (exception)
 #: -- a test bug that reads exactly like a DM bug.
 X5_REGNO = 0x1005
+
+#: An address with no register behind it on this DUT: progbuf ends at
+#: 0x20 + progbufsize(8) - 1 = 0x27.
+UNMAPPED_DMI_ADDR = 0x2F
 
 
 def _cmderr(abstractcs: int) -> int:
@@ -105,41 +110,62 @@ def build_cmd_busy_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession
         _clear_cmderr(dm)
         dm.t.write(DMI.COMMAND, CMD_POSTEXEC_ONLY)   # deliberately non-blocking
 
+    def _race(accesses) -> str:
+        """
+        Arm a fresh command for EACH access, so every one meets cmderr=0.
+
+        The guard is `if (!cmdbusy) ... else if (cmderr == none) cmderr = busy`.
+        Racing several registers against one command only ever reaches that
+        inner arm with the first: it sets cmderr, and every later access takes
+        the other branch. That is why data0 reads and progbuf accesses stayed
+        uncovered while this test passed. Returns "" when every access was
+        refused with cmderr=busy, else what went wrong.
+        """
+        bad = []
+        for name, access in accesses:
+            _arm_long_command()
+            access()
+            acs = dm.t.read(DMI.ABSTRACTCS)
+            if _cmderr(acs) != CMDERR_BUSY:
+                bad.append(f"{name}: cmderr={_cmderr(acs)} busy={_busy(acs)}")
+        _clear_cmderr(dm)
+        return "; ".join(bad)
+
     # ── TC-AC-020: data0 / progbuf access during a busy command ───────────
     def tc_ac_020():
-        _arm_long_command()
-        saw_busy = _busy(dm.t.read(DMI.ABSTRACTCS))
-        # Race the command on every register the spec names.
-        dm.t.write(DMI.DATA0, 0x11111111)
-        dm.t.read(DMI.DATA0)
-        dm.t.write(DMI.PROGBUF0, 0x22222222)
-        dm.t.read(DMI.PROGBUF0)
-        err = _cmderr(dm.t.read(DMI.ABSTRACTCS))
-        dm._wait_abstract() if hasattr(dm, "_wait_abstract") else None
-        ok = err in (CMDERR_NONE, CMDERR_BUSY)
+        bad = _race([
+            ("data0 write",    lambda: dm.t.write(DMI.DATA0, 0x11111111)),
+            ("data0 read",     lambda: dm.t.read(DMI.DATA0)),
+            ("progbuf0 write", lambda: dm.t.write(DMI.PROGBUF0, 0x22222222)),
+            ("progbuf0 read",  lambda: dm.t.read(DMI.PROGBUF0)),
+        ])
         return StepResult(
-            ok=ok,
-            msg=f"TC-AC-020: busy seen={saw_busy}, cmderr after racing "
-                f"data0/progbuf0 = {err} "
-                f"({'busy -- guard fired' if err == CMDERR_BUSY else 'none -- command finished first'})  "
-                f"{'OK' if ok else 'unexpected cmderr'}",
+            ok=not bad,
+            msg="TC-AC-020: data0/progbuf0 write and read each raced a busy command  "
+                + (f"guard did not fire -- {bad}" if bad else "OK -- cmderr=busy every time"),
         )
     session.add_step("TC-AC-020: data0/progbuf access while busy", tc_ac_020)
 
-    # ── TC-AC-021: command and abstractauto during a busy command ─────────
+    # ── TC-AC-021: command, abstractauto and abstractcs during a busy command
     def tc_ac_021():
-        _arm_long_command()
-        dm.t.write(DMI.COMMAND, CMD_POSTEXEC_ONLY)   # a second command while busy
-        dm.t.write(ABSTRACTAUTO, 0x00000001)
+        # abstractauto is written as 0: if the race were lost, a nonzero value
+        # would arm autoexec and re-run the command on every later data0 access.
+        def abstractcs_twice():
+            # The second write meets cmderr already set -- the guard's other arm.
+            dm.t.write(DMI.ABSTRACTCS, 0)
+            dm.t.write(DMI.ABSTRACTCS, 0)
+        bad = _race([
+            ("command write",      lambda: dm.t.write(DMI.COMMAND, CMD_POSTEXEC_ONLY)),
+            ("abstractauto write", lambda: dm.t.write(ABSTRACTAUTO, 0)),
+            ("abstractcs write",   abstractcs_twice),
+        ])
         dm.t.read(ABSTRACTAUTO)
-        err = _cmderr(dm.t.read(DMI.ABSTRACTCS))
-        ok = err in (CMDERR_NONE, CMDERR_BUSY)
         return StepResult(
-            ok=ok,
-            msg=f"TC-AC-021: cmderr after racing command/abstractauto = {err}  "
-                f"{'OK' if ok else 'unexpected cmderr'}",
+            ok=not bad,
+            msg="TC-AC-021: command/abstractauto/abstractcs writes each raced a busy command  "
+                + (f"guard did not fire -- {bad}" if bad else "OK -- cmderr=busy every time"),
         )
-    session.add_step("TC-AC-021: command/abstractauto access while busy", tc_ac_021)
+    session.add_step("TC-AC-021: command/abstractauto/abstractcs access while busy", tc_ac_021)
 
     # ── TC-AC-022: the DM is still usable afterwards ──────────────────────
     # The point of the guard is that a racing access is rejected, not that it
@@ -262,20 +288,24 @@ def build_cmd_busy_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession
             (0x100A, "a0/x10 -- special-cased by the debug ROM"),
             (0x1020, "regno[5] set -- upper register file (f0)"),
         ]
+        # Both directions: dm_mem decodes regno separately for write and for
+        # read, and an earlier version only wrote, leaving all three read-side
+        # arms uncovered.
         seen = []
         for regno, what in probes:
-            _clear_cmderr(dm)
-            dm.t.write(DMI.DATA0, 0x5A5A5A5A)
-            # cmdtype=0, aarsize=2, transfer=1, write=1
-            dm.t.write(DMI.COMMAND, (2 << 20) | (1 << 17) | (1 << 16) | regno)
-            _wait_not_busy(dm)
-            seen.append((regno, _cmderr(dm.t.read(DMI.ABSTRACTCS)), what))
+            for write in (1, 0):
+                _clear_cmderr(dm)
+                dm.t.write(DMI.DATA0, 0x5A5A5A5A)
+                # cmdtype=0, aarsize=2, transfer=1, write=<write>
+                dm.t.write(DMI.COMMAND, (2 << 20) | (1 << 17) | (write << 16) | regno)
+                _wait_not_busy(dm)
+                seen.append((regno, _cmderr(dm.t.read(DMI.ABSTRACTCS)), "wr" if write else "rd"))
         _clear_cmderr(dm)
         usable = dm.read_gpr(X5_REGNO) is not None
         return StepResult(
             ok=usable,
             msg="TC-AC-026: " + "; ".join(
-                f"regno=0x{r:04x} -> cmderr={e}" for r, e, _ in seen)
+                f"{d} regno=0x{r:04x} -> cmderr={e}" for r, e, d in seen)
                 + f"; DM usable after={usable}  "
                 + ("OK" if usable else "DM left unusable"),
         )
@@ -298,5 +328,22 @@ def build_cmd_busy_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession
                 f"{'OK -- no-op' if still_running else 'run control disturbed'}",
         )
     session.add_step("TC-AC-027: resume while already running", tc_ac_027)
+
+    # ── TC-AC-028: command reads 0, and an unmapped write is ignored ──────
+    # command is write-only and reads 0, and a write to an address with no
+    # register must be ignored. Each is a dm_csrs case arm nothing else
+    # reaches. (haltsum1-3 are read by dm_corners: they read X, RTL-007.)
+    def tc_ac_028():
+        command = dm.t.read(DMI.COMMAND)
+        dm.t.write(UNMAPPED_DMI_ADDR, 0xFFFFFFFF)
+        halted = dm.is_halted()
+        ok = command == 0 and halted
+        return StepResult(
+            ok=ok,
+            msg=f"TC-AC-028: command=0x{command:08x} (expect 0); write to "
+                f"0x{UNMAPPED_DMI_ADDR:02x} ignored, hart still halted={halted}  "
+                + ("OK" if ok else "unexpected value or side effect"),
+        )
+    session.add_step("TC-AC-028: command reads 0, unmapped write ignored", tc_ac_028)
 
     return session

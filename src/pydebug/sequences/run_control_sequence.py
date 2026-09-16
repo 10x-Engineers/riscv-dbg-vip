@@ -200,20 +200,26 @@ def build_run_control_sequence(
     )
 
     # ── TC-RC-006: halt/resume response latency ───────────────────────────
+    # The bound is real time on hardware. In simulation the matching clock is
+    # simulated time: host wall-clock time measures the simulator, and failed
+    # this step once a coverage build ran slower, with the DUT unchanged.
+    clock = getattr(dm.t, "sim_time_s", None) or time.perf_counter
+    clock_name = "simulated" if clock is not time.perf_counter else "wall-clock"
+
     def tc_rc_006():
-        t0 = time.perf_counter()
+        t0 = clock()
         dm.halt()
-        halt_latency = time.perf_counter() - t0
-        t0 = time.perf_counter()
+        halt_latency = clock() - t0
+        t0 = clock()
         dm.resume()
-        resume_latency = time.perf_counter() - t0
+        resume_latency = clock() - t0
         ok = (
             halt_latency < HALT_RESUME_RESPONSE_BOUND_S
             and resume_latency < HALT_RESUME_RESPONSE_BOUND_S
         )
         return StepResult(
             ok=ok,
-            msg=f"TC-RC-006: halt latency={halt_latency*1e3:.3f}ms, "
+            msg=f"TC-RC-006: {clock_name} halt latency={halt_latency*1e3:.3f}ms, "
                 f"resume latency={resume_latency*1e3:.3f}ms "
                 f"(spec bound: <{HALT_RESUME_RESPONSE_BOUND_S}s, #3.5)",
         )
