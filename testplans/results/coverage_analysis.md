@@ -218,89 +218,109 @@ the logic.
 **Whole-SoC code coverage would be dominated by CVA6 itself and would say
 nothing about the DM**, which is the DUT here.
 
-Merged across all 25 tests, 2026-09-15:
+Merged across all 26 tests, 2026-09-16, one compile. The Debug Module is 19
+instances: `i_dm_top` and `i_dmi_jtag` and everything under them.
 
-| Instance | Block | Expression | Toggle |
-|---|---:|---:|---:|
-| `i_dm_top` | — | — | 61.52% (502/816) |
-| `i_dm_csrs` | 86.79% (138/159) | 75.00% (6/8) | 44.48% (636/1430) |
-| `i_dm_sba` | 86.36% (38/44) | 88.89% (8/9) | 46.81% (264/564) |
-| `i_dm_mem` | 92.55% (87/94) | 95.00% (19/20) | 75.32% (525/697) |
-| `i_dmi_jtag` | 85.45% (47/55) | 64.71% (11/17) | 97.07% (364/375) |
-| **Total** | **88.07%** (310/352) | **81.48%** (44/54) | **59.02%** (2291/3882) |
+| Instance | Block | Expression | Toggle | FSM states | FSM trans. |
+|---|---:|---:|---:|---:|---:|
+| `i_dm_top` | — | — | 99.00% (1188/1200) | — | — |
+| `i_dm_csrs` (+ `gen_haltsum0_single`) | 96.88% (155/160) | 75.00% (6/8) | 78.39% (1999/2550) | — | — |
+| `i_dm_sba` | 86.36% (38/44) | 88.89% (8/9) | 98.94% (558/564) | 5/5 | 6/6 |
+| `i_dm_mem` | 100% (94/94) | 100% (20/20) | 74.28% (1421/1913) | 4/4 | 5/5 |
+| `i_debug_rom` | 100% (6/6) | — | 9.84% (133/1351) | — | — |
+| `i_dmi_jtag` | 92.73% (51/55) | 94.12% (16/17) | 97.33% (365/375) | 5/5 | 6/6 |
+| `i_dmi_jtag_tap` (+ clock cells) | 100% (78/78) | — | 97.75% (174/178) | 16/16 | 26/26 |
+| `i_dmi_cdc` (+ 2 × `cdc_2phase`, src/dst) | 100% (42/42) | 88.89% (16/18) | 95.65% (835/873) | — | — |
+| **Total** | **96.87%** (464/479) | **91.67%** (66/72) | **74.11%** (6673/9004) | **30/30** | **43/43** |
 
-Up from 74.43% / 75.93% / 38.79% at the start of this closure pass. The gain is
-almost entirely SBA: `i_dm_sba` toggle went 6.38% → 46.81% once the scenarios
-stopped aborting.
+With the generated exclusions applied (`out/dm_code_excl.rpt`), every row is
+100%: 15 blocks, 8 expression rows (2 of them constants imc excludes itself)
+and 2331 toggle bits excluded; FSM needs no exclusions.
 
-`i_dm_top` has no block or expression section because it is a wrapper with no
-logic of its own — that is an absent metric, not a hole.
-
-The lowest row is `i_dm_sba`, and it is the same RTL-002 blockage that holds
-`cg_sba` down: the SBA paths are reachable but the scenarios abort before
-exercising them. Functional and code coverage agree on where the gap is, which
-is a useful cross-check that neither number is an artefact.
+Before this pass the quoted figure covered five instances only, left out FSM,
+and missed the CDC and every multi-dimensional array entirely. Its "100%" was
+not comparable to this one.
 
 ---
 
-## Why the code coverage is low
+## How the code coverage closed
 
-Not because the stimulus is thin. **90 uncovered blocks and 2376 untoggled bits,
-and they are concentrated, not spread.** Every one was classified from the
-report rather than estimated:
+Every uncovered item was classified against the RTL before anything was
+written: reachable ones got stimulus, the rest got an exclusion rule that
+states why the code cannot run here and what would make it run. Nothing is
+excluded for being hard, and a rule that stops matching is reported so it can be
+deleted.
 
-| Root cause | Blocks | Share |
-|---|---:|---:|
-| **System Bus Access — RTL-002** | 38 | **42%** |
-| Register access *while an abstract command is busy* | 20 | 22% |
-| DMI busy/error transport paths | 11 | 12% |
-| Abstract-command register-decode corners | 6 | 7% |
-| Multi-hart only (`haltsum1-3`, `stickyunavail`) | 5 | 6% |
-| Writes to R/O registers being ignored | 3 | 3% |
-| `abstractauto` — never exercised | 2 | 2% |
-| `keepalive` — never driven | 2 | 2% |
-| Other | 3 | 3% |
+### Reached by stimulus
 
-### One RTL line dominates both metrics
+| Gap | Why it was missed | Now |
+|---|---|---|
+| Busy guard with `cmderr`=0 on data/progbuf reads, progbuf writes, `abstractauto`, `abstractcs` | `cmd_busy` raced several accesses against one command; the first set `cmderr`, so the rest took the other branch | `TC-AC-020/021`: one command per access |
+| `regno` corner arms on the read path | `TC-AC-026` only wrote | reads added |
+| `command` read, unmapped write | never done | `TC-AC-028` |
+| DTM busy capture, sticky error, `test_logic_reset` | every DMI access scans IR first, which always gives the DTM time; the "TAP reset" op was a BYPASS IR scan | raw DR-scan op, real TMS reset; `TC-DTM-014/015` |
+| `sbbusy` true during a DMI access | a JTAG scan (~90 clocks) outlasts any bus transfer | `ndmreset` stalls the transfer; `TC-DMC-003` |
+| `dm_mem` default write, idle `whereto`, `whereto` with `resumereq`, another hart's flags | only the hart touches DM memory | SBA into DM memory; `TC-DMC-001/002` |
+| `haltsum1-3` read arms | believed multi-hart only; the decode answers them anyway | `TC-DMC-008` (and found RTL-007) |
+| Upper halves of every 64-bit bus, WARL/reserved register bits, `relaxedpriv` | every access used 32-bit values and in-range writes | `TC-DMC-005/006` (and found RTL-006) |
+| TAP: IDCODE and BYPASS never selected; Pause/Exit2 and five other TAP arcs never taken | every scan went RTI → IR → DR → RTI | raw JTAG scan and TMS walk; `TC-DTM-002/017/019` |
+| `dmihardreset` | the old check passed on a DTM that ignores it | `TC-DTM-012` (and found RTL-009) |
+| Per-hart state slot 1 in `dm_mem` | believed single-hart only; the slot is indexed by the hart id written | SBA writes of id 1; `TC-DMC-009` |
+| `abstract_cmd` operand bits | no command used those regno bits | regno/size walk; `TC-DMC-010` |
 
-SBA is 42% of the uncovered blocks and **59% of the untoggled bits** — every one
-of the top 22 untoggled signal groups is a 64-bit SBA bus (`sbaddress_*`,
-`sbdata_*`, `master_add_o`, `master_wdata_o`, `master_r_rdata_i`). `i_dm_sba`
-alone sits at **6.38% toggle**, 528 of its 564 bits never driven.
+The earlier toggle waiver for "the upper half of every SBA bus has no reachable
+value" was wrong: `sbaddress1` and `sbdata1` exist for exactly that, and it was
+deleted once they were driven.
 
-That is the same RTL-002 blockage holding `cg_sba` at 25%. **Functional and code
-coverage independently point at the same line**, which is good evidence neither
-number is an artefact of how it was measured.
+### Excluded, by basis
 
-Upper bound if SBA were unblocked and fully exercised: block **74.43% → ~85%**,
-toggle **38.79% → ~75%**.
+| Basis | Rules | Blocks | Expr rows | Toggle bits |
+|---|---|---:|---:|---:|
+| Constant by construction — ROM array, fixed register fields, WARL masks, `dmcs2`, padded single-hart slots, flag-word padding | `debug-rom-*`, `*-constants`, `abstractauto-warl`, `dmcs2-not-implemented`, `single-hart`, `flag-word-constants`, `shutdown-counter-range` | — | — | 1461 |
+| Constant by enumeration of every program `dm_mem` generates | `abstract-command-constant-bits` (`mk/dm_abstract_cmd_bits.py`) | — | — | 420 |
+| Parameters (`DataCount`, `ReadByteEnable`) | `datacount-param`, `readbyteenable-param` | 2 | — | — |
+| Testharness tie-offs (`test_en`, `unavailable_i`) | `tied-off-inputs`, `hart-never-unavailable` | 1 | — | 15 |
+| Dead code behind RTL-002 / RTL-005 | `sba-*`, `sbaccess-hardwired`, `keepalive-dead-code` | 8 | 1 | 24 |
+| X for the whole run, RTL-007 | `haltsum-undriven` | — | — | 320 |
+| DTM encodings no transition produces; forced-constant DMI response | `dtm-parasitic-state`, `dtm-unencoded-error`, `dmi-response-constants` | 2 | 1 | 32 |
+| **Argued from the RTL, not proven** — response FIFO never fills, CDC always ready | `dmi-resp-fifo-never-full`, `dmi-request-always-ready`, `dtm-request-backpressure` | 2 | 4 | 9 |
+| **Waiver — testbench limit**: one power-on reset and one TRST per run | `waiver-*` | — | — | 20 |
 
-### Toggle is structurally pessimistic on this DUT
+The `abstract_cmd` rule first excluded every untoggled bit "left constant
+after the walk". Enumerating the generator showed three of those 423 bits were
+reachable (a CSR write to a CSR that does not exist still builds its program);
+the walk now attempts those writes and covers them, and the rule excludes only
+bits the enumeration proves constant.
 
-`sbasize=64` and `sbaccess64=true`, but the DM is driven over a **32-bit DMI**.
-The upper half of every 64-bit SBA address and data bus needs a target address
-above 4 GB to toggle at all. Some of that gap is not closable by stimulus and
-belongs in a waiver list, which is what issue #87 already anticipates — *"not
-assumed achievable by stimulus alone."*
+### What the measurement itself was missing
 
-This is why the summary reports toggle separately instead of averaging it in.
+- **Sub-instances.** The text report named five instances; the TAP (68/78
+  blocks at the time), the CDC and the ROM were outside every quoted number.
+- **Type-parameterised modules.** Xcelium does not score block, expression,
+  toggle or FSM coverage in them by default, so `cdc_2phase` had no data at
+  all. `mk/xcelium_cov.ccf` sets `set_parameterized_module_coverage`.
+- **Multi-dimensional arrays** (`*W,COVMDD`): progbuf, the abstract-command
+  program and the haltsum trees were never toggle-scored. The CCF enables
+  `-sv_mda`; arrays of structs (`-sv_mda_of_struct`) crash `xmelab` and stay
+  unscored.
+- **FSM.** Recorded all along, but IMC's `-metrics code` omits it.
+- **IMC silently dropped every struct-field exclusion** (`*W,NOMATCH`);
+  `dm_cov.sh` now surfaces that warning.
 
-### What is genuinely thin, and cheap to fix
+### What closing it found
 
-Two categories are real gaps with no RTL blocker, together **34% of uncovered
-blocks**:
+Four RTL defects no functional check had caught — RTL-006, RTL-007, RTL-008,
+RTL-009 — and testbench defects that had been hiding things:
 
-- **Access while an abstract command is busy** (20 blocks). The `cmderr` test
-  drives `busy` on back-to-back *commands*, but never a DMI read or write of
-  `data0`, `progbuf` or `abstractauto` *during* a command. Six `if (cmdbusy_i)
-  … else if (cmderr_q == CmdErrNone)` guard sites are untouched.
-- **DMI busy/error transport** (11 blocks) — `DMIBusy`, `dmi_reset`,
-  `test_logic_reset`, and request back-pressure. This is the *same* hole as the
-  unfilled `cp_dmi_result.failed`/`.busy` bins: one directed transport-error test
-  closes both a functional hole and 12% of the code-coverage gap.
-
-By contrast `i_dmi_jtag` is at **94.67% toggle** and 80% block — the transport is
-well exercised. The weakness is specific, not general.
+- DMI read data crossed the DPI bridge as a 2-state `int`, so X read as 0; a
+  check on `haltsum1-3` passed while they were X.
+- The TAP-reset op never reset the TAP; TC-DTM-014 passed without reaching the
+  code it was written for.
+- TC-DTM-012 and DTM-002 passed without testing anything: one wrote
+  `dmihardreset` with no error pending, the other was never run.
+- TC-RC-006 timed the simulator's wall clock against the spec's one-second
+  bound; a slower coverage build failed it with the design unchanged. It now
+  measures simulated time.
 
 ---
 
@@ -310,9 +330,9 @@ In order of coverage gained per unit of work:
 
 1. **Resolve RTL-002.** One RTL line unblocks a whole covergroup, ~15 testplan
    rows and the `sba` scenario.
-2. **A transport-error test.** Deliberately under-idle the DMI to provoke `busy`,
-   and force a sticky error to provoke `failed`. Closes `cp_dmi_result` and the
-   `x_op_x_result` cross.
+2. **A transport-error test.** `busy` is now provoked on purpose
+   (`TC-DTM-015`). `failed` is not reachable on this DUT: the DM always
+   answers `DTM_SUCCESS`. The `x_op_x_result` cross is still open.
 3. **Arm a trigger and let it fire.** Closes `cp_cause.trigger` and starts the
    trigger crosses, which are 5 of the model's coverpoints.
 4. **Get U-mode execution working** in `priv_walk`, then the privilege crosses

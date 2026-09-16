@@ -51,8 +51,9 @@ tests:
   - name: halt
     config: configs/halt_uvm.json
     covers: [HALT-001, HALT-002, RC-001]
-    expect: partial
-    why: Aborts on the RTL-002 sbcs mismatch before reaching its verdict.
+    why: >-
+      Was partial: aborted on the RTL-002 sbcs mismatch. Passes since the model
+      honours a hardwired sbaccess (7f7f384) -- 8/8 in every run since.
 
   - name: run_control
     config: configs/run_control_uvm.json
@@ -170,10 +171,10 @@ tests:
   - name: sba
     config: configs/sba_uvm.json
     covers: [SBA-001, SBA-002]
-    expect: partial
     why: >-
-      Blocked behind RTL-002. Kept in the suite so the day sbaccess becomes
-      writable the coverage moves without anyone remembering to re-enable it.
+      SBA discovery, round-trips and sbbusyerror. Was partial behind RTL-002;
+      passes since the model honours a hardwired sbaccess (7f7f384). The
+      access-size bins still wait on RTL-002 (see cg_sba).
 
   - name: mem_scan
     config: configs/mem_scan_uvm.json
@@ -182,7 +183,7 @@ tests:
 
   - name: cmd_busy
     config: configs/cmd_busy_uvm.json
-    covers: [AC-020, AC-021, AC-022, AC-023, AC-024, AC-025]
+    covers: [AC-020, AC-021, AC-022, AC-023, AC-024, AC-025, AC-026, AC-027, AC-028]
     why: >-
       DMI access while an abstract command is in flight. Six busy-guard sites in
       dm_csrs.sv were dead because every other scenario waits for its command;
@@ -192,12 +193,30 @@ tests:
 
   - name: dmi_error
     config: configs/dmi_error_uvm.json
-    covers: [DTM-010, DTM-011, DTM-012, DTM-013, DTM-014]
+    covers: [DTM-002, DTM-010, DTM-011, DTM-012, DTM-013, DTM-014, DTM-015,
+             DTM-017, DTM-018, DTM-019]
+    expect: fail
     why: >-
-      DTM sticky-error and reset recovery. dtmcs has no DMI address, so it needed
-      a new transport op; without it dmireset, dmihardreset and the DTM's whole
-      error-recovery path were unreachable from a scenario.
-    expect: pass
+      The DTM on its own: dtmcs, IDCODE and BYPASS, a provoked sticky busy,
+      dmireset, dmihardreset, Test-Logic-Reset and every TAP transition. Needs
+      the dtmcs, raw DMI scan, raw JTAG scan and TMS-walk transport ops. Fails
+      exactly one step, TC-DTM-012, on RTL-009 (dmihardreset not implemented);
+      10/11 is the known state.
+
+  - name: dm_corners
+    config: configs/dm_corners_uvm.json
+    covers: [DMC-001, DMC-002, DMC-003, DMC-004, DMC-005, DMC-006, DMC-007, DMC-008,
+             DMC-009, DMC-010]
+    expect: fail
+    why: >-
+      Debug Module code no ordinary flow reaches, found by code coverage: a
+      flag poll with a nonexistent hart selected, SBA into the DM's own memory,
+      DMI access while a system bus transfer is held busy under ndmreset,
+      every writable register bit both ways, and the 64-bit bus halves. Fails
+      exactly three steps on known RTL defects: TC-DMC-001 (RTL-008, dmstatus
+      reads X for a nonexistent hart), TC-DMC-007 (RTL-006, sbcs reserved bits
+      read back as written) and TC-DMC-008 (RTL-007, haltsum1-3 read X).
+      9/12 is the known state.
 
   - name: debug_entry
     config: configs/debug_entry_uvm.json

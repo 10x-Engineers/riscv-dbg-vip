@@ -378,13 +378,16 @@ write `command` → poll `abstractcs.busy` → read `cmderr` → read `data0..`.
 |---|---|---|---|---|---|---|
 | AC-020-S | Stimulate | Start a long Program-Buffer command via postexec, then read/write `data0` and `progbuf0` while `abstractcs.busy`=1 | `debug_module.html#abstract-commands` | P0 | Pass | `cmd_busy_uvm` — a delay loop holds busy long enough to race over JTAG |
 | AC-020-C | Check | `cmderr` becomes 1 (busy) and the in-flight command is not corrupted | `debug_module.html#dm-abstractcs` | P0 | Pass | Observed cmderr=1, guard fired |
-| AC-021-S | Stimulate | Write `command` and `abstractauto` while busy | `debug_module.html#dm-abstractcs` | P1 | Pass | |
+| AC-020-C2 | Check | Each of the four accesses is raced against its own command, so every one meets `cmderr`=0 | `debug_module.html#dm-abstractcs` | P0 | Pass | Racing several against one command only reaches the guard's inner arm with the first: it sets `cmderr` |
+| AC-021-S | Stimulate | Write `command`, `abstractauto` and `abstractcs` while busy, each against its own command; `abstractcs` twice | `debug_module.html#dm-abstractcs` | P1 | Pass | The second `abstractcs` write meets `cmderr` already set |
+| AC-021-C | Check | Every one is refused with `cmderr`=1 | `debug_module.html#dm-abstractcs` | P1 | Pass | |
 | AC-022-C | Check | After clearing `cmderr`, a GPR round-trip succeeds — the DM is usable, not wedged | `debug_module.html#dm-abstractcs` | P0 | Pass | |
 | AC-023-C | Check | Writes to the R/O `dmstatus` and `hartinfo` are ignored, not errors | `debug_module.html#dm-dmstatus` | P2 | Pass | |
 | AC-024-S | Stimulate | Write and read `abstractauto` (0x18) | `debug_module.html#dm-abstractauto` | P2 | Pass | Implemented on this DUT; must be disarmed or later `data0` access re-runs the command |
 | AC-025-S | Stimulate | Write `dmcontrol.setkeepalive`, then `clrkeepalive`, then `hasel`/`setresethaltreq`/`clrresethaltreq` | `debug_module.html#dm-dmcontrol` | P2 | Pass | The write is sampled, not its effect, so these are reachable on a single-hart DUT |
-| AC-026-S | Stimulate | Issue abstract commands with `regno`[15:14] set, `regno`=0x100A (a0), and `regno`[5] set | `debug_module.html#dm-command` | P1 | Pass | Three `regno` decode arms in `dm_mem` nothing else reaches |
+| AC-026-S | Stimulate | Issue abstract commands with `regno`[15:14] set, `regno`=0x100A (a0), and `regno`[5] set, each as a write and as a read | `debug_module.html#dm-command` | P1 | Pass | `dm_mem` decodes `regno` separately per direction; write-only left the three read arms uncovered |
 | AC-027-C | Check | A resume issued to an already-running hart is a no-op | `debug_module.html#dm-dmcontrol` | P2 | Pass | |
+| AC-028-C | Check | `command` reads 0; a write to an address with no register (0x2F) is ignored | `debug_module.html#dm-command` | P2 | Pass | `dm_csrs` case arms nothing else reaches |
 | AC-001-S | Stimulate | Access Register, `regno=0x1008` (`x8`), `write=0`, `aarsize=3` | `debug_module.html#access-register` | P0 | Pass | `gpr_write_uvm` (4/4) |
 | AC-001-C | Check | `abstractcs.busy` clears, `cmderr=0`, `data0` holds the GPR value | `debug_module.html#abstractcs` | P0 | Pass | |
 | AC-002-S | Stimulate | Write `data0=0xA5A5_A5A5`; Access Register with `write=1` to a GPR; read it back | `debug_module.html#access-register` | P0 | Pass | |
@@ -711,19 +714,21 @@ untested area in this plan.
 | DTM-010-C | Check | `dtmcs.version`=1 and `abits`>=7 | `dtm.html#dtmcs` | P0 | Pass | Observed 0x00001071 |
 | DTM-011-S | Stimulate | Issue back-to-back DMI accesses with no idle cycles, then write `dtmcs.dmireset` | `dtm.html#dtmcs` | P1 | Pass | |
 | DTM-011-C | Check | `dtmcs.dmistat` reads 0 after `dmireset`, and the DMI still responds | `dtm.html#dtmcs` | P1 | Pass | Does NOT assert that busy was provoked: a DM that keeps up with JTAG is not wrong |
-| DTM-012-S | Stimulate | Write `dtmcs.dmihardreset` | `dtm.html#dtmcs` | P1 | Pass | |
-| DTM-012-C | Check | `dtmcs.dmistat`=0 and `dmcontrol.dmactive` still 1 — the DM is not on the TAP | `dtm.html#dtmcs` | P1 | Pass | |
+| DTM-012-S | Stimulate | Provoke a sticky busy (as DTM-015), then write only `dtmcs.dmihardreset` | `dtm.html#dtmcs` | P1 | Fail | Previously written with no error pending, which a DTM ignoring the bit also passes |
+| DTM-012-C | Check | `dtmcs.dmistat`=0 afterwards, and `dmcontrol.dmactive` still 1 — the DM is not on the TAP | `dtm.html#dtmcs` | P1 | Fail | **RTL-009** — `dmistat` stays 3 |
 | DTM-013-C | Check | A read of an unimplemented DMI address returns 0 and leaves the DMI usable | `dtm.html` | P2 | Pass | Reaches the DM's `default:` decode arm |
-| DTM-014-S | Stimulate | Drive Test-Logic-Reset, then re-read `dtmcs` and `dmcontrol` | `dtm.html` | P1 | Pass | |
+| DTM-014-S | Stimulate | Drive Test-Logic-Reset with five TMS=1 clocks, then re-read `dtmcs` and `dmcontrol` | `dtm.html` | P1 | Pass | The transport's "TAP reset" was an IR scan of BYPASS and never reached Test-Logic-Reset; fixed |
 | DTM-014-C | Check | `dmactive` survives a transport reset | `dtm.html` | P1 | Pass | |
+| DTM-015-S | Stimulate | Queue a DMI read, then scan DR again with no IR scan in between (three TCK edges), then once more | `dtm.html#dmi` | P0 | Pass | `dmi_error_uvm` — needed a raw DR-scan transport op; the normal path scans IR first, which always gives the DTM time |
+| DTM-015-C | Check | The scans capture `dmistat` 0, 3, 3; `dtmcs.dmistat`=3; after `dmireset` it is 0 and the DMI works | `dtm.html#dtmcs` | P0 | Pass | Observed 0/3/3 |
 | DTM-001-S | Stimulate | Drive TMS sequences through every JTAG TAP state | `dtm.html` | P0 | Pass | Underpins every other test |
 | DTM-001-C | Check | Each state is reached and exits correctly | `dtm.html` | P0 | Pass | |
-| DTM-002-C | Check | IDCODE reads the expected device value | `dtm.html` | P0 | Pass | `discovery_uvm` |
+| DTM-002-C | Check | IDCODE reads the expected device value (0x00000001 on this build), bit 0 set, plain and through Pause-IR/DR | `dtm.html` | P0 | Pass | `dmi_error_uvm` TC-DTM-002. Was marked Pass against `discovery_uvm`, which never scans IDCODE |
 | DTM-003-S | Stimulate | DMI read (`op=1`) and write (`op=2`) to a known DM register | `dtm.html#dmi` | P0 | Pass | |
 | DTM-003-C | Check | `op` returns 0 (success); data matches | `dtm.html#dmi` | P0 | Pass | |
-| DTM-004-S | Stimulate | Issue DMI accesses faster than the DM can service | `dtm.html#dmi` | P0 | Not started | |
-| DTM-004-C | Check | `op=3` (busy) is returned; retrying after `dmireset` succeeds | `dtm.html#dmi` | P0 | Not started | |
-| DTM-005-C | Check | A DMI error is sticky — subsequent accesses keep failing until `dmireset` | `dtm.html#dtmcs` | P0 | Not started | See RST-020 |
+| DTM-004-S | Stimulate | Issue DMI accesses faster than the DM can service | `dtm.html#dmi` | P0 | Pass | By DTM-015-S |
+| DTM-004-C | Check | `op=3` (busy) is returned; retrying after `dmireset` succeeds | `dtm.html#dmi` | P0 | Pass | By DTM-015-C |
+| DTM-005-C | Check | A DMI error is sticky — subsequent accesses keep failing until `dmireset` | `dtm.html#dtmcs` | P0 | Pass | By DTM-015-C: the third scan still returns 3. See RST-020 |
 | DTM-006-S | Stimulate | Issue a DMI access with `op=0` and with undefined `op` encodings | `dtm.html#dmi` | P2 | Not started | |
 | DTM-006-C | Check | No hang; the DM remains usable | `dtm.html#dmi` | P2 | Not started | |
 | DTM-007-S | Stimulate | Address a DMI location beyond `dtmcs.abits` | `dtm.html#dmi` | P2 | Not started | |
@@ -733,6 +738,38 @@ untested area in this plan.
 | DTM-009-V | Cover | `dmi.op` result = {0 success, 2 failed, 3 busy}; `dtmcs.dmistat` = {0, 2, 3} | `dtm.html#dmi` | P1 | Not started | |
 | DTM-010-V | Cover | DMI operation × result | `dtm.html#dmi` | P1 | Not started | `x_op_x_result` — a failed read returns stale data, a failed write may partially apply |
 | DTM-011-V | Cover | Idle cycles supplied × DMI result | `dtm.html#dtmcs` | P0 | Not started | `x_idle_x_result` — under-running `dtmcs.idle` is the specified way to provoke busy, the only place that causal link is measured |
+| DTM-017-C | Check | BYPASS (IR 0x00 and 0x1f) is a 1-bit delay that captures 0 | `dtm.html` | P2 | Pass | Nothing had ever selected BYPASS |
+| DTM-018-C | Check | Shifting all-ones into `dtmcs`'s read-only and reserved bits changes nothing | `dtm.html#dtmcs` | P2 | Pass | |
+| DTM-019-S | Stimulate | One TMS walk through every TAP transition scans never take: zero-length DR/IR, Pause and Exit2 both ways, Update straight to Select-DR | `dtm.html` | P1 | Pass | Supersedes DTM-001's claim, which only ever covered the direct path |
+| DTM-016-C | Check | A DMI read never returns X or Z in any bit | `dtm.html#dmi` | P0 | Pass | Every read: the bridge carries an X mask beside the value and the transport refuses it. Before this, X reached Python as 0 — see RTL-007 |
+
+## 3.16 Debug Module paths no ordinary flow reaches
+
+**Intent.** Close the Debug Module's code coverage with stimulus rather than
+exclusions. Every row here targets code that code coverage showed was never
+executed and that is reachable on this DUT. What is not reachable is excluded
+by `mk/dm_cov_exclude.py`, one stated reason per rule.
+
+**Workflow.** `dm_corners_uvm`, one session, `sw/halt_probe.elf`. The stalled
+transfer (DMC-003) leaves SBA busy until power-on reset, so it runs last.
+
+| ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
+|---|---|---|---|---|---|---|
+| DMC-001-S | Stimulate | With hart 0 halted, select `hartsel`=1 (no such hart) for several DMI round-trips, then reselect 0 | `debug_module.html#dm-dmcontrol` | P2 | Pass | The parked hart's flag poll misses — a `dm_mem` arm a single-hart flow never takes |
+| DMC-001-C | Check | `dmstatus` reads cleanly with `allnonexistent`=1 while selected; hart 0 is still halted afterwards | `debug_module.html#dm-dmstatus` | P2 | Fail | **RTL-008** — bits [13:10] read X. The flag-poll arm is still covered |
+| DMC-002-S | Stimulate | Over SBA: write an undecoded DM address (0x0), read hart 0's and another hart's flag word, read `whereto` idle and while `resumereq` is outstanding | `debug_module.html#system-bus-access` | P2 | Pass | The testharness maps the DM's own memory on the bus SBA uses |
+| DMC-002-C | Check | Both flag words read 0 with nothing pending; `whereto` with a resume pending is `jal` to the resume entry (0x5040006f) | `debug_module.html` | P2 | Pass | An idle `whereto` returns dm_mem's previous read, which is undefined, so it is not checked |
+| DMC-003-S | Stimulate | Assert `ndmreset`, start an SBA read, then write `sbcs`, read `sbdata1`, write `sbaddress1` and `sbdata1` | `debug_module.html#dm-sbcs` | P1 | Pass | `ndmreset` resets the crossbar but not the DM's bus master, so the transfer stays busy. A JTAG scan otherwise outlasts any transfer, so no access had ever met `sbbusy`=1 |
+| DMC-003-C | Check | `sbbusy`=1 under reset, and `sbbusyerror`=1 after the accesses | `debug_module.html#dm-sbcs` | P1 | Pass | |
+| DMC-004-C | Check | After release: a W1C of `sbbusyerror` is applied only once `sbbusy` has cleared; a `dmactive` cycle clears it; run control still works | `debug_module.html#dm-sbcs` | P1 | Pass | Whether the transfer survives the crossbar reset depends on where it was when reset hit — a testharness property, recorded under the RTL findings' observations |
+| DMC-005-S | Stimulate | Write all-ones to `abstractcs`, `abstractauto` and `command` (reserved bit, `aarpostincrement`, `regno`[13]); restore each | `debug_module.html#dm-abstractauto` | P2 | Pass | Toggle coverage named whole fields no scenario ever set |
+| DMC-005-C | Check | `relaxedpriv` reads 1; `abstractauto` reads 0x00ff0003 (WARL to 8 progbuf, 2 data bits); the DM stays usable | `debug_module.html#dm-abstractauto` | P2 | Pass | |
+| DMC-006-S | Stimulate | 64-bit SBA write/read of all-ones and all-zeros at an address with bits [27:14] set; toggle `sbaddress1`; read every `dm_mem` region (ROM, abstract slots, Program Buffer filled both ways, data) as 64-bit words; 64-bit (`aarsize`=3) GPR round-trips | `debug_module.html#system-bus-access` | P2 | Pass | Every earlier access used 32-bit values, leaving the upper half of every bus untoggled |
+| DMC-006-C | Check | Every 64-bit round-trip returns what was written; every ROM word matches `debug_rom.sv`; the Program Buffer and data words read back what was written | `debug_module.html#system-bus-access` | P2 | Pass | The abstract-command slots are read but not checked: their content is the last command's program |
+| DMC-007-C | Check | After writing all-ones to `sbcs`, reserved bits [28:23] read 0 | `debug_module.html#dm-sbcs` | P2 | Fail | **RTL-006** — they read back 0x3f. The model masks `sbcs` to predicted fields, so nothing else checks them |
+| DMC-008-C | Check | `haltsum1`, `haltsum2` and `haltsum3` read 0 on a single-hart DM | `debug_module.html#dm-haltsum1` | P2 | Fail | **RTL-007** — bit 0 reads X |
+| DMC-009-S | Stimulate | Over SBA, write hart id 1 to `dm_mem`'s halted then resuming word; select hart 1 and raise `resumereq` | `debug_module.html` | P2 | Pass | dm_mem indexes its per-hart state by the id written, so the padded second slot is reachable |
+| DMC-009-C | Check | Hart 0 is still halted | `debug_module.html` | P2 | Pass | |
 
 ---
 

@@ -323,11 +323,30 @@ Both halves matter:
 
 ```bash
 bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
-#   out/functional.rpt   per-covergroup, per-bin functional coverage
-#   out/dm_code.rpt      code coverage scoped to the DM
+#   out/functional.rpt              per-covergroup, per-bin functional coverage
+#   out/dm_code.rpt                 code coverage scoped to the DM
+#   out/dm_exclusions.tcl           generated exclusions, one stated reason per rule
+#   out/dm_code_excl.rpt            the same, with the exclusions applied
+#   out/{dm,dmi_jtag}_code_html/    browsable code coverage: dm_top and below, and the DTM
+#   out/{dm,dmi_jtag}_code_html_excl/   the same, with the exclusions applied
+#   out/functional_html/            browsable functional coverage
 ```
 
-Handles the `PATH`, the 21.09 default, the merge and the absolute-path rule.
+Handles the `PATH`, the 21.09 default, the merge and the absolute-path rule, and
+prints the DM table twice: raw, and with unreachable code excluded. The HTML
+needs two directories because `report_metrics -recursive` takes exactly one
+instance and `i_dmi_jtag` is not under `i_dm_top`. The HTML loads its data with a
+script request, which browsers block from `file://` — serve it instead:
+
+```bash
+cd out && python3 -m http.server 8765 --bind 127.0.0.1
+# http://127.0.0.1:8765/dm_code_html_excl/index.html
+```
+
+Every exclusion comes from `mk/dm_cov_exclude.py`, which matches justified
+patterns against the report rather than hand-copied indices, prints anything it
+cannot justify as a real hole, and flags a rule that stops matching. In the IMC
+GUI, `source out/dm_exclusions.tcl` in the console applies the same set.
 
 #### Running `imc` yourself
 
@@ -457,21 +476,46 @@ one line** of `dm_csrs`, `dm_mem` or `dm_sba`. An unknown instance path is
 reported as an empty section rather than an error, so `dm_cov.sh` now warns when
 an instance produces nothing.
 
-Current DM-only code coverage, merged across all 22 tests:
+Current Debug Module code coverage, merged across all 26 tests (2026-09-16).
+"Debug Module" is `i_dm_top` and `i_dmi_jtag` **and everything under them** —
+19 instances, including the debug ROM, the DTM's TAP and both halves of its
+clock-domain crossing:
 
-| Instance | Block | Expression | Toggle |
-|---|---:|---:|---:|
-| `i_dm_top` | — | — | 61.52% |
-| `i_dm_csrs` | 86.79% | 75.00% | 44.48% |
-| `i_dm_sba` | 86.36% | 88.89% | 46.81% |
-| `i_dm_mem` | 92.55% | 95.00% | 75.32% |
-| `i_dmi_jtag` | 85.45% | 64.71% | 97.07% |
-| **Debug Module total** | **88.07%** | **81.48%** | **59.02%** |
+| Metric | Raw | Unreachable code excluded |
+|---|---:|---:|
+| Block | 96.87% (464/479) | **100%** (464/464, 15 excluded) |
+| Expression | 91.67% (66/72) | **100%** (66/66, 8 excluded) |
+| Toggle | 74.11% (6673/9004) | **100%** (6673/6673, 2331 excluded) |
+| FSM states | **100%** (30/30) | 100% |
+| FSM transitions | **100%** (43/43) | 100% |
 
-Toggle is reported separately rather than folded into one figure: it is
-dominated by wide buses whose upper bits a single-hart, 32-bit-DMI configuration
-never drives, so averaging it with block coverage produces a number that is
-neither.
+Per instance: `bash mk/dm_cov.sh` prints both tables; `out/dm_code_excl.rpt`
+has every item.
+
+What the 100% rests on, stated plainly:
+
+- **Every exclusion is a rule with a reason** in `mk/dm_cov_exclude.py`, and
+  nothing is excluded for being hard. By weight, the toggle exclusions are
+  constants: the debug ROM array (1216 bits), `abstract_cmd` bits that no
+  program `dm_mem` can generate ever changes (420, proven by enumeration in
+  `mk/dm_abstract_cmd_bits.py`), the undriven RTL-007 vectors (320), and
+  fixed register fields.
+- **Three rules are argued from the RTL, not proven** and say so: the response
+  FIFO never fills, and the CDC is always ready when the DTM asks (2 blocks,
+  4 expression rows, 9 bits).
+- **Two rules are testbench limits, labelled as waivers**: one power-on reset
+  and one TRST per run (20 bits).
+- **Measured scope has one known gap:** toggle coverage of arrays of structs
+  (`hartinfo_aligned`) is off — `set_toggle_scoring -sv_mda_of_struct` crashes
+  `xmelab` 23.03.
+- `mk/xcelium_cov.ccf` is load-bearing: without it Xcelium silently skips
+  type-parameterised modules (the whole CDC) and multi-dimensional arrays
+  (progbuf, the abstract-command program, the haltsum trees). IMC's
+  `-metrics code` also omits FSM; `dm_cov.sh` asks for `code:fsm`.
+
+Toggle is still reported separately rather than folded into one figure: a wide
+field that a parameter fixes counts once per bit, so averaging it with block
+coverage produces a number that is neither.
 
 ### RTL findings
 
@@ -486,6 +530,11 @@ it.
 | RTL-002 | `sbcs.sbaccess` hardwired, and its spec reset value lost | filed — [10x-Engineers/riscv-dbg PR #4](https://github.com/10x-Engineers/riscv-dbg/pull/4#issuecomment-5677436187); blocks all SBA coverage |
 | RTL-003 | `allrunning`/`anyrunning` asserted for a nonexistent hart | already filed upstream by a third party — [pulp-platform/riscv-dbg#200](https://github.com/pulp-platform/riscv-dbg/issues/200); internal `#130` |
 | RTL-004 | Halt-on-reset not implemented | not a defect — optional feature; also upstream [#187](https://github.com/pulp-platform/riscv-dbg/issues/187) |
+| RTL-005 | `setkeepalive`/`clrkeepalive` cleared before they are tested | filed, [#148](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148) |
+| RTL-006 | `sbcs` reserved bits [28:23] read back as written | [#149](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching upstream issue |
+| RTL-007 | `haltsum1`–`haltsum3` read X on a single-hart DM | [#150](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`) |
+| RTL-008 | `dmstatus` reads X for a nonexistent hart | [#151](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — PR #4's #520 change indexes a one-hart vector with `hartsel` |
+| RTL-009 | `dtmcs.dmihardreset` is not implemented | [#152](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this DTM predates upstream's support |
 
 RTL defects are deliberately **not** attached to any milestone — milestones track
 development work. RTL findings are tracked in that file and upstream.

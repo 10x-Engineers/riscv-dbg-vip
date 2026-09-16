@@ -180,9 +180,155 @@ assignment in one `always_comb` killing an earlier one. Worth sweeping
 
 ---
 
+## RTL-006 — `sbcs` reserved bits [28:23] read back as written
+
+**Status:** filed · [`#149`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching issue in `pulp-platform/riscv-dbg` as of 2026-09-16
+**Component:** `riscv-dbg` `src/dm_csrs.sv:513` (`sbcs_d = sbcs;`) vs the fixed-field block at `:610-618`
+**Severity:** low — a spec deviation a debugger is unlikely to trip over, but a conformance failure
+
+```systemverilog
+513:    sbcs_d = sbcs;                     // whole written word, reserved field included
+...
+610:    sbcs_d.sbversion = 3'd1;           // fixed fields are re-forced here --
+                                           // zero0 [28:23] is not among them
+```
+
+A write to `sbcs` copies the whole word into `sbcs_d`, and the later block that
+re-forces the fixed fields does not include `zero0`, so whatever the debugger
+wrote to bits 28:23 is stored and read back. The spec defines that field as 0.
+
+Measured, `TC-DMC-007` in `dm_corners_uvm`:
+
+```
+DMI  WRITE sbcs data=0xffffffff
+DMI  READ  sbcs data=0x3f978808      bits [28:23] = 0x3f, expected 0
+```
+
+**Inherited from pulp upstream, not introduced by PR #4**: Ibex's vendored copy
+(`ibex-demo-system/vendor/pulp_riscv_dbg/src/dm_csrs.sv:457`) has the same
+assignment and also never clears `sbcs_d.zero0`, while it does clear
+`dmcontrol_d.zero0` and `abstractauto_d.zero0`.
+
+**Found by toggle coverage.** `sbcs_q.zero0` was the only reserved field in
+`dm_csrs` whose register bits were listed as *toggleable but untoggled* rather
+than constant, which is what prompted writing all-ones to it. The reference
+model does not catch it: `predict_mask()` compares `sbcs` only over the fields
+it predicts, so reserved bits were checked by nobody until this step.
+
+**Same shape as RTL-002 and RTL-005** — the fixed-field block in the same
+`always_comb` decides what a write can change, and this time it misses a field.
+
+---
+
+## RTL-007 — `haltsum1`–`haltsum3` read X on a single-hart DM
+
+**Status:** filed · [`#150`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`), whose repository has issues disabled
+**Component:** `riscv-dbg` `src/dm_csrs.sv:110-126` (`gen_haltsum0_single`) vs `:129-170`
+**Severity:** low — the registers are optional below 33 harts, but a read must not return X
+
+```systemverilog
+110:  if (NrHarts == 1) begin : gen_haltsum0_single
+112:      haltsum0 = {31'b0, halted_i[0]};   // halted / halted_reshaped0 never assigned
+...
+137:      halted_flat1[k] = |halted_reshaped0[k];   // haltsum1..3 are built from it
+```
+
+The single-hart shortcut for `haltsum0` skips the block that fills `halted` and
+`halted_reshaped0`, but the `haltsum1`, `haltsum2` and `haltsum3` reduction trees
+still read `halted_reshaped0`. With `NrHarts == 1` it is never driven, so bit 0 of
+all three registers is X in simulation and undefined in silicon. Upstream
+assigns `halted_reshaped0` unconditionally (Ibex's vendored copy,
+`dm_csrs.sv:110`); `git log -L` attributes the generate to `17e912c`, one of
+PR #4's commits — the same commit as RTL-002.
+
+Measured, `TC-DMC-008` in `dm_corners_uvm`:
+
+```
+DMI  READ  addr=0x13  data=0x0000000X
+DMI  READ  addr=0x34  data=0x0000000X
+DMI  READ  addr=0x35  data=0x0000000X
+```
+
+**It passed a check first.** A step that read these three registers and required
+0 passed, because the DPI bridge carried read data in a 2-state `int` and X
+arrived in Python as 0. The bridge now sends an X/Z mask beside the value and
+the transport refuses such a read, so an undriven register fails the step that
+reads it. Found through toggle coverage: `halted_flat1..3` were the only
+`haltsum` signals with not one toggle, including bit 0.
+
+---
+
+## RTL-008 — `dmstatus` reads X for a nonexistent hart
+
+**Status:** filed · [`#151`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — the indexing is in PR #4's "#520" change; related to, but not the same as, RTL-003 (#130)
+**Component:** `riscv-dbg` `src/dm_csrs.sv:255` vs `:306-320`
+**Severity:** low — a debugger enumerating harts gets an undefined answer
+
+```systemverilog
+191:  logic [NrHarts-1:0] unavailable_effective;              // one bit with one hart
+306:    dmstatus.allunavail = unavailable_effective[selected_hart];
+319:    dmstatus.allrunning = ~halted_aligned[selected_hart] & ~unavailable_effective[selected_hart];
+```
+
+`unavailable_effective` is `NrHarts` wide, but `dmstatus` indexes it with
+`selected_hart`, which ranges over `2**HartSelLen` entries. Selecting a hart that
+does not exist indexes past the end, so `allunavail`/`anyunavail` and
+`allrunning`/`anyrunning` (bits 13:10) are X. The `_aligned` vectors next to it
+are padded to `NrHartsAligned` for exactly this reason; this one is not. The
+lines carry PR #4's "new version 1.0 #520" comments.
+
+Measured, `TC-DMC-001` in `dm_corners_uvm`, `hartsel`=1:
+
+```
+DMI read of 0x11 returned X/Z in bits 0x00003c00: 0x0080XX83
+```
+
+RTL-003 describes the same bits reading 1 for a nonexistent hart, from the
+zero-filled aligned slot upstream. On this build they are X instead. Until the
+bridge carried an X mask, reads went through a 2-state `int`, so neither value
+was visible exactly; the X is what the RTL actually produces here.
+
+---
+
+## RTL-009 — `dtmcs.dmihardreset` is not implemented
+
+**Status:** filed · [`#152`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this fork's DTM predates upstream's support; the newer pulp copy Ibex vendors implements it
+**Component:** `riscv-dbg` `src/dmi_jtag_tap.sv:149-160`, `src/dmi_jtag.sv`
+**Severity:** medium — the debugger's documented way to abandon a stuck DMI transaction does nothing
+
+The spec defines `dmihardreset` as a hard reset of the DTM that forgets any
+outstanding DMI transaction and returns its registers to their reset values.
+In this DTM the bit is shifted into `dtmcs` and cleared again at the next
+capture, and nothing reads it: `dmi_jtag` acts only on `dmireset`. The newer
+upstream copy vendored by Ibex has it — `dmi_clear = jtag_dmi_clear ||
+(dtmcs_select && update && dtmcs_q.dmihardreset)` (`dmi_jtag.sv:63`), feeding a
+clearable CDC.
+
+Measured, `TC-DTM-012` in `dmi_error_uvm`: busy provoked (scans 0/3/3),
+`dmistat`=3, `dmihardreset` written, `dmistat` still 3.
+
+**It passed a check first.** The previous `TC-DTM-012` wrote `dmihardreset`
+with no error pending and required `dmistat`=0 afterwards, which a DTM that
+ignores the bit satisfies. Found while auditing what the coverage closure had
+actually proven.
+
+---
+
 ## Observations that are NOT RTL defects
 
 Recorded because each cost time to diagnose and would otherwise be re-diagnosed.
+
+**An SBA transfer started under `ndmreset` may never complete.** The CVA6
+testharness resets the AXI crossbar with `ndmreset_n`
+(`ariane_testharness.sv:572`) but the DM's AXI master with power-on reset only
+(`:350`). While `ndmreset` is held the transfer cannot finish, which is what
+`dm_corners` uses to hold `sbbusy` deliberately. After release it depends on
+where the request was when the crossbar went into reset: in three of four runs
+it was lost and `sbbusy` stayed 1 until power-on reset; in one it completed. That
+is an integration property of this testharness, not of the DM, and the spec
+does not require a system bus access to survive `ndmreset`. `dm_corners` runs it
+last and checks only what the DM owes either way: `sbcs` stays consistent with
+`sbbusy`, and `dmactive=0` clears `sbbusyerror`.
 
 **`dscratch0`/`dscratch1` are clobbered by the DM.** `hartinfo.nscratch=2` means
 the DM owns them as scratch for abstract-command execution. A debugger write
