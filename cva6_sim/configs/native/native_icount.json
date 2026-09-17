@@ -1,0 +1,8 @@
+{
+    "_comment": "Self-checking native-debug program sw/native_icount.S, run to its own tohost verdict.",
+    "scenario":  "run_elf",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": { "elf": "sw/native_icount.elf" },
+    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 900.0 }
+}

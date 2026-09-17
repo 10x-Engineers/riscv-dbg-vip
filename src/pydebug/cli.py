@@ -80,6 +80,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.step_matrix_sequence",
         "builder": "build_step_matrix_sequence",
     },
+    "run_elf": {
+        "module": "pydebug.sequences.run_elf_sequence",
+        "builder": "build_run_elf_sequence",
+    },
     "dm_corners": {
         "module": "pydebug.sequences.dm_corners_sequence",
         "builder": "build_dm_corners_sequence",

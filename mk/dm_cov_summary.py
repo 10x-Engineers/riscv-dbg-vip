@@ -43,7 +43,7 @@ def main() -> int:
     if len(sys.argv) not in (2, 3):
         return int(bool(sys.stderr.write(f"usage: {sys.argv[0]} <dm_code.rpt> [title]\n")))
     path = Path(sys.argv[1])
-    title = sys.argv[2] if len(sys.argv) == 3 else "Debug Module code coverage (DM instances only)"
+    title = sys.argv[2] if len(sys.argv) == 3 else "Debug subsystem code coverage (JTAG/DTM, DM, its bus bridges, ndmreset, and the processor boundary)"
     if not path.exists():
         return int(bool(sys.stderr.write(f"no such report: {path}\n")))
 
@@ -86,7 +86,7 @@ def main() -> int:
     print("-" * len(hdr))
     tot = "".join(
         f"{(cell(*totals[m]) if totals[m][1] else '—'):>{cw}}" for m, *_ in METRICS)
-    print(f"{'DEBUG MODULE TOTAL':<{w}}" + tot)
+    print(f"{'DEBUG SUBSYSTEM TOTAL':<{w}}" + tot)
     print("\nToggle is listed separately on purpose: it is dominated by wide buses")
     print("whose upper bits a single-hart, 32-bit-DMI configuration never drives.")
     return 0

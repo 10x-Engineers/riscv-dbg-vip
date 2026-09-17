@@ -161,6 +161,10 @@ tests:
     config: configs/trigger_uvm.json
     covers: [TRIG-001, TRIG-002, TRIG-006]
     why: Trigger enumeration and disable.
+    expect: fail
+    known: >-
+      TC-TRIG-006 fails on RTL-013 (#162): on RV64 CVA6 ignores tdata1=0, so an
+      armed mcontrol6 trigger still reads 0x6000000000000044 after the disable.
 
   - name: external_trigger
     config: configs/external_trigger_uvm.json
@@ -230,8 +234,13 @@ tests:
       ebreakm=0 negative case first (the ebreak must trap, mcause=3), or the
       positive test passes for the wrong reason. dpc is written 64-bit -- a
       32-bit write sign-extends to 0xFFFFFFFF8000xxxx and the hart faults, which
-      is what this test used to report as 5/7. Triggers are reported N/A: the
-      cv64a6_imafdc_sv39 configuration has Sdtrig=0.
+      is what this test used to report as 5/7. TC-DCSR-011 resumes the hart one
+      instruction before an armed mcontrol6 execute trigger and sends no halt
+      request.
+    expect: fail
+    known: >-
+      TC-DCSR-011 fails on RTL-012 (#161): the trigger fires (the hart halts by
+      itself with dpc on the target) but dcsr.cause reads 3, not 2.
 
   - name: step_matrix
     config: configs/step_matrix_uvm.json
@@ -256,3 +265,121 @@ tests:
       because csr_regfile tests eret_o before the same always_comb assigns it.
       The sequence repairs dpc/prv after each xRET so the U and S runs still
       cover their classes.
+
+  # ── Native debug: riscv-arch-test (ACT4) Sdtrig programs ──────────────
+  # Self-checking firmware; no debugger involvement until the verdict. Built
+  # and staged by `bash mk/act_build.sh`, which also writes the configs. The
+  # reference results come from Spike, because Sail has no Sdtrig.
+  - name: act_sdtrig_access
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/act/SdtrigSm_Access-00.json
+    elf: sw/act/SdtrigSm_Access-00.elf
+    covers: [NATIVE-OP2, TRIG-001]
+    why: M-mode access to every trigger CSR, and tselect/tdata legalization.
+
+  - name: act_sdtrig_mcontrol6
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/act/SdtrigSm_Mcontrol6-00.json
+    elf: sw/act/SdtrigSm_Mcontrol6-00.elf
+    covers: [NATIVE-OP2, NATIVE-OP5]
+    why: >-
+      mcontrol6 execute/load/store triggers with action=0 across match types,
+      firing as breakpoint exceptions, and the hit bits.
+    expect: fail
+    known: >-
+      The program fails its own trap check on RTL-013 (#162): trigger 0 is
+      "disabled" with tdata1=0, stays armed, and traps the next store to scratch
+      (PC 0x80000280); Spike, the reference, does not.
+
+  - name: act_sdtrig_icount
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/act/SdtrigSm_Icount-00.json
+    elf: sw/act/SdtrigSm_Icount-00.elf
+    covers: [NATIVE-OP3]
+    why: >-
+      M-mode icount triggers: firing after `count` instructions and not firing
+      with the mode disabled. Upstream wrote these cases but left them
+      commented out; mk/act_build.sh switches them on.
+    expect: fail
+    known: >-
+      Fails on RTL-014 (#163): with the trigger disabled for the current mode,
+      tdata1 must still read count=9 (Spike: 0x3000000000002400); CVA6 counted
+      the instructions anyway and reads count=0.
+
+  # Upstream's SdtrigSm Itrigger and NativeTriggers programs are not run: their
+  # generator bodies are empty or commented out (riscv-arch-test act4, "only
+  # the mcontrol6 covergroup is fully developed"), so they pass without arming a
+  # single trigger. The cases they were meant to cover are the native_*
+  # programs below.
+
+  # ── Native debug: own self-checking programs (sw/native_*.S) ───────────
+  - name: native_icount
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/native/native_icount.json
+    elf: sw/native_icount.elf
+    covers: [NATIVE-OP3]
+    why: >-
+      icount single-step of U-mode code from an M-mode monitor: count 1 and 2,
+      breakpoint with mepc on the next instruction, tval 0, pending cleared;
+      and no firing with every mode bit clear.
+    expect: fail
+    known: >-
+      Check 0x12 fails on RTL-014 (#163): the count runs down in M before U
+      starts, and the breakpoint is taken on entry to U with a stale M mepc.
+
+  - name: native_etrigger
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/native/native_etrigger.json
+    elf: sw/native_etrigger.elf
+    covers: [NATIVE-OP2]
+    why: >-
+      etrigger on an illegal instruction delegated to S: breakpoint to M before
+      the S handler's first instruction (mepc=stvec, tval=0, MPP=S), original
+      scause/sepc intact, hit set; not fired when enabled for U only.
+    expect: fail
+    known: >-
+      Check 0x21 fails on RTL-015 (#164): the trigger never matches in S
+      (scontext check without textra), so no breakpoint precedes the S handler.
+
+  - name: native_itrigger
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/native/native_itrigger.json
+    elf: sw/native_itrigger.elf
+    covers: [NATIVE-OP2]
+    why: >-
+      itrigger on the supervisor software interrupt, delegated to S and taken
+      from U: breakpoint to M before the S handler runs; not fired when enabled
+      for S only.
+    expect: fail
+    known: >-
+      Check 0x22 fails on RTL-016 (#165): the breakpoint comes after the S
+      handler has returned (mepc=u_done2), not at stvec.
+
+  - name: native_hit
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/native/native_hit.json
+    elf: sw/native_hit.elf
+    covers: [NATIVE-OP5]
+    why: >-
+      Two U-mode execute triggers: each breakpoint sets hit0 on the trigger that
+      fired and no other, and tval is the matched address.
+
+  - name: native_reentrancy
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/native/native_reentrancy.json
+    elf: sw/native_reentrancy.elf
+    covers: [NATIVE-OP4]
+    why: >-
+      No tcontrol, so an M-mode action=0 trigger must not fire while MIE=0
+      (inside the trap handler); it must fire with MIE=1.
+    expect: fail
+    known: >-
+      Check 0x22 fails on RTL-017 (#166): the M-mode trigger fires inside the
+      trap handler with MIE=0 (a Sdtrig SHOULD).
+
+  - name: native_dbgcsr
+    timeout_s: 2400        # the coverage build is far slower; these poll over SBA
+    config: configs/native/native_dbgcsr.json
+    elf: sw/native_dbgcsr.elf
+    covers: [NATIVE-OP7]
+    why: dcsr, dpc, dscratch0/1 read or written from M-mode raise illegal instruction.
