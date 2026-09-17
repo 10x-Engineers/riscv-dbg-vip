@@ -1,0 +1,9 @@
+# riscv-arch-test (ACT4) framework config for the riscv-dbg-vip CVA6 build.
+# Spike is the reference model: Sail does not implement Sdtrig.
+name: cv64a6-sdtrig
+compiler_exe: riscv64-unknown-elf-gcc
+objdump_exe: riscv64-unknown-elf-objdump
+ref_model_exe: spike
+udb_config: cv64a6-sdtrig.yaml
+linker_script: link.ld
+dut_include_dir: .

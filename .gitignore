@@ -41,6 +41,8 @@ flist_soc_test.tmp
 # Compiled test ELFs (rebuilt from source, not shipped)
 cva6_sim/sw/*.o
 cva6_sim/sw/*.elf
+# riscv-arch-test ELFs, built by mk/act_build.sh
+cva6_sim/sw/act/
 ibex_sim/sw/*.o
 ibex_sim/sw/*.elf
 
