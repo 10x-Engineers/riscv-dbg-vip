@@ -1,95 +1,58 @@
 """
-sequences/debug_entry_sequence.py — every way a hart enters Debug Mode.
+sequences/debug_entry_sequence.py — every way a hart enters Debug Mode, at
+every privilege level it can enter from.
 
-Spec Sdext #4.8.1 gives `dcsr.cause` six encodings. Only `haltreq` (3) and
-`step` (4) were ever reached, because every existing scenario enters Debug Mode
-by asking the DM to halt. The other reachable causes come from the *hart's own
-execution* and cannot be produced by any DMI write:
+Spec Sdext 4.9.1 gives `dcsr.cause` its encodings. Only `haltreq` (3) and
+`step` (4) come from DMI writes; `ebreak` (1) and `trigger` (2) come from the
+hart's own execution. The ebreak cases point `dpc` at a parked `ebreak` in the
+test program, choose `dcsr.prv`, and resume into it. Which privilege the
+ebreak is taken from is exactly what `dcsr.ebreakm/s/u` gate, so each level is
+exercised with its own bit set and, for M, with it clear.
 
-  1 ebreak   — the hart executes `ebreak` with the matching `dcsr.ebreak*` set
-  2 trigger  — an armed Sdtrig trigger fires with action=1
+History worth keeping: this scenario used to write `dpc` with a 32-bit
+abstract command. 0x80000050 then landed as 0xFFFFFFFF80000050 and the hart
+faulted instead of reaching the ebreak, while a 32-bit read-back showed the
+intended value. TC-DCSR-012 passed anyway -- a hart that never reached the
+ebreak did not enter Debug Mode from it either -- so it now also requires the
+ebreak to have trapped where it should.
 
-Both need the hart to run to a known instruction, so this sets `dpc` to a label
-in the test program and resumes into it. Parking the targets out of the normal
-flow keeps them inert unless a sequence jumps there deliberately.
+`trigger` (2) needs Sdtrig, which this CVA6 build compiles out (`Sdtrig: 0` in
+cv64a6_imafdc_sv39_config_pkg.sv); the trigger CSRs do not exist and the step
+reports N/A. `resethaltreq` (5) needs halt-on-reset (RTL-004); `group` (6)
+needs more than one hart.
 
-`resethaltreq` (5) is unreachable here: `dmstatus.hasresethaltreq=0`, so
-halt-on-reset is not implemented (RTL-004, and an optional feature).
-`halt group` (6) needs more than one hart.
-
-Traces to: TC-DCSR-010 (ebreak entry), TC-DCSR-011 (trigger entry),
-TC-DCSR-012 (ebreakm gates ebreak entry).
+Traces to: TC-DCSR-010 (ebreak entry, M), TC-DCSR-011 (trigger entry),
+TC-DCSR-012 (ebreakm gates ebreak entry), TC-DCSR-013 (ebreak entry, S and U),
+TC-DCSR-014 (haltreq from S and U), TC-DCSR-015 (step from S and U).
 """
 
-import subprocess
-
 from pydebug.api import RISCVDebug, DebugSession, StepResult
-from pydebug.api.riscv_dm import DMI
+from pydebug.api.riscv_dm import DebugError
+from pydebug.sequences.hart_control import (
+    CAUSE_EBREAK, CAUSE_HALTREQ, CAUSE_STEP, CAUSE_TRIGGER,
+    DCSR, DCSR_EBREAKM, DCSR_EBREAKS, DCSR_EBREAKU, DCSR_STEP, DPC,
+    MCAUSE, MEPC, PRV_M, PRV_S, PRV_U,
+    cause_of, ensure_halted, modify_dcsr, open_pmp, place,
+    run_until_halted, step_once, symbol_addr,
+)
 
-DCSR_REGNO   = 0x07B0
-DPC_REGNO    = 0x07B1
-TSELECT      = 0x07A0
-TDATA1       = 0x07A1
-TDATA2       = 0x07A2
+TSELECT = 0x07A0
+TDATA1 = 0x07A1
+TDATA2 = 0x07A2
 
-#: dcsr fields (Sdext #4.8.1).
-DCSR_EBREAKM   = 1 << 15
-DCSR_CAUSE_LSB = 6
-CAUSE_EBREAK, CAUSE_TRIGGER, CAUSE_HALTREQ, CAUSE_STEP = 1, 2, 3, 4
-
-#: mcontrol6 (Sdtrig): type=6 in tdata1[63:60], action=1 (enter Debug Mode)
-#: in tdata1[15:12], execute in bit 2, and m-mode in bit 6.
-MC6_TYPE       = 6 << 60
-MC6_DMODE      = 1 << 59
+#: mcontrol6 (Sdtrig): type=6 in tdata1[63:60], dmode, action=1 (enter Debug
+#: Mode) in [15:12], m/s/u in bits 6/4/3, execute in bit 2.
+MC6_TYPE = 6 << 60
+MC6_DMODE = 1 << 59
 MC6_ACTION_DBG = 1 << 12
-MC6_M          = 1 << 6
-MC6_EXECUTE    = 1 << 2
+MC6_M, MC6_S, MC6_U = 1 << 6, 1 << 4, 1 << 3
+MC6_EXECUTE = 1 << 2
 
+#: mcause for a breakpoint exception (Priv. spec 3.1.15).
+MCAUSE_BREAKPOINT = 3
 
-def _symbol_addr(elf: str, symbol: str, nm: str = "riscv64-unknown-elf-nm") -> int:
-    out = subprocess.run([nm, elf], capture_output=True, text=True, check=True)
-    for line in out.stdout.splitlines():
-        parts = line.split()
-        if len(parts) == 3 and parts[2] == symbol:
-            return int(parts[0], 16)
-    raise RuntimeError(f"symbol {symbol!r} not found in {elf} -- rebuild with `make -C sw`")
-
-
-def _cause(dcsr: int) -> int:
-    return (dcsr >> DCSR_CAUSE_LSB) & 0x7
-
-
-def _run_to_debug(dm, limit: int = 400) -> bool:
-    dm.resume()
-    for _ in range(limit):
-        if dm.is_halted():
-            return True
-    return False
-
-
-def _ensure_halted(dm, limit: int = 200) -> bool:
-    """
-    Guarantee the hart is halted before touching any CSR.
-
-    Every step here resumes the hart, so the next step starts from whatever
-    state the last one left. An abstract command issued to a running hart is
-    refused with cmderr=4 (halt/resume) -- which reads as a DM fault but is
-    just a missing precondition, and it then poisons every later step because
-    cmderr is sticky.
-    """
-    # cmderr is sticky (#3.14.13): once any command fails, every later one is
-    # refused with the SAME error until it is cleared. A single command issued
-    # to a running hart therefore poisons the whole rest of the sequence, and
-    # each later step reports cmderr=4 as though it had made the mistake
-    # itself. Clear it before checking anything else.
-    dm.t.write(DMI.ABSTRACTCS, 0x7 << 8)
-    if dm.is_halted():
-        return True
-    dm.halt()
-    for _ in range(limit):
-        if dm.is_halted():
-            return True
-    return False
+PRV_NAME = {PRV_U: "U", PRV_S: "S", PRV_M: "M"}
+EBREAK_BIT = {PRV_M: DCSR_EBREAKM, PRV_S: DCSR_EBREAKS, PRV_U: DCSR_EBREAKU}
 
 
 def build_debug_entry_sequence(
@@ -103,110 +66,160 @@ def build_debug_entry_sequence(
     session.add_step("Activate Debug Module", lambda: dm.activate())
     session.add_step("Halt hart", lambda: dm.halt())
 
-    def resolve():
-        for sym in ("cls_ebreak", "cls_trigger_target"):
-            addrs[sym] = _symbol_addr(elf, sym)
+    def setup():
+        for sym in ("cls_ebreak", "ebreak_park", "cls_trigger_target", "step_loop"):
+            addrs[sym] = symbol_addr(elf, sym)
+        open_pmp(dm)
         return StepResult(
             ok=True,
-            msg="resolved " + ", ".join(f"{k}=0x{v:08x}" for k, v in addrs.items()))
-    session.add_step("Resolve entry-point symbols", resolve)
+            msg="resolved " + ", ".join(f"{k}=0x{v:08x}" for k, v in addrs.items())
+                + "; PMP entry 0 opened for S/U")
+    session.add_step("Resolve entry points, open PMP", setup)
+
+    def enter_via_ebreak(prv: int, ebreak_bits: int):
+        """Resume at the parked ebreak in `prv` with the given ebreak* bits.
+        Returns (entered, cause, dpc, prv_at_entry)."""
+        modify_dcsr(dm, set_bits=ebreak_bits,
+                    clear_bits=(DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU | DCSR_STEP) & ~ebreak_bits)
+        place(dm, addrs["cls_ebreak"], prv)
+        entered = run_until_halted(dm)
+        if not entered:
+            ensure_halted(dm)
+        dcsr = dm.read_gpr(DCSR)
+        return entered, cause_of(dcsr), dm.read_reg64(DPC), dcsr & 0x3
 
     # ── TC-DCSR-012: ebreakm=0 -- ebreak must NOT enter Debug Mode ────────
-    # Checked before the positive case: if ebreak entered Debug Mode
-    # regardless of ebreakm, TC-DCSR-010 would pass for the wrong reason.
+    # Checked first: if ebreak entered Debug Mode regardless of ebreakm, the
+    # positive case would pass for the wrong reason. And the ebreak must
+    # really have run -- as a breakpoint exception into the hart's handler.
     def tc_dcsr_012():
-        if not _ensure_halted(dm):
+        if not ensure_halted(dm):
             return StepResult(ok=False, msg="hart would not halt")
-        dcsr = dm.read_gpr(DCSR_REGNO)
-        dm.write_gpr(DCSR_REGNO, dcsr & ~DCSR_EBREAKM)
-        dm.write_gpr(DPC_REGNO, addrs["cls_ebreak"])
-        entered = _run_to_debug(dm, limit=60)
-        if not entered:
-            dm.halt()
-        cause = _cause(dm.read_gpr(DCSR_REGNO))
-        # With ebreakm=0 the ebreak traps to the hart's own handler instead,
-        # so any halt we see here is our own haltreq, not an ebreak entry.
-        ok = cause != CAUSE_EBREAK
+        dm.write_reg64(MCAUSE, 0)
+        entered, cause, _, _ = enter_via_ebreak(PRV_M, 0)
+        mcause, mepc = dm.read_reg64(MCAUSE), dm.read_reg64(MEPC)
+        reached = mcause == MCAUSE_BREAKPOINT and mepc in (addrs["cls_ebreak"], addrs["cls_ebreak"] + 4)
+        ok = cause != CAUSE_EBREAK and reached
         return StepResult(
             ok=ok,
-            msg=f"TC-DCSR-012: ebreakm=0, ran through ebreak -> dcsr.cause={cause} "
-                f"{'(not ebreak -- correctly ignored)' if ok else '(ebreak entry despite ebreakm=0)'}")
+            msg=f"TC-DCSR-012: ebreakm=0 -> dcsr.cause={cause} (not ebreak), "
+                f"mcause={mcause} mepc=0x{mepc:x} (breakpoint trap at the ebreak: {reached})  "
+                + ("OK" if ok else "entered Debug Mode, or never reached the ebreak"))
     session.add_step("TC-DCSR-012: ebreakm=0 does not enter Debug Mode", tc_dcsr_012)
 
-    # ── TC-DCSR-010: ebreak with ebreakm=1 enters Debug Mode ──────────────
-    def tc_dcsr_010():
-        if not _ensure_halted(dm):
-            return StepResult(ok=False, msg="hart would not halt")
-        dcsr = dm.read_gpr(DCSR_REGNO)
-        dm.write_gpr(DCSR_REGNO, dcsr | DCSR_EBREAKM)
-        wrote = dm.read_gpr(DCSR_REGNO)          # did ebreakm actually stick?
-        dm.write_gpr(DPC_REGNO, addrs["cls_ebreak"])
-        dpc_set = dm.read_gpr(DPC_REGNO)         # did dpc actually stick?
-        entered = _run_to_debug(dm)
-        if not entered:
-            # Reading any CSR now would hit a running hart and answer
-            # cmderr=4, which says nothing about why the hart did not stop.
-            _ensure_halted(dm)
-            cause = _cause(dm.read_gpr(DCSR_REGNO))
-            dpc = dm.read_gpr(DPC_REGNO)
+    # ── TC-DCSR-010 / 013: ebreak enters Debug Mode from M, S and U ───────
+    def ebreak_entry(prv: int, tc: str):
+        def step():
+            if not ensure_halted(dm):
+                return StepResult(ok=False, msg="hart would not halt")
+            entered, cause, dpc, prv_seen = enter_via_ebreak(prv, EBREAK_BIT[prv])
+            ok = (entered and cause == CAUSE_EBREAK and dpc == addrs["cls_ebreak"]
+                  and prv_seen == prv)
             return StepResult(
-                ok=False,
-                msg=f"TC-DCSR-010: hart did not enter Debug Mode. "
-                    f"ebreakm write: dcsr 0x{dcsr:08x} -> 0x{wrote:08x} "
-                    f"(ebreakm={'1' if wrote & DCSR_EBREAKM else '0'}); "
-                    f"dpc set to 0x{dpc_set:08x} (wanted 0x{addrs['cls_ebreak']:08x}); "
-                    f"after forcing a halt: cause={cause} dpc=0x{dpc:08x}")
-        cause = _cause(dm.read_gpr(DCSR_REGNO))
-        dpc = dm.read_gpr(DPC_REGNO)
-        ok = entered and cause == CAUSE_EBREAK
-        return StepResult(
-            ok=ok,
-            msg=f"TC-DCSR-010: ebreakm=1, executed ebreak at "
-                f"0x{addrs['cls_ebreak']:08x} -> halted={entered} "
-                f"dcsr.cause={cause} (expect {CAUSE_EBREAK}) dpc=0x{dpc:08x}  "
-                f"{'OK' if ok else 'ebreak did not enter Debug Mode'}")
-    session.add_step("TC-DCSR-010: ebreak enters Debug Mode (cause=1)", tc_dcsr_010)
+                ok=ok,
+                msg=f"{tc}: ebreak{PRV_NAME[prv].lower()}=1 in {PRV_NAME[prv]} -> "
+                    f"halted={entered} cause={cause} (expect {CAUSE_EBREAK}) "
+                    f"dpc=0x{dpc:x} (expect the ebreak, 0x{addrs['cls_ebreak']:x}) "
+                    f"dcsr.prv={prv_seen}  "
+                    + ("OK" if ok else "wrong entry"))
+        return step
+    session.add_step("TC-DCSR-010: ebreak enters Debug Mode from M", ebreak_entry(PRV_M, "TC-DCSR-010"))
+    session.add_step("TC-DCSR-013: ebreak enters Debug Mode from S", ebreak_entry(PRV_S, "TC-DCSR-013"))
+    session.add_step("TC-DCSR-013: ebreak enters Debug Mode from U", ebreak_entry(PRV_U, "TC-DCSR-013"))
+
+    # ── TC-DCSR-014: haltreq interrupts S- and U-mode code ────────────────
+    def haltreq_entry(prv: int):
+        def step():
+            if not ensure_halted(dm):
+                return StepResult(ok=False, msg="hart would not halt")
+            modify_dcsr(dm, clear_bits=DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU | DCSR_STEP)
+            place(dm, addrs["ebreak_park"], prv)      # a one-instruction spin
+            dm.resume()
+            running = dm.is_running()
+            dm.halt()
+            dcsr = dm.read_gpr(DCSR)
+            dpc = dm.read_reg64(DPC)
+            ok = (running and cause_of(dcsr) == CAUSE_HALTREQ and dcsr & 0x3 == prv
+                  and dpc == addrs["ebreak_park"])
+            return StepResult(
+                ok=ok,
+                msg=f"TC-DCSR-014: running in {PRV_NAME[prv]}={running}, halted -> "
+                    f"cause={cause_of(dcsr)} (expect {CAUSE_HALTREQ}) prv={dcsr & 0x3} "
+                    f"dpc=0x{dpc:x} (expect the spin, 0x{addrs['ebreak_park']:x})  "
+                    + ("OK" if ok else "wrong entry"))
+        return step
+    session.add_step("TC-DCSR-014: haltreq from S", haltreq_entry(PRV_S))
+    session.add_step("TC-DCSR-014: haltreq from U", haltreq_entry(PRV_U))
+
+    # ── TC-DCSR-015: a single step from S and from U ──────────────────────
+    def step_entry(prv: int):
+        def step():
+            if not ensure_halted(dm):
+                return StepResult(ok=False, msg="hart would not halt")
+            start = addrs["step_loop"] + 4               # `li t3, 1`: an ordinary instruction
+            modify_dcsr(dm, set_bits=DCSR_STEP,
+                        clear_bits=DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU)
+            place(dm, start, prv)
+            entered = step_once(dm)
+            dcsr = dm.read_gpr(DCSR)
+            dpc = dm.read_reg64(DPC)
+            modify_dcsr(dm, clear_bits=DCSR_STEP)
+            ok = (entered and cause_of(dcsr) == CAUSE_STEP and dcsr & 0x3 == prv
+                  and dpc == start + 4)
+            return StepResult(
+                ok=ok,
+                msg=f"TC-DCSR-015: step in {PRV_NAME[prv]} -> halted={entered} "
+                    f"cause={cause_of(dcsr)} (expect {CAUSE_STEP}) prv={dcsr & 0x3} "
+                    f"dpc=0x{dpc:x} (expect 0x{start + 4:x})  "
+                    + ("OK" if ok else "wrong entry"))
+        return step
+    session.add_step("TC-DCSR-015: step from S", step_entry(PRV_S))
+    session.add_step("TC-DCSR-015: step from U", step_entry(PRV_U))
 
     # ── TC-DCSR-011: an execute trigger fires (cause=2) ───────────────────
     def tc_dcsr_011():
-        if not _ensure_halted(dm):
+        if not ensure_halted(dm):
             return StepResult(ok=False, msg="hart would not halt")
         target = addrs["cls_trigger_target"]
-        dm.write_gpr(TSELECT, 0)
-        selected = dm.read_gpr(TSELECT)
-        dm.write_gpr(TDATA2, target)
-        tdata1 = MC6_TYPE | MC6_DMODE | MC6_ACTION_DBG | MC6_M | MC6_EXECUTE
-        dm.write_gpr(TDATA1, tdata1)
-        readback = dm.read_gpr(TDATA1)
-        if readback == 0:
+        try:
+            dm.write_gpr(TSELECT, 0)
+            dm.write_reg64(TDATA2, target)
+            dm.write_reg64(TDATA1, MC6_TYPE | MC6_DMODE | MC6_ACTION_DBG | MC6_M | MC6_EXECUTE)
+            readback = dm.read_reg64(TDATA1)
+        except DebugError as e:
+            ensure_halted(dm)
             return StepResult(
                 ok=True,
-                msg=f"TC-DCSR-011: N/A -- trigger {selected} did not accept an "
-                    f"mcontrol6 execute trigger (tdata1 reads 0); no Sdtrig "
-                    f"support to exercise")
-        dcsr = dm.read_gpr(DCSR_REGNO)
-        dm.write_gpr(DCSR_REGNO, dcsr & ~DCSR_EBREAKM)   # isolate the trigger
-        dm.write_gpr(DPC_REGNO, target)
-        entered = _run_to_debug(dm)
-        cause = _cause(dm.read_gpr(DCSR_REGNO))
-        dm.write_gpr(TDATA1, 0)                          # disarm
+                msg=f"TC-DCSR-011: N/A -- the trigger CSRs raise an exception ({e}); "
+                    f"this CVA6 build has Sdtrig=0, so no trigger can fire")
+        if readback >> 60 != 6:
+            return StepResult(
+                ok=True,
+                msg=f"TC-DCSR-011: N/A -- trigger 0 did not accept an mcontrol6 "
+                    f"execute trigger (tdata1=0x{readback:016x})")
+        modify_dcsr(dm, clear_bits=DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU | DCSR_STEP)
+        place(dm, target, PRV_M)
+        entered = run_until_halted(dm)
+        if not entered:
+            ensure_halted(dm)
+        cause = cause_of(dm.read_gpr(DCSR))
+        dm.write_reg64(TDATA1, 0)
         ok = entered and cause == CAUSE_TRIGGER
         return StepResult(
             ok=ok,
-            msg=f"TC-DCSR-011: execute trigger armed at 0x{target:08x} "
-                f"(tdata1=0x{readback:016x}) -> halted={entered} "
-                f"dcsr.cause={cause} (expect {CAUSE_TRIGGER})  "
-                f"{'OK' if ok else 'trigger did not enter Debug Mode'}")
+            msg=f"TC-DCSR-011: execute trigger at 0x{target:x} -> halted={entered} "
+                f"cause={cause} (expect {CAUSE_TRIGGER})  "
+                + ("OK" if ok else "trigger did not enter Debug Mode"))
     session.add_step("TC-DCSR-011: trigger enters Debug Mode (cause=2)", tc_dcsr_011)
 
     # ── restore ───────────────────────────────────────────────────────────
     def restore():
-        if not _ensure_halted(dm):
+        if not ensure_halted(dm):
             return StepResult(ok=False, msg="hart would not halt")
-        dcsr = dm.read_gpr(DCSR_REGNO)
-        dm.write_gpr(DCSR_REGNO, dcsr & ~DCSR_EBREAKM)
-        dm.halt()
-        return StepResult(ok=True, msg="restored dcsr.ebreakm=0, hart halted")
+        modify_dcsr(dm, clear_bits=DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU | DCSR_STEP,
+                    prv=PRV_M)
+        dm.write_reg64(DPC, addrs["ebreak_park"])
+        return StepResult(ok=True, msg="restored dcsr (M, no ebreak*/step), hart halted")
     session.add_step("Restore dcsr", restore)
 
     return session

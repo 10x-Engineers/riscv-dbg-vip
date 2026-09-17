@@ -1,0 +1,16 @@
+{
+    "_comment": [
+        "Single-step every instruction class in sw/step_classes.S's step_loop",
+        "under each stepie/interrupt-pending combination, at M, S and U, in runs",
+        "long enough for the consecutive-step bins.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/step_matrix_uvm.json ELF=sw/step_classes.elf"
+    ],
+    "scenario":  "step_matrix",
+    "transport": "uvm",
+    "mode":      "batch",
+    "params": {
+        "elf": "sw/step_classes.elf"
+    },
+    "uvm": { "socket_path": "/tmp/uvm_bridge.sock", "timeout": 900.0 }
+}

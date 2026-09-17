@@ -221,19 +221,38 @@ tests:
   - name: debug_entry
     config: configs/debug_entry_uvm.json
     elf: sw/step_classes.elf
-    covers: [DCSR-010, DCSR-011, DCSR-012]
+    covers: [DCSR-010, DCSR-011, DCSR-012, DCSR-013, DCSR-014, DCSR-015]
+    timeout_s: 1500
     why: >-
       dcsr.cause values that come from the hart's own execution rather than from
-      a DMI write: ebreak (1) and a fired trigger (2). Sets dpc to a parked label
-      in the program and resumes into it. Checks the ebreakm=0 negative case
-      first, or the positive test passes for the wrong reason.
+      a DMI write, at every privilege: ebreak in M, S and U (ebreakm/s/u), a halt
+      request that interrupts S and U code, and a step from S and U. Checks the
+      ebreakm=0 negative case first (the ebreak must trap, mcause=3), or the
+      positive test passes for the wrong reason. dpc is written 64-bit -- a
+      32-bit write sign-extends to 0xFFFFFFFF8000xxxx and the hart faults, which
+      is what this test used to report as 5/7. Triggers are reported N/A: the
+      cv64a6_imafdc_sv39 configuration has Sdtrig=0.
+
+  - name: step_matrix
+    config: configs/step_matrix_uvm.json
+    elf: sw/step_classes.elf
+    covers: [SSTEP-006, SSTEP-007, SSTEP-008, SSTEP-009, SSTEP-015, SSTEP-019,
+             SSTEP-020, SSTEP-021-V, SSTEP-022-V]
+    timeout_s: 3000
+    why: >-
+      Steps every instruction class in step_loop under each stepie x
+      interrupt-pending combination in M, in runs long enough for the
+      consecutive-step bins, then from S and U, and an sret stepped in S.
+      The pending interrupt is the CLINT timer (mtimecmp resets to 0) gated by
+      mie.MTIE, with mstatus.MIE=0 so M never takes it. Every trap and xRET
+      step is checked for where Sdext says it must land.
     expect: fail
     known: >-
-      5/7. The ebreakm=0 negative case passes, so dcsr and dpc are being written
-      and the hart does run through the ebreak. What does not happen is debug
-      entry with ebreakm=1 -- the hart runs past the ebreak and the next command
-      then hits a running hart (cmderr=4). Unresolved: either the dcsr write is
-      not persisting across the resume, or CVA6 gates ebreak entry on something
-      this sequence is not setting. Instrumented to report dcsr/dpc read-back
-      and the post-halt state, so the next run says which. Recorded as a known
-      failure rather than left silently red.
+      The Sdext check step fails on two CVA6 single-step defects; every other
+      step passes. RTL-010 (openhwgroup/cva6#3429): a stepped instruction that
+      traps halts only after the handler's first instruction has run, because
+      step entry is gated on commit_ack, which a trapping instruction never
+      gets. RTL-011: a stepped mret/sret reports dpc=pc+4 and the old dcsr.prv,
+      because csr_regfile tests eret_o before the same always_comb assigns it.
+      The sequence repairs dpc/prv after each xRET so the U and S runs still
+      cover their classes.

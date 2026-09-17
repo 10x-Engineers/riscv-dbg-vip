@@ -246,15 +246,22 @@ def build_dmi_error_sequence(dm: RISCVDebug, mode: str = "batch",
         first  = dm.t.dmi_scan(dm.t.DMI_READ, DMI.DMSTATUS)
         busy   = dm.t.dmi_scan(dm.t.DMI_NOP)
         sticky = dm.t.dmi_scan(dm.t.DMI_NOP)
+        # While the error is sticky the DTM ignores every request, so a read
+        # and a write here must also come back busy. Chosen so the ignored
+        # requests cannot mislead the checker: the read repeats dmstatus (the
+        # read that did complete), and the write targets an unmapped address.
+        on_read  = dm.t.dmi_scan(dm.t.DMI_READ, DMI.DMSTATUS)
+        on_write = dm.t.dmi_scan(dm.t.DMI_WRITE, UNIMPLEMENTED_DMI_ADDR, 0)
         stat   = (dm.t.dtmcs() >> DTMCS_DMISTAT_LSB) & 0x3
         dm.t.dtmcs(DTMCS_DMIRESET)
         after  = (dm.t.dtmcs() >> DTMCS_DMISTAT_LSB) & 0x3
         usable = dm.t.read(DMI.DMSTATUS) != 0
-        ok = (first == 0 and busy == 3 and sticky == 3 and stat == 3
-              and after == 0 and usable)
+        ok = (first == 0 and busy == 3 and sticky == 3 and on_read == 3
+              and on_write == 3 and stat == 3 and after == 0 and usable)
         return StepResult(
             ok=ok,
-            msg=f"TC-DTM-015: dmistat per scan {first}/{busy}/{sticky} (expect 0/3/3), "
+            msg=f"TC-DTM-015: dmistat per scan {first}/{busy}/{sticky}/{on_read}/{on_write} "
+                f"(expect 0/3/3/3/3 -- nop, nop, read, write), "
                 f"dtmcs.dmistat={stat} (expect 3), after dmireset={after}, "
                 f"DMI usable={usable}  "
                 f"{'OK' if ok else 'busy not provoked, not sticky, or not cleared'}")
