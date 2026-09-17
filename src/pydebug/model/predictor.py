@@ -12,8 +12,19 @@ choice is exposed as a constructor parameter and named in a comment, so that a
 divergence between this model and a DUT is always attributable to either a real
 bug or a declared configuration difference — never to an undocumented guess.
 
-Scope: dmcontrol/dmstatus run control (halt, resume, reset, halt-on-reset) —
-spec #3.5 Run Control, #3.2 Reset, #3.14.1 dmstatus, #3.14.2 dmcontrol.
+Scope, the same as `sv/model/dm_ref_model.sv`, which is checked against this
+model by replaying a simulation's model-input trace (`mk/model_crosscheck.py`):
+
+- dmcontrol/dmstatus run control (halt, resume, reset, halt-on-reset) --
+  spec #3.5 Run Control, #3.2 Reset, #3.14.1 dmstatus, #3.14.2 dmcontrol.
+- Registers the spec fully determines once the implementation is declared
+  (`set_config()`): hartinfo, abstractcs (static fields), command, abstractauto,
+  sbcs (static and R/W fields), haltsum0, hawindowsel, nextdm.
+- Abstract-command (data0/command) and System Bus Access (sbaddress0/sbdata0)
+  self-consistency shadows: values this same DMI traffic wrote, read back. Not
+  a model of a DUT's initial register or memory content.
+- Hardware single-step: a resume with dcsr.step=1 (as last written through an
+  abstract command) re-halts (riscv-dbg-vip#119).
 """
 
 import logging
@@ -26,10 +37,76 @@ from .registers import (
     DMSTATUS_VERSION_0_13,
     DMSTATUS_VERSION_1_0,
     hartsel_of,
-    register_at,
 )
 
 log = logging.getLogger(__name__)
+
+# DMI addresses beyond dmcontrol/dmstatus (spec #3.14), as dm_defines_pkg.sv
+# names them.
+ADDR_DATA0 = 0x04
+ADDR_DATA11 = 0x0F
+ADDR_HARTINFO = 0x12
+ADDR_HAWINDOWSEL = 0x14
+ADDR_ABSTRACTCS = 0x16
+ADDR_COMMAND = 0x17
+ADDR_ABSTRACTAUTO = 0x18
+ADDR_NEXTDM = 0x1D
+ADDR_PROGBUF0 = 0x20
+ADDR_PROGBUF15 = 0x2F
+ADDR_SBCS = 0x38
+ADDR_SBADDRESS0 = 0x39
+ADDR_SBDATA0 = 0x3C
+ADDR_HALTSUM0 = 0x40
+
+#: regno of GPR x0 (hardwired 0 by the base ISA) and of dcsr (spec #4.8).
+GPR_X0_REGNO = 0x1000
+DCSR_REGNO = 0x07B0
+DCSR_STEP_BIT = 2
+
+MASK32 = 0xFFFF_FFFF
+
+
+@dataclass(frozen=True)
+class DeclaredConfig:
+    """The declared implementation, field for field `dm_defines_pkg::dm_cfg_t`.
+
+    Loaded from dut_configs/<name>.json by `dut_config.load_dut_config()`.
+    Until one is applied with `DMPredictor.set_config()`, every register that
+    carries a Preset field is unmodelled, exactly as in dm_ref_model.sv.
+    """
+
+    sba_enable: bool = False
+    abstractauto_enable: bool = False
+    hartarray_enable: bool = False
+    authentication_enable: bool = False
+    haltgroups_enable: bool = False
+    num_harts: int = 1
+    version: int = DMSTATUS_VERSION_0_13
+    authenticated: bool = False
+    impebreak: bool = False
+    hasresethaltreq: bool = False
+    stickyunavail: bool = False
+    havereset_poweron: bool = False
+    supports_hartreset: bool = False
+    supports_hasel: bool = False
+    resumeack_reset: bool = False
+    progbufsize: int = 0
+    datacount: int = 0
+    relaxedpriv_reset: bool = False
+    nscratch: int = 0
+    dataaccess: bool = False
+    datasize: int = 0
+    dataaddr: int = 0
+    sbversion: int = 0
+    sbasize: int = 0
+    sbaccess_reset: int = 0
+    sbaccess_writable: bool = False
+    sbaccess128: bool = False
+    sbaccess64: bool = False
+    sbaccess32: bool = False
+    sbaccess16: bool = False
+    sbaccess8: bool = False
+    nextdm: int = 0
 
 
 @dataclass
@@ -140,6 +217,39 @@ class DMPredictor:
         self.havereset_poweron = havereset_poweron
 
         self.harts: List[HartState] = []
+        # The declared implementation. dm_ref_model.sv starts from an all-zero
+        # dm_cfg_t and only claims Preset-carrying registers once set_config()
+        # has run; this does the same.
+        self.cfg = DeclaredConfig()
+        self.cfg_valid = False
+
+        # Write-tracked registers whose read-back the spec determines.
+        self.abstractauto = 0
+        self.hawindowsel = 0
+        self.authdata = 0
+        self.sbreadonaddr = False
+        self.sbaccess = 0
+        self.sbautoincrement = False
+        self.sbreadondata = False
+        self.relaxedpriv = False
+
+        # Abstract-command self-consistency shadow. Like dm_ref_model.sv, a
+        # DM reset does not clear it: it describes the hart, not the DM.
+        self.shadow_regs: Dict[int, int] = {}
+        self.staged_data0 = 0
+        self.data0_pending_valid = False
+        self.data0_pending_value = 0
+
+        # System Bus Access self-consistency shadow.
+        self.shadow_mem: Dict[int, int] = {}
+        self.sbaddress0 = 0
+        self.sbcs_read_on_addr_armed = False
+        self.sbdata0_pending_valid = False
+        self.sbdata0_pending_value = 0
+
+        #: The RTL's abstractcs.busy as last observed by the checker (#3.7.1).
+        self.observed_cmdbusy = False
+
         self.dmactive = False
         self.ndmreset = False
         self.hartsel = 0
@@ -148,7 +258,41 @@ class DMPredictor:
 
         self.reset_dm(power_on=True)
 
+    # ── Declared configuration ────────────────────────────────────────────────
+
+    def set_config(self, cfg: DeclaredConfig) -> None:
+        """Apply the declared implementation, as dm_ref_model.sv's set_config().
+
+        Also re-applies the run-control parameters it carries and takes the DM
+        to its power-on state.
+        """
+        self.cfg = cfg
+        self.cfg_valid = True
+        self.num_harts = cfg.num_harts
+        self.version = cfg.version
+        self.authenticated = cfg.authenticated
+        self.impebreak = cfg.impebreak
+        self.hasresethaltreq = cfg.hasresethaltreq
+        self.supports_hartreset = cfg.supports_hartreset
+        self.supports_hasel = cfg.supports_hasel
+        self.resumeack_reset = cfg.resumeack_reset
+        self.stickyunavail = cfg.stickyunavail
+        self.havereset_poweron = cfg.havereset_poweron
+        self.reset_dm(power_on=True)
+
     # ── Reset ─────────────────────────────────────────────────────────────────
+
+    def _reset_declared_regs(self) -> None:
+        """Spec reset values (dm_registers.xml): abstractauto 0, hawindowsel 0,
+        sbaccess 2 (or the declared value), relaxedpriv Preset, the rest 0."""
+        self.abstractauto = 0
+        self.hawindowsel = 0
+        self.authdata = 0
+        self.sbreadonaddr = False
+        self.sbaccess = self.cfg.sbaccess_reset
+        self.sbautoincrement = False
+        self.sbreadondata = False
+        self.relaxedpriv = self.cfg.relaxedpriv_reset
 
     def reset_dm(self, power_on: bool = False) -> None:
         """Take the DM to its reset state (dmactive=0 or power-up).
@@ -163,6 +307,7 @@ class DMPredictor:
         the hart where it was; tests must not assert on that transition.
         """
         prev = self.harts
+        self._reset_declared_regs()
         self.dmactive = False
         self.ndmreset = False
         self.hartsel = 0
@@ -211,12 +356,107 @@ class DMPredictor:
 
     # ── Write prediction ──────────────────────────────────────────────────────
 
+    def set_observed_cmdbusy(self, busy: bool) -> None:
+        """The RTL's abstractcs.busy, fed in by the checker before each write.
+
+        #3.7.1: a write to command, abstractcs, data* or progbuf* while a
+        command is in flight is refused by the DM. This model is untimed, so
+        it is told rather than guessing.
+        """
+        self.observed_cmdbusy = bool(busy)
+
+    @staticmethod
+    def _guarded_while_busy(addr: int) -> bool:
+        return (addr in (ADDR_COMMAND, ADDR_ABSTRACTCS, ADDR_ABSTRACTAUTO)
+                or ADDR_DATA0 <= addr <= ADDR_DATA11
+                or ADDR_PROGBUF0 <= addr <= ADDR_PROGBUF15)
+
     def on_write(self, addr: int, value: int) -> None:
         """Update modeled state for a DMI write. Unmodeled addresses are ignored."""
-        reg = register_at(addr)
-        if reg is None or reg.address != DMCONTROL.address:
+        value &= MASK32
+        if self.observed_cmdbusy and self._guarded_while_busy(addr):
+            # Dropped, as the DM drops it. cmderr is tracked front-door by the
+            # checker, not invented here.
             return
-        self._write_dmcontrol(value)
+        if addr == DMCONTROL.address:
+            self._write_dmcontrol(value)
+        elif addr == ADDR_DATA0:
+            self.staged_data0 = value
+        elif addr == ADDR_COMMAND:
+            self._write_command(value)
+        elif addr == ADDR_SBCS:
+            self._write_sbcs(value)
+        elif addr == ADDR_SBADDRESS0:
+            self._write_sbaddress0(value)
+        elif addr == ADDR_SBDATA0:
+            self._write_sbdata0(value)
+        elif addr == ADDR_ABSTRACTAUTO:
+            self.abstractauto = value
+        elif addr == ADDR_HAWINDOWSEL:
+            self.hawindowsel = value & 0x7FFF
+        elif addr == ADDR_ABSTRACTCS:
+            self.relaxedpriv = bool((value >> 11) & 1)
+
+    # ── Abstract command (spec #3.7.1.1): cmd[18]=postexec, cmd[17]=transfer,
+    #    cmd[16]=write, cmd[15:0]=regno ──────────────────────────────────────
+
+    def _write_command(self, value: int) -> None:
+        postexec = (value >> 18) & 1
+        transfer = (value >> 17) & 1
+        write = (value >> 16) & 1
+        regno = value & 0xFFFF
+        if transfer:
+            if write:
+                self.shadow_regs[regno] = self.staged_data0
+            elif regno == GPR_X0_REGNO:
+                self.data0_pending_valid = True
+                self.data0_pending_value = 0
+            elif regno in self.shadow_regs:
+                self.data0_pending_valid = True
+                self.data0_pending_value = self.shadow_regs[regno]
+            else:
+                self.data0_pending_valid = False
+        if postexec:
+            # The Program Buffer may change any register (#110).
+            self.shadow_regs.clear()
+
+    # ── System Bus Access (spec #3.10) ────────────────────────────────────────
+
+    def _write_sbcs(self, value: int) -> None:
+        self.sbcs_read_on_addr_armed = bool((value >> 20) & 1)
+        self.sbreadonaddr = bool((value >> 20) & 1)
+        if self.cfg.sbaccess_writable:
+            self.sbaccess = (value >> 17) & 0x7
+        self.sbautoincrement = bool((value >> 16) & 1)
+        self.sbreadondata = bool((value >> 15) & 1)
+
+    def _sba_autoincrement(self) -> None:
+        if self.sbautoincrement:
+            self.sbaddress0 = (self.sbaddress0 + (1 << self.sbaccess)) & MASK32
+
+    def _sba_arm_read(self, address: int) -> None:
+        if address in self.shadow_mem:
+            self.sbdata0_pending_valid = True
+            self.sbdata0_pending_value = self.shadow_mem[address]
+        else:
+            self.sbdata0_pending_valid = False
+
+    def _write_sbaddress0(self, value: int) -> None:
+        self.sbaddress0 = value
+        if self.sbcs_read_on_addr_armed:
+            self._sba_arm_read(value)
+            self._sba_autoincrement()
+
+    def _write_sbdata0(self, value: int) -> None:
+        self.shadow_mem[self.sbaddress0] = value
+        self._sba_autoincrement()
+
+    def observe_sbdata0_read(self) -> None:
+        """#3.10: with sbreadondata set, reading sbdata0 starts the next read,
+        at the address sbaddress0 holds now; only then does it autoincrement."""
+        if self.sbreadondata:
+            self._sba_arm_read(self.sbaddress0)
+            self._sba_autoincrement()
 
     def _write_dmcontrol(self, value: int) -> None:
         f = DMCONTROL.decode(value)
@@ -313,25 +553,24 @@ class DMPredictor:
         already running when resumereq was written ends up with resume_ack=0
         and no way to re-set it until it is halted and resumed.
 
-        Known scope gap (riscv-dbg-vip#119): this predictor never observes
-        abstract-command writes (only DMCONTROL, per this module's declared
-        scope in the file header), so unlike `dm_ref_model.sv` -- which
-        additionally shadows abstract-command traffic and can therefore tell
-        a dcsr.step=1 write apart from an ordinary resume -- this model
-        always predicts `running=True` here, even for a hardware single-step
-        resume that should autonomously re-halt. `dm_ref_model.sv` is the
-        checker actually used against RTL for TC-SSTEP-001 (see its own file
-        header); this gap is declared, not silently guessed past, per this
-        module's own stated documentation discipline.
+        Hardware single-step (riscv-dbg-vip#119): the abstract-command shadow
+        records the last dcsr written, so a resume with dcsr.step=1 is
+        predicted to re-halt, as in `dm_ref_model.sv`.
         """
         for h in self._selected():
             if h.nonexistent or h.unavail:
                 continue
             h.resume_ack = False
             if h.halted:
-                h.halted = False
-                h.running = True
+                # Hardware single-step (#4.5, riscv-dbg-vip#119): if the last
+                # dcsr written through an abstract command had step=1, the
+                # hart runs one instruction and re-halts on its own.
+                step_armed = bool((self.shadow_regs.get(DCSR_REGNO, 0) >> DCSR_STEP_BIT) & 1)
+                h.halted = step_armed
+                h.running = not step_armed
                 h.resume_ack = True
+                # A resumed hart runs code the shadow cannot follow (#110, #113).
+                self.shadow_regs.clear()
 
     def _apply_ndmreset(self, asserted: bool) -> None:
         """ndmreset resets every hart and the rest of the platform (#3.2)."""
@@ -418,16 +657,100 @@ class DMPredictor:
 
     # ── Read prediction ───────────────────────────────────────────────────────
 
-    def expect(self, addr: int) -> int:
-        """Predict the value a DMI read of `addr` should return."""
-        reg = register_at(addr)
-        if reg is None:
-            raise KeyError(f"predictor does not model DMI address 0x{addr:02x}")
-        if reg.address == DMSTATUS.address:
-            return self._expect_dmstatus()
-        if reg.address == DMCONTROL.address:
+    def has_model(self, addr: int) -> bool:
+        """Whether a read of `addr` has a checkable prediction right now.
+
+        Same answer as dm_ref_model.sv's has_model() for every address. A
+        caller must check it before trusting predict().
+        """
+        if addr in (DMCONTROL.address, DMSTATUS.address):
+            return True
+        if addr == ADDR_DATA0:
+            return self.data0_pending_valid
+        if addr == ADDR_SBDATA0:
+            return self.cfg.sba_enable and self.sbdata0_pending_valid
+        if addr in (ADDR_HARTINFO, ADDR_HALTSUM0, ADDR_COMMAND, ADDR_NEXTDM, ADDR_ABSTRACTCS):
+            return self.cfg_valid
+        if addr == ADDR_ABSTRACTAUTO:
+            return self.cfg_valid and self.cfg.abstractauto_enable
+        if addr == ADDR_HAWINDOWSEL:
+            return self.cfg_valid and self.cfg.hartarray_enable
+        if addr == ADDR_SBCS:
+            return self.cfg_valid and self.cfg.sba_enable
+        return False
+
+    def predict(self, addr: int) -> int:
+        """The predicted read value; 0 for an address has_model() rejects."""
+        if addr == DMCONTROL.address:
             return self._expect_dmcontrol()
-        raise KeyError(f"predictor has no read model for {reg.name}")
+        if addr == DMSTATUS.address:
+            return self._expect_dmstatus()
+        if addr == ADDR_DATA0:
+            return self.data0_pending_value
+        if addr == ADDR_SBDATA0:
+            return self.sbdata0_pending_value
+        if addr == ADDR_HARTINFO:
+            c = self.cfg
+            return ((c.nscratch & 0xF) << 20 | int(c.dataaccess) << 16
+                    | (c.datasize & 0xF) << 12 | (c.dataaddr & 0xFFF))
+        if addr == ADDR_ABSTRACTCS:
+            return ((self.cfg.progbufsize & 0x1F) << 24 | int(self.relaxedpriv) << 11
+                    | (self.cfg.datacount & 0xF))
+        if addr == ADDR_COMMAND:
+            return 0  # cmdtype and control are WARZ
+        if addr == ADDR_ABSTRACTAUTO:
+            progbuf = (self.abstractauto >> 16) & ((1 << self.cfg.progbufsize) - 1)
+            data = (self.abstractauto & 0xFFF) & ((1 << self.cfg.datacount) - 1)
+            return (progbuf << 16 | data) & MASK32
+        if addr == ADDR_SBCS:
+            c = self.cfg
+            return ((c.sbversion & 0x7) << 29 | int(self.sbreadonaddr) << 20
+                    | (self.sbaccess & 0x7) << 17 | int(self.sbautoincrement) << 16
+                    | int(self.sbreadondata) << 15 | (c.sbasize & 0x7F) << 5
+                    | int(c.sbaccess128) << 4 | int(c.sbaccess64) << 3
+                    | int(c.sbaccess32) << 2 | int(c.sbaccess16) << 1 | int(c.sbaccess8))
+        if addr == ADDR_HALTSUM0:
+            word = 0
+            for i in range(min(self.num_harts, 32)):
+                if i < len(self.harts) and self.harts[i].halted:
+                    word |= 1 << i
+            return word
+        if addr == ADDR_HAWINDOWSEL:
+            return self.hawindowsel & 0x7FFF
+        if addr == ADDR_NEXTDM:
+            return self.cfg.nextdm & MASK32
+        return 0
+
+    @staticmethod
+    def predict_mask(addr: int) -> int:
+        """The bits predict() claims. abstractcs busy/cmderr and sbcs
+        sbbusyerror/sbbusy/sberror are dynamic and left to the front door."""
+        if addr == ADDR_ABSTRACTCS:
+            return 0x1F00_080F
+        if addr == ADDR_SBCS:
+            return 0xE01F_8FFF
+        return MASK32
+
+    def expect(self, addr: int) -> int:
+        """Predict the value a DMI read of `addr` should return.
+
+        Raises KeyError for an address this model makes no claim about, so a
+        caller can never mistake "unmodelled" for a prediction of 0.
+        """
+        if not self.has_model(addr):
+            raise KeyError(f"predictor does not model DMI address 0x{addr:02x}")
+        return self.predict(addr)
+
+    def sync_observed_hart_signals(self, dmstatus_word: int) -> None:
+        """Take the selected hart's halted/running/resume-ack from a real
+        dmstatus read, as dm_ref_model.sv does before comparing one: they
+        reach the DM through hart-side hardware an untimed model cannot time."""
+        sel = self.hartsel
+        if 0 <= sel < len(self.harts):
+            h = self.harts[sel]
+            h.halted = bool((dmstatus_word >> 9) & 1)
+            h.running = bool((dmstatus_word >> 11) & 1)
+            h.resume_ack = bool((dmstatus_word >> 17) & 1)
 
     def _expect_dmstatus(self) -> int:
         sel = self._selected()

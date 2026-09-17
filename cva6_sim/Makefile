@@ -205,6 +205,7 @@ soc_test_cov: soc_compile_cov
 	$(SIM_RUN_COV) \
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	     +DM_MODEL_TRACE=$(COV_DIR)/$(UCDB_NAME).model_trace \
 	     $(ELF_PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(COV_DIR)/$(UCDB_NAME).log
 
@@ -239,7 +240,15 @@ REGRESS   = python3 $(dir $(lastword $(MAKEFILE_LIST)))../mk/run_regression.py
 ONLY     ?=
 REPORT   ?= ../testplans/results/regression_report.md
 
-.PHONY: regress regress_cov regress_list
+# Replay every test's reference-model trace through the Python model and
+# compare the two models prediction by prediction (#75). Run after a
+# regression; plain runs write sim_outputs/*.model_trace, coverage runs
+# sim_outputs/coverage/*.model_trace.
+MODEL_TRACES ?= $(wildcard $(SIM_OUTPUT_DIR)/*.model_trace)
+model_crosscheck:
+	python3 ../mk/model_crosscheck.py $(MODEL_TRACES) --report $(SIM_OUTPUT_DIR)/model_crosscheck.md
+
+.PHONY: regress regress_cov regress_list model_crosscheck
 
 regress:
 	$(REGRESS) $(if $(ONLY),--only $(ONLY),) --report $(REPORT)
@@ -260,6 +269,7 @@ soc_test: soc_compile
 	 $(SIM_RUN) \
 	      +UVM_TESTNAME=debug_test \
 	      +PYTHON_SEQ="$(PYTHON_SEQ)" \
+	      +DM_MODEL_TRACE=$(SIM_OUTPUT_DIR)/$(UCDB_NAME).model_trace \
 	      $(ELF_PLUSARGS) $(PLUSARGS) \
 	      +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(RESULT_DIR)/run.log
 	@$(collect_results)
