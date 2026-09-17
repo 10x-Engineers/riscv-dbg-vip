@@ -67,7 +67,7 @@ def build_debug_entry_sequence(
     session.add_step("Halt hart", lambda: dm.halt())
 
     def setup():
-        for sym in ("cls_ebreak", "ebreak_park", "cls_trigger_target", "step_loop"):
+        for sym in ("cls_ebreak", "ebreak_park", "cls_trigger_target", "trigger_lead", "step_loop"):
             addrs[sym] = symbol_addr(elf, sym)
         open_pmp(dm)
         return StepResult(
@@ -198,18 +198,28 @@ def build_debug_entry_sequence(
                 msg=f"TC-DCSR-011: N/A -- trigger 0 did not accept an mcontrol6 "
                     f"execute trigger (tdata1=0x{readback:016x})")
         modify_dcsr(dm, clear_bits=DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU | DCSR_STEP)
-        place(dm, target, PRV_M)
-        entered = run_until_halted(dm)
+        place(dm, addrs["trigger_lead"], PRV_M)      # run INTO the target
+        entered = run_until_halted(dm)       # no halt request: only the trigger can halt it
         if not entered:
             ensure_halted(dm)
         cause = cause_of(dm.read_gpr(DCSR))
+        dpc = dm.read_reg64(DPC)
         dm.write_reg64(TDATA1, 0)
-        ok = entered and cause == CAUSE_TRIGGER
+        # An execute trigger with timing=before halts with dpc on the matched
+        # instruction (Sdtrig #5.7.12). A self-halt there is the trigger firing,
+        # whatever dcsr.cause says.
+        fired = entered and dpc == target
+        ok = fired and cause == CAUSE_TRIGGER
+        if ok:
+            verdict = "OK"
+        elif fired:
+            verdict = f"trigger fired but dcsr.cause={cause}, not {CAUSE_TRIGGER} -- RTL-012"
+        else:
+            verdict = "trigger did not enter Debug Mode"
         return StepResult(
             ok=ok,
-            msg=f"TC-DCSR-011: execute trigger at 0x{target:x} -> halted={entered} "
-                f"cause={cause} (expect {CAUSE_TRIGGER})  "
-                + ("OK" if ok else "trigger did not enter Debug Mode"))
+            msg=f"TC-DCSR-011: execute trigger at 0x{target:x} -> self-halted={entered} "
+                f"dpc=0x{dpc:x} cause={cause} (expect {CAUSE_TRIGGER})  {verdict}")
     session.add_step("TC-DCSR-011: trigger enters Debug Mode (cause=2)", tc_dcsr_011)
 
     # ── restore ───────────────────────────────────────────────────────────

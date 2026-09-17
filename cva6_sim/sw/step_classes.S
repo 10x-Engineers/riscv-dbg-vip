@@ -121,8 +121,15 @@ ebreak_park:
 # ── a fixed address for an execute trigger to match ───────────────────────
 # cg_debug_entry.cp_cause.trigger needs a trigger to fire, which needs a known
 # instruction address to arm tdata2 against.
+#
+# The debugger resumes at trigger_lead, one instruction BEFORE the target, so
+# the trigger fires on an instruction the hart reaches by executing rather than
+# on the first instruction after resume.
+        .globl trigger_lead
         .globl cls_trigger_target
         .globl trigger_park
+trigger_lead:
+        addi    a5, a5, 1
 cls_trigger_target:
         addi    a4, a4, 1
 trigger_park:
@@ -177,7 +184,7 @@ sret_fallthrough:
 # that trapped; advancing by 4 resumes after it. Every trap the loops above
 # raise comes from a 4-byte instruction, so a fixed +4 is correct here and
 # would not be in a handler meant for general use. (A trap from cls_ebreak's
-# 2-byte ebreak resumes 4 bytes on, at cls_trigger_target, which is harmless.)
+# 2-byte ebreak resumes 4 bytes on, at trigger_lead, which is harmless.)
         .align 2
 trap_handler:
         csrr    t0, mepc
