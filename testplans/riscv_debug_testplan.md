@@ -549,13 +549,13 @@ it explicitly rather than assuming it.
 | SSTEP-004-C2 | Check | `dcsr.cause == 4`; `dpc` advanced by 4 (the `wfi`'s own length) | `Sdext.html#csr-dcsr` | P0 | Pass | `wfi_ctrl` armed the stall without checking `dcsr.step`. Filed `openhwgroup/cva6#3549` (dup of #3497, PR #3525). Fixed by gating on `!dcsr_q.step` |
 | SSTEP-005-S | Stimulate | Step `wrs.sto` / `wrs.nto` | `Sdext.html#stepbit` | P3 | N/A | Zawrs absent — would decode illegal and test the trap handler instead |
 | SSTEP-006-S | Stimulate | Set `dcsr.stepie=0`, raise an enabled interrupt, then step one instruction | `Sdext.html#csr-dcsr` | P1 | Pass | `stepie=0` is our sequences' default |
-| SSTEP-006-C | Check | No interrupt is taken during the step; `dcsr.cause=4`; `mepc` unchanged | `Sdext.html#csr-dcsr` | P1 | Not started | |
-| SSTEP-007-S | Stimulate | Set `dcsr.stepie=1`, raise an enabled interrupt, then step | `Sdext.html#csr-dcsr` | P1 | Not started | |
+| SSTEP-006-C | Check | No interrupt is taken during the step; `dcsr.cause=4`; `mepc` unchanged | `Sdext.html#csr-dcsr` | P1 | Pass | `step_matrix_uvm` — timer interrupt pending via `mie.MTIE`, `mstatus.MIE=0` |
+| SSTEP-007-S | Stimulate | Set `dcsr.stepie=1`, raise an enabled interrupt, then step | `Sdext.html#csr-dcsr` | P1 | Pass | `step_matrix_uvm`; pending but not taken in M (`mstatus.MIE=0`) |
 | SSTEP-007-C | Check | The interrupt is taken; `dpc` == trap handler entry | `Sdext.html#csr-dcsr` | P1 | Not started | |
-| SSTEP-008-S | Stimulate | Step an instruction that traps (e.g. a load from an unmapped address) | `Sdext.html#stepbit` | P1 | Not started | |
-| SSTEP-008-C | Check | Debug Mode is re-entered with `dpc` == the handler's first instruction | `Sdext.html#stepbit` | P1 | Not started | Related upstream issue #3429 |
-| SSTEP-009-S | Stimulate | Step an `ecall`, an `mret`, and an `sret` | `Sdext.html#stepbit` | P1 | Not started | |
-| SSTEP-009-C | Check | `dcsr.prv` reflects the privilege **after** the transition | `Sdext.html#csr-dcsr` | P1 | Not started | |
+| SSTEP-008-S | Stimulate | Step an instruction that traps (e.g. a load from an unmapped address) | `Sdext.html#stepbit` | P1 | Pass | `step_matrix_uvm` — illegal instruction, `ecall`, `wfi` at U, from M/S/U |
+| SSTEP-008-C | Check | Debug Mode is re-entered with `dpc` == the handler's first instruction | `Sdext.html#stepbit` | P1 | Fail | RTL-010 (upstream #3429): halts at handler+4, after the first handler instruction ran |
+| SSTEP-009-S | Stimulate | Step an `ecall`, an `mret`, and an `sret` | `Sdext.html#stepbit` | P1 | Pass | `step_matrix_uvm` |
+| SSTEP-009-C | Check | `dcsr.prv` reflects the privilege **after** the transition | `Sdext.html#csr-dcsr` | P1 | Fail | RTL-011 (#159): xRET step reports `dpc`=pc+4 and the pre-return privilege |
 | SSTEP-010-S | Stimulate | Set a trigger at the PC about to be stepped, then step | `Sdtrig.html` | P2 | Not started | OpenOCD removes the breakpoint first (`riscv.c:4201`) — check the DM tolerates both orders |
 | SSTEP-010-C | Check | Exactly one of {step, trigger} reports; `dcsr.cause` is unambiguous | `Sdext.html#csr-dcsr` | P2 | Not started | |
 | SSTEP-011-S | Stimulate | Enable a watchpoint, then step, then read the trigger registers back | `Sdtrig.html` | P2 | Not started | OpenOCD disables watchpoints around a step (`riscv.c:4213`) — workflow-derived, not required |
@@ -571,10 +571,10 @@ it explicitly rather than assuming it.
 | SSTEP-018-V | Cover | Privilege at step = {M, S, U} | `Sdext.html#csr-dcsr` | P1 | Not started | |
 | SSTEP-019-S | Stimulate | Step a branch whose condition is false | `Sdext.html#stepbit` | P1 | Not started | Coverage: `not_taken_branch` — SSTEP-003 covers only the taken case |
 | SSTEP-019-C | Check | `dpc` is the sequential next address, not the branch target | `Sdext.html#csr-dpc` | P1 | Not started |  |
-| SSTEP-020-S | Stimulate | Step ~32 consecutive instructions across a loop back-edge | `Sdext.html#stepbit` | P1 | Not started | Coverage: `across_loop_backedge` — drift compounds across repeated taken branches |
-| SSTEP-020-C | Check | `dpc` follows the branch every iteration; no cumulative drift | `Sdext.html#csr-dpc` | P1 | Not started |  |
-| SSTEP-021-V | Cover | Stepped class × privilege | `Sdext.html#stepbit` | P1 | Not started | `x_class_x_privilege` — a trapping instruction from U enters the M handler; from M it stays in M |
-| SSTEP-022-V | Cover | Stepped class × {`stepie`, interrupt pending} | `Sdext.html#csr-dcsr` | P0 | Not started | `x_class_x_stepie` — a `wfi` stepped with `stepie=1` and an interrupt pending may legitimately complete; with `stepie=0` it must be a nop. Testing the `wfi` at one setting leaves the harder half unmeasured |
+| SSTEP-020-S | Stimulate | Step ~32 consecutive instructions across a loop back-edge | `Sdext.html#stepbit` | P1 | Pass | Coverage: `across_loop_backedge` — drift compounds across repeated taken branches |
+| SSTEP-020-C | Check | `dpc` follows the branch every iteration; no cumulative drift | `Sdext.html#csr-dpc` | P1 | Pass |  |
+| SSTEP-021-V | Cover | Stepped class × privilege | `Sdext.html#stepbit` | P1 | Pass | `x_class_x_privilege` — a trapping instruction from U enters the M handler; from M it stays in M |
+| SSTEP-022-V | Cover | Stepped class × {`stepie`, interrupt pending} | `Sdext.html#csr-dcsr` | P0 | Pass | `x_class_x_stepie` — a `wfi` stepped with `stepie=1` and an interrupt pending may legitimately complete; with `stepie=0` it must be a nop. Testing the `wfi` at one setting leaves the harder half unmeasured |
 | SSTEP-023-V | Cover | Stepped class × consecutive-step count | `Sdext.html#stepbit` | P2 | Not started | `x_class_x_consecutive` |
 
 ## 3.10 Single-step — native, via the `icount` trigger
@@ -620,13 +620,19 @@ behaviour:
 |---|---|---|---|---|---|---|
 | DCSR-010-S | Stimulate | Set `dcsr.ebreakm=1`, point `dpc` at an `ebreak` in the program, resume | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` — cannot be produced by any DMI write |
 | DCSR-010-C | Check | The hart re-enters Debug Mode with `dcsr.cause`=1 (ebreak) | `Sdext.html#csr-dcsr` | P0 | Pass | |
-| DCSR-011-S | Stimulate | Arm an mcontrol6 execute trigger (`action`=1) on a known instruction, resume into it | `Sdtrig.html` | P1 | Pass | |
-| DCSR-011-C | Check | The hart enters Debug Mode with `dcsr.cause`=2 (trigger) | `Sdtrig.html` | P1 | Pass | N/A if the DUT does not accept an mcontrol6 execute trigger |
-| DCSR-012-C | Check | With `ebreakm=0`, executing `ebreak` does **not** enter Debug Mode | `Sdext.html#csr-dcsr` | P0 | Pass | Checked BEFORE DCSR-010, or that test passes for the wrong reason |
+| DCSR-011-S | Stimulate | Arm an mcontrol6 execute trigger (`action`=1) on a known instruction, resume into it | `Sdtrig.html` | P1 | N/A | cv64a6_imafdc_sv39 is built with `SDTRIG=0`; the tdata writes raise cmderr=3 |
+| DCSR-011-C | Check | The hart enters Debug Mode with `dcsr.cause`=2 (trigger) | `Sdtrig.html` | P1 | N/A | As DCSR-011-S; the trigger bins are excluded at report time (`mk/fcov_exclusions.tcl`) |
+| DCSR-012-C | Check | With `ebreakm=0`, executing `ebreak` does **not** enter Debug Mode; it traps with `mcause`=3 at the ebreak | `Sdext.html#csr-dcsr` | P0 | Pass | Checked BEFORE DCSR-010, or that test passes for the wrong reason |
+| DCSR-013-S | Stimulate | With `dcsr.ebreaks=1` / `ebreaku=1`, resume into an `ebreak` at S / U (`dcsr.prv`, PMP entry 0 opened) | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` |
+| DCSR-013-C | Check | Debug Mode entered with `cause`=1, `dpc` == the ebreak, `dcsr.prv` == the level it ran at | `Sdext.html#csr-dcsr` | P0 | Pass | |
+| DCSR-014-S | Stimulate | Resume into a spin loop at S / U, then assert `haltreq` | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` |
+| DCSR-014-C | Check | `cause`=3, `dcsr.prv` == S / U, `dpc` == the interrupted instruction | `Sdext.html#csr-dpc` | P0 | Pass | |
+| DCSR-015-S | Stimulate | Single-step one ordinary instruction at S / U | `Sdext.html#stepbit` | P0 | Pass | `debug_entry_uvm` |
+| DCSR-015-C | Check | `cause`=4, `dcsr.prv` unchanged, `dpc` == the next instruction | `Sdext.html#csr-dpc` | P0 | Pass | |
 | DM-001-S | Stimulate | Enable `dcsr.ebreakm=1`; execute `ebreak` in M-mode | `Sdext.html#csr-dcsr` | P0 | Pass | `sw_breakpoint_progbuf_uvm` |
 | DM-001-C | Check | Debug Mode entered; `dcsr.cause=1` (ebreak) | `Sdext.html#csr-dcsr` | P0 | Pass | |
-| DM-002-S | Stimulate | Set `dcsr.ebreakm=0`; execute `ebreak` in M-mode | `Sdext.html#csr-dcsr` | P0 | Not started | |
-| DM-002-C | Check | Ordinary breakpoint trap, **not** Debug Mode; `mcause=3` | `Sdext.html#csr-dcsr` | P0 | Not started | The mirror of DM-001 — catches a stuck-enabled bit |
+| DM-002-S | Stimulate | Set `dcsr.ebreakm=0`; execute `ebreak` in M-mode | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` (TC-DCSR-012) |
+| DM-002-C | Check | Ordinary breakpoint trap, **not** Debug Mode; `mcause=3` | `Sdext.html#csr-dcsr` | P0 | Pass | The mirror of DM-001 — catches a stuck-enabled bit |
 | DM-003-S | Stimulate | Execute `dret` from Debug Mode | `Sdext.html#dret` | P0 | Pass | Observed in trace |
 | DM-003-C | Check | Hart returns to `dpc` at privilege `dcsr.prv` | `Sdext.html#dret` | P0 | Pass | |
 | DM-004-S | Stimulate | Execute `dret` in M-mode outside Debug Mode | `Sdext.html#dret` | P1 | Not started | |

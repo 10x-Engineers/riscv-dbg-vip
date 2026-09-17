@@ -89,68 +89,89 @@ not classify its own failure, and not reaching it is arguably correct.
 
 ## Measured: merged functional coverage
 
-All 25 tests, one compile, one coverage model, merged with `imc`
-(2026-09-15). **13 of 19 covergroups are at 100%**; 208 of 295
-bins covered.
+All 27 tests, one compile, one coverage model, merged with `imc`
+(2026-09-17, `bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/`).
 
-| Covergroup | Merged |
-|---|---:|
-| `cg_dmcontrol_write` | 100.00% |
-| `cg_dmstatus_read` | 100.00% |
-| `cg_hart_transition` | 100.00% |
-| `cg_command_write` | 100.00% |
-| `cg_abstractcs_read` | 100.00% |
-| `cg_progbuf` | 100.00% |
-| `cg_sbcs` | 100.00% |
-| `cg_sb_access` | 100.00% |
-| `cg_dmcs2_write` | 100.00% |
-| `cg_hartinfo_read` | 100.00% |
-| `cg_haltsum0_read` | 100.00% |
-| `cg_data0_access` | 100.00% |
-| `cg_trigger` | 100.00% |
-| `cg_hart_mode` | 87.50% |
-| `cg_abstract_cmd` | 83.33% |
-| `cg_dmi_access` | 67.71% |
-| `cg_step_external` | 52.58% |
-| `cg_debug_entry` | 49.33% |
-| `cg_sba` | 25.00% |
+**263 of 263 reachable bins covered — 100%.** 19 bins are excluded at report
+time by `mk/fcov_exclusions.tcl`, each because this DUT cannot produce it.
+Without the exclusions: 263 of 282 (93.26%). Both reports are written on every
+run (`out/functional.rpt`, `out/functional_excl.rpt`).
 
-Movement from unblocking SBA and adding the busy-guard and DTM tests:
-`cg_sbcs` 25% → 100%, `cg_sb_access` 33% → 100%, `cg_dmcontrol_write`
-97.37% → 100%.
+| Covergroup | Raw | With exclusions | Excluded |
+|---|---:|---:|---|
+| `cg_dmi_access` | 22/26 | 22/22 | op status `failed` ×4 |
+| `cg_dmcontrol_write` | 47/47 | 47/47 | |
+| `cg_dmstatus_read` | 42/42 | 42/42 | |
+| `cg_hart_transition` | 5/5 | 5/5 | |
+| `cg_command_write` | 4/4 | 4/4 | |
+| `cg_abstractcs_read` | 4/4 | 4/4 | |
+| `cg_progbuf` | 2/2 | 2/2 | |
+| `cg_sbcs` | 3/3 | 3/3 | |
+| `cg_sb_access` | 3/3 | 3/3 | |
+| `cg_dmcs2_write` | 6/6 | 6/6 | |
+| `cg_hartinfo_read` | 1/1 | 1/1 | |
+| `cg_haltsum0_read` | 2/2 | 2/2 | |
+| `cg_data0_access` | 2/2 | 2/2 | |
+| `cg_trigger` | 11/11 | 11/11 | |
+| `cg_debug_entry` | 23/28 | 23/23 | cause=trigger ×5 |
+| `cg_step_external` | 74/74 | 74/74 | |
+| `cg_hart_mode` | 4/4 | 4/4 | |
+| `cg_abstract_cmd` | 5/6 | 5/5 | `cmderr` other |
+| `cg_sba` | 3/12 | 3/3 | widths ×4, `sberror` ×5 |
 
-`cg_sba` at 25% is **not** a stimulus gap: the width bins other than the
-hardwired one cannot be reached while #147 stands, and are excluded at report
-time by `mk/dm_cov_exclude.py` rather than in the covergroup — see the note in
-`cp_sbaccess` for why SystemVerilog forces that.
+### Why each exclusion is unreachable
 
----
+| Bins | Reason |
+|---|---|
+| `cg_dmi_access` `failed` | `dmi_jtag.sv` only ever assigns `DMIBusy` or `DMINoError` (lines 169, 173) |
+| `cg_abstract_cmd` `other` | `CmdErrorOther` is declared in `dm_pkg.sv` and assigned nowhere |
+| `cg_sba` widths, `sberror` | RTL-002: `dm_csrs.sv:618` forces `sbaccess`=3 every cycle; `dm_sba.sv` raises `sberror` only for `sbaccess`>3 and has no bus-error input |
+| `cg_debug_entry` trigger | `cv64a6_imafdc_sv39` is built with `SDTRIG=0`; `TC-DCSR-011` confirms the trigger CSRs raise an exception |
 
-## What is still open, honestly
+Bins that cannot be sampled at all, as opposed to bins the DUT cannot produce,
+are `ignore_bins` in `covergroups.sv` with the reason beside them:
+`cg_hart_mode.stayed_running` (the group samples only on a mode change), the
+off-diagonal `x_cause_x_dpc` cells (the origin is derived from the cause), and
+`wfi`/`priv_change` × U in `x_class_x_prv` (illegal at U on a hart with S).
 
-**Privilege bins (`cp_prv`, `cp_prv_at_step`, and the crosses over them).**
-`priv_walk.S` cycles M → S → U. The halt phase catches S, and `dcsr.prv` reports
-it correctly — so an earlier reading of this as an RTL defect was wrong. U is not
-reached, and the step walk confines itself to a small PC span. The program still
-spends more time in M than intended. Not solved; recorded rather than worked
-around.
+### How the remaining holes were closed
 
-**The `{stepie, irq_pending}` cross.** Needs an interrupt genuinely pending
-while stepping. The first attempt armed a CLINT timer in the same program as the
-privilege walk and spent more instructions on setup than the S and U bodies
-contained. It needs its own test.
+- **`debug_entry` rewritten** — ebreak entry at M, S and U, halt requests that
+  interrupt S and U code, steps from S and U, and the `ebreakm=0` negative case
+  now requires the breakpoint trap. It had been failing 5/7 because a 32-bit
+  abstract write of `dpc` sign-extends to `0xFFFFFFFF8000xxxx`; addresses are
+  now written 64-bit (`read_reg64`/`write_reg64`).
+- **`step_matrix` (new)** — every class in `step_loop` under all four
+  `{stepie, interrupt pending}` combinations in M, runs long enough for the
+  17–64 consecutive-step bin, then from S and U, a `wfi` at U, and an `sret` at
+  S. The pending interrupt is the CLINT timer (`mtimecmp` resets to 0) gated by
+  `mie.MTIE`, with `mstatus.MIE=0` so it is never taken in M.
+- **`dmi_error`** — the sticky-busy case now also scans a read and a write.
+- **Three testbench defects, each of which hid a class:**
+  - *Trapping steps were never seen.* CVA6 never acks an instruction that
+    traps, so the TB's `commit_valid` missed every trap; it now includes
+    `ex_commit.valid`.
+  - *The wrong instruction was recorded.* The class latched was the **last**
+    to complete in a step; under RTL-010 that is the handler's first
+    instruction, not the trap. It now latches the first, together with the
+    privilege it ran at (`dcsr.prv` reads M after any trap).
+  - *No branch was ever not-taken.* The TB compared `op` with `BRANCH`, but
+    CVA6 encodes conditional branches by comparison (`EQ`, `NE`, …), so every
+    branch classified as taken. Taken is now decided at commit from the
+    resolved target the scoreboard stores in `bp.predict_address`.
 
-**Everything under `cg_sba`.** Blocked behind RTL-002: the reference model
-predicts the spec's reset constant for `sbaccess` and the RTL forces 3, so
-fail-fast aborts the SBA scenarios before their verdict. Roughly 15 testplan rows
-and a whole covergroup sit behind one RTL line.
+### Two CVA6 defects found on the way
 
-**`cp_dmi_result.failed` and `.busy`.** Provoking a DMI busy response reliably
-means overrunning `dtmcs.idle`, which the JTAG driver currently does not do
-deliberately. A directed transport-error test would close both.
+`step_matrix` checks where every trap and xRET step lands, and finds both
+wrong — see `rtl_findings.md`:
 
-**`cp_cause.trigger`.** `trigger` enumerates and disables triggers but does not
-yet arm one and let it fire.
+- **RTL-010** (upstream openhwgroup/cva6#3429) — a stepped instruction that
+  traps halts after the handler's first instruction.
+- **RTL-011** (#159) — a stepped `mret`/`sret` reports `dpc`=pc+4 and the
+  pre-return privilege.
+
+`step_matrix` is therefore an expected fail (12/13), and it repairs `dpc`/`prv`
+after each xRET so the rest of the run still steps where intended.
 
 ---
 
@@ -324,20 +345,17 @@ RTL-009 — and testbench defects that had been hiding things:
 
 ---
 
-## What would move the number most
+## What is left
 
-In order of coverage gained per unit of work:
+Against `covergroups.sv` the reachable closure is complete (263/263). The 19
+excluded bins move only with the DUT:
 
-1. **Resolve RTL-002.** One RTL line unblocks a whole covergroup, ~15 testplan
-   rows and the `sba` scenario.
-2. **A transport-error test.** `busy` is now provoked on purpose
-   (`TC-DTM-015`). `failed` is not reachable on this DUT: the DM always
-   answers `DTM_SUCCESS`. The `x_op_x_result` cross is still open.
-3. **Arm a trigger and let it fire.** Closes `cp_cause.trigger` and starts the
-   trigger crosses, which are 5 of the model's coverpoints.
-4. **Get U-mode execution working** in `priv_walk`, then the privilege crosses
-   follow.
-5. **A dedicated interrupt test** for the `stepie` cross.
+1. **Resolve RTL-002.** Restores `sbaccess` and makes the SBA width and
+   `sberror` bins reachable — 9 of the 19.
+2. **A CVA6 build with `SDTRIG=1`.** Makes `cause=trigger` reachable — 5 more.
+   `TC-DCSR-011` already arms the trigger and reports N/A on this build.
+3. **`DMIOPFailed` and `CmdErrorOther`** have no driver in this RTL; they stay
+   excluded unless the DM grows one.
 
-Items 2 and 3 are each a single sequence against existing infrastructure. Item 1
-is not ours to fix.
+The architectural model (`coverage_model.yaml`) is a separate, larger target and
+is not what these numbers measure.

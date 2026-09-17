@@ -532,6 +532,29 @@ class RISCVDebug:
         self.t.write(DMI.COMMAND, cmd)
         self._wait_abstractcs()
 
+    def read_reg64(self, regno: int) -> int:
+        """
+        Read a 64-bit GPR or CSR (aarsize=3), returning data1:data0.
+
+        read_gpr()/write_gpr() use aarsize=2. On RV64 that is only safe for
+        values that fit in 31 bits: a 32-bit write is loaded with a
+        sign-extending `lw`, and the spec leaves the high bits of a short write
+        UNSPECIFIED, so 0x80000050 becomes 0xFFFFFFFF80000050 -- and a 32-bit
+        read truncates it back, hiding the damage. Use these for addresses.
+        """
+        cmd = (3 << 20) | (1 << 17) | (regno & 0xFFFF)
+        self.t.write(DMI.COMMAND, cmd)
+        self._wait_abstractcs()
+        return (self.t.read(DMI.DATA1) << 32) | self.t.read(DMI.DATA0)
+
+    def write_reg64(self, regno: int, value: int) -> None:
+        """Write a 64-bit GPR or CSR (aarsize=3) from data1:data0."""
+        self.t.write(DMI.DATA0, value & 0xFFFFFFFF)
+        self.t.write(DMI.DATA1, (value >> 32) & 0xFFFFFFFF)
+        cmd = (3 << 20) | (1 << 17) | (1 << 16) | (regno & 0xFFFF)
+        self.t.write(DMI.COMMAND, cmd)
+        self._wait_abstractcs()
+
     def read_abstractcs(self) -> int:
         """
         Raw abstractcs (DMI 0x16) word.

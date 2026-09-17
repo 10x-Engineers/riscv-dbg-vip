@@ -509,7 +509,15 @@ bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
 #   out/{dm,dmi_jtag}_code_html/    browsable code coverage: dm_top and below, and the DTM
 #   out/{dm,dmi_jtag}_code_html_excl/   the same, with the exclusions applied
 #   out/functional_html/            browsable functional coverage
+#   out/functional_excl.rpt         functional, with mk/fcov_exclusions.tcl applied
+#   out/functional_html_excl/       the same, browsable
 ```
+
+`mk/fcov_exclusions.tcl` lists the covergroup bins this DUT cannot produce --
+triggers (`SDTRIG=0`), SBA widths and bus errors (RTL-002), DMI op-failed and
+`cmderr` "other" (never driven) -- each with the RTL line that makes it
+unreachable. The bins stay in `covergroups.sv`; the unexcluded report is always
+written alongside.
 
 Handles the `PATH`, the 21.09 default, the merge and the absolute-path rule, and
 prints the DM table twice: raw, and with unreachable code excluded. The HTML
@@ -730,7 +738,9 @@ it.
 | RTL-006 | `sbcs` reserved bits [28:23] read back as written | [#149](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching upstream issue |
 | RTL-007 | `haltsum1`–`haltsum3` read X on a single-hart DM | [#150](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`) |
 | RTL-008 | `dmstatus` reads X for a nonexistent hart | [#151](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — PR #4's #520 change indexes a one-hart vector with `hartsel` |
-| RTL-009 | `dtmcs.dmihardreset` is not implemented | [#152](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this DTM predates upstream's support |
+| RTL-009 | `dtmcs.dmihardreset` is not implemented | [#152](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this DTM predates upstream's support; upstream already has it ([pulp-platform/riscv-dbg#87](https://github.com/pulp-platform/riscv-dbg/issues/87), [#123](https://github.com/pulp-platform/riscv-dbg/pull/123)) |
+| RTL-010 | A stepped instruction that traps runs the handler's first instruction before halting | already filed upstream by a third party — [openhwgroup/cva6#3429](https://github.com/openhwgroup/cva6/issues/3429) |
+| RTL-011 | A stepped `mret`/`sret` reports `dpc`=pc+4 and the pre-return privilege | [#159](https://github.com/10x-Engineers/riscv-dbg-vip/issues/159) — same ordering upstream; not yet raised there |
 
 RTL defects are deliberately **not** attached to any milestone — milestones track
 development work. RTL findings are tracked in that file and upstream.

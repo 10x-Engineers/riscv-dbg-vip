@@ -133,17 +133,59 @@ never_taken:
         # than falling through into the trap handler.
         j       never_taken
 
+# ── a loop to single-step through, at any privilege ──────────────────────
+# cg_step_external crosses each instruction class with stepie, a pending
+# interrupt, the privilege level and the length of a run of consecutive
+# steps. The main flow above only ever runs in M and is interrupted by
+# haltreq, so the debugger instead points dpc here, sets dcsr.prv, and steps
+# round this loop as many times as a bin needs. Every instruction is 4 bytes
+# (norvc) because the trap handler resumes at mepc + 4. s0 must point at
+# scratch_area; the debugger sets it before stepping.
+        .globl step_loop
+        .globl cls_sret
+        .option push
+        .option norvc
+step_loop:
+        wfi                             # WFI -- a nop while stepping; in U an illegal instruction
+        li      t3, 1
+        li      t4, 2
+        beq     t3, t4, never_taken     # BRANCH_NTAKEN
+        lw      t2, 0(s0)               # LOAD_STORE
+        .word   0                       # an illegal instruction -> TRAPPING
+        ecall                           # an exception too -> TRAPPING
+        beq     t3, t3, step_loop       # BRANCH_TAKEN
+
+# An xRET that is legal below M: stepped in S, this is PRIV_CHANGE at S (mret
+# only runs in the handler, in M; in U every xRET is illegal).
+#
+# sepc is deliberately NOT the next instruction: a step over the sret must
+# land on step_loop, and a DUT that lands on pc+4 instead (RTL-011) is then
+# distinguishable. The jump after the sret is reached only in that case.
+cls_sret:
+        la      t0, step_loop
+        csrw    sepc, t0
+        li      t0, 0x100
+        csrs    sstatus, t0             # SPP = S, so sret stays in S
+sret_insn:
+        sret                            # PRIV_CHANGE
+sret_fallthrough:
+        j       step_loop
+        .option pop
+
 # ── trap handler ─────────────────────────────────────────────────────────
 # Skips the faulting instruction and returns. mepc points at the instruction
-# that trapped; advancing by 4 resumes after it. Both traps raised above come
-# from 4-byte instructions, so a fixed +4 is correct here and would not be in
-# a handler meant for general use.
+# that trapped; advancing by 4 resumes after it. Every trap the loops above
+# raise comes from a 4-byte instruction, so a fixed +4 is correct here and
+# would not be in a handler meant for general use. (A trap from cls_ebreak's
+# 2-byte ebreak resumes 4 bytes on, at cls_trigger_target, which is harmless.)
         .align 2
 trap_handler:
         csrr    t0, mepc
         addi    t0, t0, 4
         csrw    mepc, t0
+handler_mret:
         mret                            # -> ICLASS_PRIV_CHANGE
+handler_end:
 
         .section .data
         .align 3

@@ -76,6 +76,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.dmi_error_sequence",
         "builder": "build_dmi_error_sequence",
     },
+    "step_matrix": {
+        "module": "pydebug.sequences.step_matrix_sequence",
+        "builder": "build_step_matrix_sequence",
+    },
     "dm_corners": {
         "module": "pydebug.sequences.dm_corners_sequence",
         "builder": "build_dm_corners_sequence",

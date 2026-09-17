@@ -219,9 +219,15 @@ module tb_top_soc;
 
     // Commit port 0 is enough: a step retires exactly one instruction, and the
     // classes that matter (wfi, branches, loads) are never dual-issued alone.
+    //
+    // An instruction that traps is never acknowledged -- commit_stage holds
+    // commit_ack low and raises exception_o instead -- so the ack alone never
+    // shows a trapping instruction and the trapping class stayed at 0 hits.
+    // Taking the trap is that instruction's "completion" as far as a step is
+    // concerned, so it counts here too.
     assign hart_backdoor_if.commit_valid =
-        dut.i_ariane.i_cva6.commit_ack[0] &&
-        dut.i_ariane.i_cva6.commit_instr_id_commit[0].valid;
+        dut.i_ariane.i_cva6.commit_instr_id_commit[0].valid &&
+        (dut.i_ariane.i_cva6.commit_ack[0] || dut.i_ariane.i_cva6.ex_commit.valid);
     assign hart_backdoor_if.commit_pc =
         dut.i_ariane.i_cva6.commit_instr_id_commit[0].pc;
 
@@ -240,14 +246,15 @@ module tb_top_soc;
             dut.i_ariane.i_cva6.commit_instr_id_commit[0].is_compressed;
         automatic logic trapped =
             dut.i_ariane.i_cva6.commit_instr_id_commit[0].ex.valid;
-        // is_taken is only meaningful while the branch is actually resolving.
-        // Reading it unconditionally leaves the PREVIOUS branch's outcome
-        // standing, so a not-taken branch following a taken one classifies as
-        // taken and the branch_ntaken bin never fills -- which is exactly what
-        // it did, at 0% with a not-taken branch in the program.
-        automatic logic br_valid = dut.i_ariane.i_cva6.resolved_branch.valid;
-        automatic logic taken = br_valid
-                              & dut.i_ariane.i_cva6.resolved_branch.is_taken;
+        // Taken or not is decided at COMMIT, from the entry itself: with debug
+        // enabled the scoreboard stores the resolved target in
+        // bp.predict_address (scoreboard.sv), which is pc+len for a branch that
+        // fell through. resolved_branch is an execute-stage signal and is not
+        // valid at the commit instant, so it cannot be used here.
+        automatic logic [63:0] pc = dut.i_ariane.i_cva6.commit_instr_id_commit[0].pc;
+        automatic logic taken =
+            dut.i_ariane.i_cva6.commit_instr_id_commit[0].bp.predict_address
+            != pc + (compressed ? 64'd2 : 64'd4);
 
         // A trap outranks the encoding: the interesting property is that the
         // step landed in a handler, whatever the instruction was.
@@ -262,9 +269,12 @@ module tb_top_soc;
         else if (fu inside {ariane_pkg::LOAD, ariane_pkg::STORE})
             hart_backdoor_if.commit_iclass = hart_backdoor_if.ICLASS_LOAD_STORE;
         else if (fu == ariane_pkg::CTRL_FLOW)
-            // JAL/JALR always transfer; a conditional BRANCH may fall through.
+            // JAL/JALR always transfer; a conditional branch may fall through.
+            // Conditional branches are encoded by their comparison (EQ, NE,
+            // LTS, ...), never as op BRANCH, so ask ariane_pkg which ops those
+            // are -- comparing against BRANCH classed every branch as taken.
             hart_backdoor_if.commit_iclass =
-                (op == ariane_pkg::BRANCH && !taken)
+                (ariane_pkg::op_is_branch(op) && !taken)
                     ? hart_backdoor_if.ICLASS_BRANCH_NTAKEN
                     : hart_backdoor_if.ICLASS_BRANCH_TAKEN;
         else if (compressed)

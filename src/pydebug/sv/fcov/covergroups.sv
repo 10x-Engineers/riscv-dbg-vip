@@ -1015,6 +1015,8 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     logic [2:0]  s_cause;
     logic [1:0]  s_prv;
     logic [3:0]  s_iclass;
+    logic [3:0]  s_retired_iclass;  // class of the instruction a step completed
+    logic [1:0]  s_retired_prv;     // privilege that instruction ran at
     logic [1:0]  s_stepie_irq;      // {stepie, irq_pending}
     logic [1:0]  s_mode_prev, s_mode_curr;
     logic        s_haltreq_during_step;
@@ -1078,11 +1080,22 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       x_cause_x_prv: cross cp_cause, cp_prv;
 
       // DM-014-V
+      //
+      // cp_dpc_origin is classified from the cause (classify_dpc_origin), not
+      // measured from dpc, so each cause has exactly one origin -- except a
+      // step, which halts at the trap handler when the stepped instruction
+      // trapped. What this cross records is which of those pairings occurred;
+      // the rest cannot be sampled and are ignored rather than left as holes.
       x_cause_x_dpc: cross cp_cause, cp_dpc_origin {
         // ebreak must report its own address; reporting the next one would
         // silently skip an instruction on resume.
         illegal_bins ebreak_skips =
             binsof(cp_cause.ebreak) && binsof(cp_dpc_origin.next_after_step);
+        ignore_bins not_this_cause =
+            (binsof(cp_cause.ebreak)  && binsof(cp_dpc_origin) intersect {0, 3}) ||
+            (binsof(cp_cause.trigger) && binsof(cp_dpc_origin) intersect {0, 1, 2}) ||
+            (binsof(cp_cause.haltreq) && binsof(cp_dpc_origin) intersect {1, 2, 3}) ||
+            (binsof(cp_cause.step)    && binsof(cp_dpc_origin) intersect {0, 1});
       }
     endgroup
 
@@ -1120,7 +1133,11 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         bins unmasked_irq_pending= {2'b11};  // SSTEP-007-C
       }
 
-      cp_prv_at_step: coverpoint s_prv {
+      // The privilege the stepped instruction RAN at, captured when it
+      // retired. dcsr.prv cannot be used: a step whose instruction trapped
+      // halts in the M-mode handler, so dcsr.prv reads M for every trap and
+      // the trapping x U/S bins could never fill.
+      cp_prv_at_step: coverpoint s_retired_prv {
         bins U = {0}; bins S = {1}; bins M = {3};
         illegal_bins reserved = {2};
       }
@@ -1147,6 +1164,13 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       x_class_x_prv: cross cp_stepped_class, cp_prv_at_step {
         ignore_bins invariant_classes =
             binsof(cp_stepped_class.ordinary) || binsof(cp_stepped_class.compressed);
+        // Cannot happen at U on a hart that implements S: wfi there is an
+        // illegal instruction (Priv. spec 3.1.6.5, TW), and mret/sret are
+        // illegal below their level, so both classify as trapping instead.
+        // ecall is a trap on CVA6 (raised at decode), never priv_change.
+        ignore_bins illegal_in_U =
+            binsof(cp_prv_at_step.U) &&
+            (binsof(cp_stepped_class.wfi) || binsof(cp_stepped_class.priv_change));
       }
 
       // SSTEP-023-V
@@ -1168,11 +1192,13 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         bins enter_debug = (0 => 1);
         bins leave_debug = (1 => 0);
         bins complete_step = (1 => 0 => 1);   // SSTEP-001-C
-        // Two consecutive samples in RUNNING after a step means the hart never
-        // re-entered Debug Mode. Recorded rather than illegal_bins because the
-        // hart legitimately runs for long stretches outside a step; the step
-        // case is qualified by the sampling guard in sample_step().
-        bins stayed_running = (0 => 0);
+        // Two consecutive samples in RUNNING would mean a step that never
+        // re-entered Debug Mode. This covergroup is sampled only when
+        // debug_mode CHANGES (run_phase), so two equal consecutive samples
+        // cannot occur and the transition is ignored rather than counted as a
+        // hole. A step that never returns is caught by the step checks and by
+        // cp_haltreq_guard's sampling, not here.
+        ignore_bins stayed_running = (0 => 0);
       }
 
       // If haltreq is still asserted the hart re-halts for the original request
@@ -1348,6 +1374,7 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       // that were never reached, which reads as "unknown" when the answer is
       // "no". The diagnostic exists to distinguish those two.
       s_prv_seen_mask = 4'b0;
+      s_retired_iclass = 4'd15;
 
       forever begin
         @(posedge hart_vif.clk);
@@ -1376,26 +1403,40 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         if (hart_vif.debug_mode && !prev_debug_entry) begin
           s_cause = hart_vif.cause();
           s_prv   = hart_vif.prv();
-          s_dpc_origin = classify_dpc_origin(hart_vif.cause());
-          cg_debug_entry.sample();
-
           // A step is an entry with cause=4; count consecutive ones so drift
-          // across a run of steps is measurable.
+          // across a run of steps is measurable. The stepped class is taken
+          // first because it decides where a step's dpc points.
           if (hart_vif.cause() == 3'd4) begin
             s_consecutive_steps++;
-            s_iclass      = hart_vif.commit_iclass;
+            // The class latched when the step's instruction completed; the
+            // commit port has moved on by now. Falls back to the live port
+            // only if nothing was latched (a step that completed nothing).
+            s_iclass      = (s_retired_iclass != 4'd15) ? s_retired_iclass
+                                                         : hart_vif.commit_iclass;
             s_stepie_irq  = {hart_vif.stepie(), hart_vif.irq_pending};
-            cg_step_external.sample();
           end else begin
             s_consecutive_steps = 0;
           end
+          s_dpc_origin = classify_dpc_origin(hart_vif.cause(), s_iclass);
+          cg_debug_entry.sample();
+          if (hart_vif.cause() == 3'd4)
+            cg_step_external.sample();
+          s_retired_iclass = 4'd15;
         end
 
         // Retirement while stepping: remember the class of the instruction that
         // actually retired, because by the time Debug Mode is re-entered the
         // commit port has moved on.
-        if (hart_vif.commit_valid && !hart_vif.debug_mode && hart_vif.step())
-          s_iclass = hart_vif.commit_iclass;
+        //
+        // The FIRST completion after resume is the stepped instruction. A
+        // later one in the same step is the DUT running past it -- CVA6 runs
+        // the trap handler's first instruction before halting (RTL-010) --
+        // and must not overwrite the class that was actually stepped.
+        if (hart_vif.commit_valid && !hart_vif.debug_mode && hart_vif.step() &&
+            s_retired_iclass == 4'd15) begin
+          s_retired_iclass = hart_vif.commit_iclass;
+          s_retired_prv    = hart_vif.priv_lvl;
+        end
 
         if (!hart_vif.debug_mode && !$isunknown(hart_vif.priv_lvl))
           s_actual_prv = hart_vif.priv_lvl;
@@ -1405,13 +1446,15 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       end
     endtask
 
-    // dpc carries a different meaning per cause; classify at the entry.
-    function logic [1:0] classify_dpc_origin(logic [2:0] cause);
+    // dpc carries a different meaning per cause; classify at the entry. A
+    // step whose instruction trapped (class 5, cp_stepped_class.trapping)
+    // halts at the handler's first instruction, not the next one.
+    function logic [1:0] classify_dpc_origin(logic [2:0] cause, logic [3:0] iclass);
       case (cause)
-        3'd1:    return 2'd1;   // ebreak: its own address
-        3'd3:    return 2'd0;   // haltreq: the interrupted PC
-        3'd4:    return 2'd2;   // step: the next instruction
-        default: return 2'd3;   // trigger or a stepped trap: handler entry
+        3'd1:    return 2'd1;                               // ebreak: its own address
+        3'd3:    return 2'd0;                               // haltreq: the interrupted PC
+        3'd4:    return (iclass == 4'd5) ? 2'd3 : 2'd2;     // step: next, or the handler
+        default: return 2'd3;                               // trigger: handler entry
       endcase
     endfunction
 

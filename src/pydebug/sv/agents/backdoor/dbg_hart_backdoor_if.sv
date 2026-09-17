@@ -39,7 +39,7 @@ interface dbg_hart_backdoor_if (
   // than by re-decoding raw bits. The scoreboard entry carries no encoding
   // field, and re-deriving one from the fetch stream would mean maintaining a
   // second decoder that can disagree with the core's.
-  logic        commit_valid;         // an instruction retired this cycle
+  logic        commit_valid;         // an instruction retired, or trapped, this cycle
   logic [63:0] commit_pc;
 
   // ── Interrupt state, for stepie crosses ─────────────────────────────────
