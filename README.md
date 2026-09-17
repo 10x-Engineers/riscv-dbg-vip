@@ -19,6 +19,9 @@ ibex_sim/                   — worked example: pydebug <-> ibex-demo-system
 mk/simulator.mk             — Questa/Xcelium selection shared by both (SIM=...)
 mk/run_regression.py        — regression driver (verdicts + merged coverage)
 mk/dm_cov.sh                — merge coverage and report, scoped to the DM
+mk/dm_cov_exclude.py        — code-coverage exclusions, one stated reason per rule
+mk/dm_abstract_cmd_bits.py  — proves which abstract-command bits can never vary
+mk/xcelium_cov.ccf          — Xcelium coverage config (type-parameterised modules, MDAs)
 testplans/                  — the verification plan and the coverage model
 testplans/results/          — coverage analysis, RTL findings
 cva6_sim/regress/           — the regression suite (regression.yaml + README)
@@ -106,43 +109,219 @@ with OpenOCDTransport(host="127.0.0.1", port=6666) as t:
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                         USER / INTEGRATOR                          │
-│   CLI:  pydebug run -c halt_uvm.json                               │
-│   API:  from pydebug import RISCVDebug, OpenOCDTransport            │
-└───────────────┬──────────────────────────────┬─────────────────────┘
-                │                              │
-     ┌──────────▼──────────┐        ┌──────────▼───────────────┐
-     │  RISCVDebug / DMI    │        │  DebugSession /          │
-     │  (dm.halt(), ...)    │        │  scenario sequences      │
-     └──────────┬──────────┘        └──────────┬───────────────┘
-                │        DebugTransport (abstract)               │
-     ┌──────────▼──────────┐        ┌──────────▼───────────────┐
-     │   UVMTransport       │        │   OpenOCDTransport        │
-     │   Unix/TCP socket    │        │   TCP port 6666, TCL      │
-     └──────────┬──────────┘        └──────────┬───────────────┘
-                │                              │
-     ┌──────────▼──────────┐        ┌──────────▼───────────────┐
-     │  C Bridge (DPI-C)     │        │  OpenOCD server           │
-     └──────────┬──────────┘        └──────────┬───────────────┘
-                │                              │
-     ┌──────────▼──────────┐        ┌──────────▼───────────────┐
-     │  UVM test task        │        │  Target board              │
-     │  (rv_dbg_base_test)   │        │  (Arty A7 / Genesys2 / ...)│
-     └──────────┬──────────┘        └──────────┬───────────────┘
-                │                              │
-     ┌──────────▼──────────────────────────────▼───────────────┐
-     │      JTAG/DMI Agent (driver + monitor, sv/agents/jtag/)  │
-     └───────────────────────────┬───────────────────────────┘
-                                 ▼
-                          DUT Debug Module
-                        (Ibex / CVA6 / your SoC)
+One Python scenario drives a Debug Module over either of two transports, and
+everything above the `DebugTransport` seam is identical for both. Everything
+below it is either a UVM testbench around the SoC or a real board behind
+OpenOCD.
+
+```mermaid
+flowchart TB
+    subgraph USER["Scenario layer (Python, src/pydebug)"]
+        CFG["configs/*_uvm.json<br/>scenario, transport, params"]
+        CLI["pydebug.cli run"]
+        SEQ["sequences/*_sequence.py<br/>DebugSession of steps"]
+        API["api/riscv_dm.py<br/>RISCVDebug: halt, resume, read_gpr, read_mem32 ..."]
+        CFG --> CLI --> SEQ --> API
+    end
+
+    API --> SEAM{{"DebugTransport<br/>read / write / reset"}}
+
+    SEAM --> UVMT["UVMTransport<br/>JSON over a Unix socket"]
+    SEAM --> OCDT["OpenOCDTransport<br/>TCL on port 6666"]
+
+    subgraph SIM["Simulation (Questa or Xcelium)"]
+        UVMT --> TB["UVM testbench<br/>see the detailed diagram below"]
+        TB --> SOC_SIM["SoC RTL<br/>CVA6 ariane_testharness / Ibex"]
+    end
+
+    subgraph HW["Emulation / silicon"]
+        OCDT --> OCD["OpenOCD"] --> PROBE["JTAG probe"] --> BOARD["FPGA board<br/>Arty A7 (Ibex), Genesys2 (CVA6)"]
+    end
 ```
 
-The seam is `DebugTransport`: everything above it (CLI, `RISCVDebug`,
-sequences) never knows or cares whether it's driving a simulator or real
-silicon. Swapping platforms is a config change, not a code change.
+The seam is `DebugTransport`: the CLI, `RISCVDebug` and every sequence never
+know whether they are driving a simulator or a board. Changing platform is a
+config change, not a code change.
+
+### DV architecture in detail (CVA6 simulation)
+
+This is how one scenario runs through the testbench (`cva6_sim/tb_top_cva6.sv`,
+top `tb_top_soc`) and how what it does reaches the checkers and coverage. How a
+run is launched and how its results are collected is the
+[regression and coverage flow](#regression-and-coverage-flow) below.
+
+```mermaid
+flowchart TB
+    %% ── python ─────────────────────────────────────────────────────────
+    subgraph PY["Python client (spawned by the UVM test)"]
+        PSEQ["Scenario steps<br/>checks + StepResult"]
+        PAPI["RISCVDebug<br/>DMI register operations"]
+        PTR["UVMTransport<br/>read, write, reset, dtmcs,<br/>dmi_scan, jtag_scan, tms_walk, sim_time"]
+        PSEQ --> PAPI --> PTR
+    end
+
+    %% ── c bridge ───────────────────────────────────────────────────────
+    subgraph CB["C bridge (c_bridge/uvm_bridge.c, DPI-C)"]
+        SOCK["Socket server thread<br/>JSON request / response"]
+        DPI["dpi_bridge_get_req<br/>dpi_bridge_put_rsp(_x)<br/>X/Z mask on reads"]
+        SOCK <--> DPI
+    end
+
+    %% ── uvm ────────────────────────────────────────────────────────────
+    subgraph UVM["UVM environment (src/pydebug/sv)"]
+        TEST["debug_test<br/>rv_dbg_base_test.sv"]
+        BRIDGE["python_bridge.serve<br/>op → sequence"]
+        subgraph SEQS["JTAG sequences"]
+            S1["dmi_read / dmi_write<br/>IR + DR, retry on busy"]
+            S2["dtmcs · dmi_scan (DR only)<br/>jtag_scan · tms_walk · tap_reset"]
+        end
+        subgraph JAG["jtag_agent"]
+            SQR["sequencer"]
+            DRV["jtag_driver<br/>TAP state machine, TCK, Pause paths"]
+            MON["jtag_monitor<br/>decodes DMI shifts"]
+        end
+        SCB["debug_scoreboard<br/>DMI status; busy only when provoked"]
+        COV["debug_coverage<br/>covergroups.sv: 19 covergroups"]
+        subgraph CHK["dm_checker"]
+            REF["dm_ref_model<br/>predicts register values"]
+            CMP["front-door compare<br/>+ backdoor compare"]
+        end
+        DMIAG["dbg_dmi_agent<br/>DTM → DM bus monitor"]
+        AXIAG["dbg_axi_agent taps<br/>SBA master, DM slave<br/>axi_configs/*.json"]
+        TEST -->|spawns python3| PSEQ
+        TEST --> BRIDGE
+        BRIDGE --> S1 & S2 --> SQR --> DRV
+        MON --> SCB
+        MON --> COV
+        MON --> CHK
+        DMIAG --> CHK
+        AXIAG --> CHK
+    end
+
+    PTR <-->|"Unix socket"| SOCK
+    DPI <--> BRIDGE
+
+    %% ── tb top and dut ─────────────────────────────────────────────────
+    subgraph TOP["tb_top_soc (cva6_sim/tb_top_cva6.sv)"]
+        JIF["jtag_if"]
+        MUX["JTAG mux<br/>UVM driver or OpenOCD remote_bitbang"]
+        subgraph DUT["ariane_testharness"]
+            subgraph DTM["i_dmi_jtag (DTM)"]
+                TAP["dmi_jtag_tap<br/>IDCODE, BYPASS, dtmcs, DMI"]
+                DFSM["DMI FSM<br/>sticky busy, dmireset"]
+                CDC["dmi_cdc<br/>2 × cdc_2phase"]
+                TAP --> DFSM --> CDC
+            end
+            subgraph DM["i_dm_top (Debug Module)"]
+                CSRS["dm_csrs<br/>DM registers"]
+                MEM["dm_mem<br/>abstract commands, progbuf,<br/>flags, debug ROM"]
+                SBA["dm_sba<br/>system bus master"]
+            end
+            HART["CVA6 hart<br/>debug mode, dcsr / dpc"]
+            XBAR["AXI crossbar<br/>(reset by ndmreset)"]
+            RAM["SRAM + peripherals<br/>program from +elf_file"]
+            CDC --> CSRS
+            CSRS <--> MEM
+            CSRS <--> SBA
+            MEM <-->|"debug_req, halt / resume"| HART
+            SBA --> XBAR
+            HART --> XBAR
+            XBAR --> RAM
+            XBAR -->|"0x0-0xFFF"| MEM
+        end
+        DBK["dbg_dm_backdoor_if<br/>dmcontrol, dmstatus, abstractcs ..."]
+        HBK["dbg_hart_backdoor_if<br/>dcsr, dpc, priv, commit class"]
+        DMIIF["dbg_dmi_if"]
+        AXIIF["dbg_axi_if × 2"]
+    end
+
+    DRV --> JIF --> MUX --> TAP
+    TAP -.->|"TDO"| JIF -.-> MON
+    CDC -.-> DMIIF -.-> DMIAG
+    SBA -.-> AXIIF
+    XBAR -.-> AXIIF
+    AXIIF -.-> AXIAG
+    CSRS -.-> DBK -.-> CMP
+    HART -.-> HBK -.-> COV
+
+    %% ── verdict ──────────────────────────────────────────────────────
+    VERD(["Session verdict<br/>failed steps + UVM_ERRORs"])
+    PSEQ -.->|"shutdown op carries<br/>failed-step count"| VERD
+    SCB --> VERD
+    CHK --> VERD
+```
+
+Solid arrows are stimulus and control; dotted arrows are observation. Three
+independent checks subscribe to the same monitored DMI stream:
+
+- **`debug_scoreboard`** checks the DMI protocol status. A busy response is
+  an error unless a scenario provoked it with a raw scan.
+- **`dm_checker`** compares register values against `dm_ref_model`, both
+  front-door (the DMI read data) and through the DM backdoor. It also
+  correlates SBA traffic from the AXI taps and the DTM-to-DM bus.
+- **`debug_coverage`** samples the DMI stream and the hart backdoor. The
+  hart side covers debug entry causes, single-step instruction classes and
+  privilege.
+
+The scenario's own checks decide each step, and the shutdown request carries
+the failed-step count, so a failing session cannot end in a clean simulation.
+`dmi_assertions.sv` (DMI protocol SVA) ships in `sv/assertions/` but is not
+bound in the CVA6 flow.
+
+#### One DMI read, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as Scenario (Python)
+    participant T as UVMTransport
+    participant C as C bridge
+    participant B as python_bridge
+    participant D as jtag_driver
+    participant DTM as dmi_jtag (DTM)
+    participant DM as dm_csrs
+    participant M as monitor → checkers
+
+    S->>T: read(0x11 dmstatus)
+    T->>C: {"op":"read","addr":17}
+    C->>B: dpi_bridge_get_req → op 1
+    B->>D: dmi_read_seq, phase 1: IR=DMI, DR op=READ addr=0x11
+    D->>DTM: Update-DR
+    DTM->>DM: dmi_req through the CDC
+    DM-->>DTM: dmi_resp through the CDC
+    B->>D: phase 2: IR=DMI, DR op=NOP (repeated while status is busy)
+    D->>DTM: Capture-DR
+    DTM-->>D: {data, status}
+    D-->>M: shifted DR → DMI transaction
+    M->>M: scoreboard: status · checker: value vs dm_ref_model · coverage
+    B->>C: dpi_bridge_put_rsp_x(data, X/Z mask)
+    C-->>T: {"data":…,"xmask":…}
+    T-->>S: value (or TransportError if any bit was X/Z)
+```
+
+A DMI response is pipelined one scan deep (spec §6.1.5): the result of a
+request comes back in the *next* scan. That is why the read sequence scans
+twice, and why `dm_checker` keeps a one-deep pending request.
+
+#### Regression and coverage flow
+
+```mermaid
+flowchart LR
+    Y["regression.yaml<br/>test, config, ELF, expect"] --> R["run_regression.py --coverage"]
+    R -->|"per test"| S["make soc_test_cov<br/>compile once with -coverage all<br/>+ xcelium_cov.ccf"]
+    S --> L["sim_outputs/coverage/<br/>&lt;test&gt;_uvm.log<br/>scope/&lt;test&gt;/*.ucd"]
+    L --> V["verdict vs expect<br/>regression_report.md"]
+    L --> M["dm_cov.sh<br/>imc merge → one model"]
+    M --> A["report code:fsm on 19 DM instances<br/>dm_code.rpt"]
+    A --> E["dm_cov_exclude.py<br/>rules with reasons<br/>+ dm_abstract_cmd_bits.py"]
+    E --> X["imc: source dm_exclusions.tcl<br/>dm_code_excl.rpt, HTML"]
+    E -->|"anything unjustified"| H["listed as a real hole"]
+    M --> F["functional.rpt<br/>functional_html"]
+```
+
+An exclusion is never a hand-copied index: each rule matches source text,
+block kind, expression row or signal name, states why the item cannot be
+reached on this DUT, and reports itself when it stops matching.
 
 ## Package layout (`src/pydebug/`)
 
