@@ -28,6 +28,7 @@ export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
 # and quoted 100% while the DTM's TAP sat at 68/78 blocks, uncounted.
 DM=tb_top_soc.dut.i_dm_top
 DTM=tb_top_soc.dut.i_dmi_jtag      # sibling of dm_top in ariane_testharness
+TB=tb_top_soc.dut                   # ariane_testharness
 DM_INSTS=(
     $DM
     $DM.i_dm_csrs
@@ -50,6 +51,23 @@ DM_INSTS=(
     $DTM.i_dmi_cdc.i_cdc_resp
     $DTM.i_dmi_cdc.i_cdc_resp.i_src
     $DTM.i_dmi_cdc.i_cdc_resp.i_dst
+    # The DM's own connections to the rest of the SoC, which make up the debug
+    # subsystem together with the DM and DTM:
+    #   i_dm_axi2mem    AXI slave -> DM memory: how the hart fetches the debug
+    #                   ROM, program buffer and abstract-command data
+    #   i_dm_axi_master DM system-bus master -> AXI: System Bus Access
+    #   i_rstgen_main   consumes ndmreset and resets the rest of the SoC
+    $TB.i_dm_axi2mem
+    $TB.i_dm_axi_master
+    $TB.i_rstgen_main
+    $TB.i_rstgen_main.i_rstgen_bypass
+    # The boundary with the processor and the testbench: only the DM-facing
+    # glue is measured. mk/dm_cov_exclude.py excludes everything else in these
+    # two instances by name (BOUNDARY_KEEP), and says so in the report.
+    #   TB              debug_req gating, ndmreset, the DMI/JTAG and DM bus glue
+    #   TB.i_ariane     the hart's debug_req_i port
+    $TB
+    $TB.i_ariane
 )
 # `code` is block, expression and toggle only; FSM has to be asked for.
 METRICS=code:fsm
@@ -59,6 +77,9 @@ METRICS=code:fsm
 declare -A HTML_ROOTS=(
     [dm]=tb_top_soc.dut.i_dm_top
     [dmi_jtag]=tb_top_soc.dut.i_dmi_jtag
+    [dm_axi2mem]=tb_top_soc.dut.i_dm_axi2mem
+    [dm_axi_master]=tb_top_soc.dut.i_dm_axi_master
+    [rstgen_main]=tb_top_soc.dut.i_rstgen_main
 )
 
 # report_metrics refuses to write into an existing directory
@@ -168,7 +189,7 @@ if python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_exclude.py" "$OUT/dm_code.rpt"
     echo "imc (exclusions) exit=$?  (see $OUT/imc_excl.log)"
     stitch ".excl" "$OUT/dm_code_excl.rpt"
     python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_summary.py" "$OUT/dm_code_excl.rpt" \
-        "Debug Module code coverage, unreachable code excluded" || true
+        "Debug subsystem code coverage, unreachable and out-of-scope code excluded" || true
 fi
 # (e) Functional coverage with the bins this DUT cannot produce excluded. Its
 # own pass, so a failure in (d) does not take this number with it.

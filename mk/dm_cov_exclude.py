@@ -42,6 +42,81 @@ _ABSTRACT_CMD_CONSTANT = _abstract_cmd_constant_bits()
 #:   kind  regex on the block kind ("true part of", "implicit else", ...)
 #:   case  regex on the source of the enclosing `case` item
 RULES = [
+    # ── The DM's bus bridges (generic IP, used in one narrow way) ─────────
+    ("dm-slave-single-beat-only",
+     r"warp_address|upper_wrap_boundary|cons_addr|WRAP:|case \(ax_req_q\.burst\)"
+     r"|FIXED, INCR|slave\.r_last|slave\.w_last|WRITE: begin|slave\.w_valid"
+     r"|req_addr_d = addr_o|state_d = SEND_B",
+     "the DM's memory slave is only ever addressed by the hart's accesses to "
+     "the 4 KiB DM region, which are single-beat (AxLEN=0): the burst-address "
+     "arithmetic, the WRAP arm, and the multi-beat READ/WRITE paths cannot be "
+     "entered. axi2mem is generic IP used in one narrow way here",
+     "a master that issues bursts to the DM region",
+     {"inst": r"i_dm_axi2mem$"}),
+
+    ("dm-master-single-request-only",
+     r"type_i (!|=)= ariane_pkg::SINGLE_REQ|BURST_SIZE|CRITICAL_WORD_FIRST"
+     r"|WAIT_LAST_W_READY|WAIT_AW_READY_BURST|WAIT_R_VALID_MULTIPLE"
+     r"|cnt_[dq]|axi_resp_i\.r\.last|index = |axi_req_o\.aw_valid = 1'b1"
+     r"|state_d = WAIT_LAST_W_READY|2'b(01|10|11): |default: ;",
+     "dm_top's bus master is wired with type_i = SINGLE_REQ and one 64-bit "
+     "access at a time (ariane_testharness.sv:352-360), so every burst and "
+     "critical-word path of this generic cache adapter is unreachable",
+     "a DM that issues bursts",
+     {"inst": r"i_dm_axi_master$"}),
+
+    ("dm-master-no-amo",
+     r"amo_[qi]|AMO_|ATOP_|amo_returns_data",
+     "dm_top's bus master is wired with amo_i = AMO_NONE "
+     "(ariane_testharness.sv:353): the adapter's atomic paths cannot be entered",
+     "a DM that issues atomics",
+     {"inst": r"i_dm_axi_master$"}),
+
+    ("dm-master-one-outstanding",
+     r"any_outstanding_aw|outstanding_aw_cnt_q|id_i == id_q",
+     "the DM's master waits for each access to complete before starting the "
+     "next (dm_sba is a one-at-a-time state machine) and drives id_i = '0, so "
+     "there is never a second outstanding write or a second ID",
+     "a DM that pipelines system-bus accesses",
+     {"inst": r"i_dm_axi_master$"}),
+
+    ("dm-master-bus-never-backpressures",
+     r"axi_resp_i\.(aw_ready|w_ready)|WAIT_AW_READY: begin",
+     "TESTBENCH LIMIT: the AXI crossbar accepts the DM master's AW and W in "
+     "the cycle they are offered in every run so far, so the adapter's "
+     "wait-for-ready states are never entered",
+     "stimulus that congests the crossbar while an SBA access is in flight",
+     {"inst": r"i_dm_axi_master$"}),
+
+    ("dm-slave-wrap-else-arms",
+     r"^end else begin$",
+     "the remaining arms of the WRAP burst-address arithmetic excluded above",
+     "a master that issues wrapping bursts to the DM region",
+     {"inst": r"i_dm_axi2mem$", "case": r"WRAP"}),
+
+    ("dm-master-burst-else-arms",
+     r"^(end else begin|case \(\{)$",
+     "the burst arms of the adapter's write path: the else of "
+     "`if (type_i == SINGLE_REQ)` and the aw/w-ready case inside it "
+     "(axi_adapter.sv:201, 213, 271, 296). type_i is tied to SINGLE_REQ",
+     "a DM that issues bursts",
+     {"inst": r"i_dm_axi_master$",
+      "case": r"WAIT_LAST_W_READY_AW_READY|2'b11|default: state_d = IDLE;"}),
+
+    ("dm-master-amo-response-arms",
+     r"axi_resp_i\.r_valid|RESP_EXOKAY|^end else begin$",
+     "the atomic arms of WAIT_B_VALID and the whole WAIT_AMO_R_VALID state "
+     "(axi_adapter.sv:349-372, 390): amo_i is tied to AMO_NONE, so no atomic "
+     "ever returns data or a store-conditional response",
+     "a DM that issues atomics",
+     {"inst": r"i_dm_axi_master$", "case": r"WAIT_B_VALID|WAIT_AMO_R_VALID"}),
+
+    ("rstgen-parameter-check",
+     r"NumRegs < 1",
+     "an elaboration-time parameter check ($fatal); NumRegs is 4",
+     "a build with NumRegs < 1, which would not elaborate",
+     {"inst": r"i_rstgen"}),
+
     ("sba-access-size",
      r"3'b(001|010): begin|be_mask\[int'|else\s+be_mask = '1",
      "sbcs.sbaccess is hardwired to 3 (64-bit) by dm_csrs.sv:618, so the "
@@ -118,6 +193,22 @@ RULES = [
 #: reason, what would make it reachable, instance regex). The term vector is
 #: the row's input columns as the report prints them, e.g. "0 - -".
 EXPR_RULES = [
+    ("dm-master-single-request-only",
+     r"CRITICAL_WORD_FIRST|BURST_SIZE|WAIT_R_VALID_MULTIPLE|type_i != ariane_pkg::SINGLE_REQ",
+     r".*",
+     "dm_top's bus master is wired with type_i = SINGLE_REQ: the burst and "
+     "critical-word arms of this generic cache adapter are unreachable",
+     "a DM that issues bursts",
+     r"i_dm_axi_master$"),
+
+    ("dm-master-no-amo-or-second-outstanding",
+     r"amo_[qi]|any_outstanding_aw|outstanding_aw_cnt_q|id_i == id_q",
+     r".*",
+     "amo_i is tied to AMO_NONE and the DM issues one access at a time with "
+     "id_i = '0, so these terms never take the excluded value",
+     "a DM that issues atomics or pipelines accesses",
+     r"i_dm_axi_master$"),
+
     ("dmi-resp-fifo-never-full",
      r"dmi_req_ready_o && dmi_req_valid_i", r"^0 - -$",
      "ARGUED FROM THE RTL, not proven: dmi_req_ready_o is ~resp_queue_full on "
@@ -167,13 +258,13 @@ TOGGLE_RULES = [
     # agent does not offer. Its effect on dmi_cdc, whose two halves are reset
     # separately, is untested.
     ("waiver-trst-once",
-     r"^(trst_ni)$",
+     r"^(trst_ni|jtag_TRSTn)$",
      "TESTBENCH LIMIT: the JTAG agent asserts TRST once, at time 0, and has "
      "no op to pulse it",
      "a transport op that pulses TRST"),
 
     ("tied-off-inputs",
-     r"^(testmode_i|clk_sel_i|unavailable_i|unavailable_aligned\[\d+\]|unavailable_effective"
+     r"^(testmode_i|test_mode_i|clk_sel_i|unavailable_i|unavailable_aligned\[\d+\]|unavailable_effective"
      r"|stickyunavail_[dq]|dmstatus\.(allunavail|anyunavail))$",
      "ariane_testharness.sv drives testmode_i (and the TAP's DFT clock-mux "
      "select) from test_en, assigned 1'b0 at :121, and ties dm_top's "
@@ -183,6 +274,7 @@ TOGGLE_RULES = [
     ("dmi-response-constants",
      r"^(dmi_resp_o|dmi_resp_i|dmi_resp|jtag_dmi_resp_o|core_dmi_resp_i|data_[io]"
      r"|async_data(_[io])?|data_(src|dst)_q|(src|dst)_data_[io])\.resp\[\d\]$"
+     r"|^debug_resp\.resp\[\d\]$"
      r"|^(dmi_resp_ready|jtag_dmi_ready_i)$",
      "dm_csrs drives resp = DTM_SUCCESS and dmi_jtag drives resp_ready = 1, "
      "both constants",
@@ -190,11 +282,63 @@ TOGGLE_RULES = [
 
     ("dmi-request-always-ready",
      r"^(dmi_req_ready_o|dmi_req_ready_i|resp_queue_full|core_dmi_ready_i)$"
-     r"|^(dst_ready_i|ready_i)$",
+     r"|^(dst_ready_i|ready_i|debug_req_ready)$",
      "ARGUED FROM THE RTL, not proven: the response FIFO never fills and the "
      "CDC is ready whenever the DTM asks -- see the dmi-resp-fifo-never-full "
      "and dtm-request-backpressure code rules",
      "a DTM that pipelines requests"),
+
+    ("dm-master-axi-attributes-at-the-boundary",
+     r"^dm_axi_m_req\.(aw|ar)\.(user|len|atop|id|cache|qos|region|prot|lock|burst|size)"
+     r"|^dm_axi_m_req\.w\.user|^dm_axi_m_resp\.[br]\.(user|id|resp)",
+     "the same constants as inside the adapter, seen on the DM master's AXI "
+     "bus at the testharness: no USER, single 64-bit INCR beats, id '0, no "
+     "atomics, and no slave ever answers the DM with an error",
+     "a DM that varies its AXI attributes, or a slave that errors",
+     r"^tb_top_soc\.dut$"),
+
+    ("testbench-debug-always-enabled",
+     r"^debug_enable$",
+     "TESTBENCH LIMIT: +debug_disable is never passed, so the testharness's "
+     "debug-disable knob holds at 1",
+     "a run with +debug_disable, which would keep debug_req_core low",
+     r"^tb_top_soc\.dut$"),
+
+    ("dm-bridge-tied-axi-fields",
+     r"^(user_[io]|axi_(req_o|resp_i)\.(aw|ar|w|b|r)\.user)(\[\d+\])?$"
+     r"|^axi_req_o\.(aw|ar)\.(cache|prot|qos|region|lock|burst|len|size)(\[\d+\])?$"
+     r"|^axi_req_o\.aw\.atop(\[\d+\])?$"
+     r"|^(id_[idoq]|size_[idq])(\[\d+\])?$"
+     r"|^axi_(req_o\.(aw|ar)|resp_i\.(b|r))\.id(\[\d+\])?$",
+     "the DM's bus master drives these as constants: AXI USER is unused, the "
+     "access is always a single 64-bit INCR with id '0, and cache/prot/qos/"
+     "region/lock/atop are tied off (ariane_testharness.sv:343-367)",
+     "a DM that varies its AXI attributes",
+     r"i_dm_axi(2mem|_master)$"),
+
+    ("dm-bridge-no-bus-error",
+     r"^axi_resp_i\.[br]\.resp(\[\d+\])?$",
+     "nothing in this SoC returns an AXI error to the DM's master: the DM has "
+     "no bus-error input either (see sba-no-bus-error)",
+     "a slave that answers the DM with SLVERR or DECERR",
+     r"i_dm_axi_master$"),
+
+    ("dm-bridge-single-beat",
+     r"^(cnt_[dq]|index|wrap_boundary|upper_wrap_boundary|cons_addr"
+     r"|any_outstanding_aw|outstanding_aw_cnt_[dq])(\[\d+\])?$"
+     r"|^ax_req_[dq]\.(len|size|id)(\[\d+\])?$",
+     "single-beat accesses only: the beat counters, burst-address arithmetic "
+     "and AxLEN stay at 0, AxSIZE is fixed, and one access is outstanding at a "
+     "time",
+     "bursts, or pipelined accesses, to or from the DM",
+     r"i_dm_axi(2mem|_master)$"),
+
+    ("dm-region-address-bits",
+     r"^(aligned_address|cons_addr|req_addr_[dq]|ax_req_[dq]\.addr)\[\d+\]$",
+     "the DM's memory slave answers one 4 KiB region at address 0, so every "
+     "address bit above the region never sets",
+     "a DM mapped at a higher address, or a larger region",
+     r"i_dm_axi2mem$"),
 
     ("sbaccess-hardwired",
      r"^(sbaccess|sbaccess_[io])\[2\]$|^sbcs_q\.sbaccess\[19\]$",
@@ -315,6 +459,146 @@ TOGGLE_RULES = [
 ]
 
 
+#: Instances that are in the report only for their DM-facing boundary. Anything
+#: in them that is not on the keep list is out of the debug subsystem's scope
+#: and is excluded by name, so the subsystem total never counts, or claims, the
+#: rest of the SoC. This is scope, not unreachability, and it is stated as such
+#: in the generated file.
+#: (instance regex, what it is, signal keep regex, block/expression keep regex)
+BOUNDARY = [
+    (r"^tb_top_soc\.dut$",
+     "ariane_testharness: only the DM's own connections -- the JTAG pins, the "
+     "DMI request/response glue, ndmreset and its debug_req gating, and the DM "
+     "bus signals -- are in the debug subsystem. The rest of the SoC harness "
+     "(peripherals, memory, the AXI crossbar, RVFI/trace) is not.",
+     r"^jtag_(TCK|TMS|TDI|TRSTn|TDO_data|TDO_driven)$"
+     r"|^(debug_req_valid|debug_req_ready|debug_resp_valid|debug_resp_ready)$"
+     r"|^(jtag_req_valid|jtag_resp_ready|jtag_resp_valid)$"
+     r"|^(jtag_dmi_req|jtag_dmi_resp|debug_req|debug_resp)(\.|\[|$)"
+     r"|^(ndmreset|ndmreset_n|debug_req_core|debug_req_core_ungtd|debug_enable)$"
+     r"|^dmi_del_cnt_[dq]"
+     r"|^dm_(slave|master)_|^dm_axi_m_(req|resp)",
+     r"dmi_del_cnt|debug_req_core|ndmreset"),
+
+    (r"^tb_top_soc\.dut\.i_ariane$",
+     "the hart's debug boundary is its debug_req_i port; CVA6's internal debug "
+     "logic (dcsr/dpc/dscratch, Debug Mode entry and exit, step, dret) is the "
+     "processor's own coverage, not the debug subsystem's",
+     r"^debug_req_i$",
+     r"(?!)"),
+]
+
+
+def parse_all(report: Path):
+    """Yield (instance, kind, id, name) for EVERY block, expression and signal
+    in the boundary instances -- covered or not. The rule-based exclusions
+    above work from holes; scoping has to work from everything."""
+    for name, body in _sections(report):
+        if not any(re.search(ipat, name) for ipat, *_ in BOUNDARY):
+            continue
+        sec = re.search(r"Block Detail Report.*?(?=Expression Detail|Toggle Detail|\Z)",
+                        body, re.S)
+        if sec:
+            for _hit, idx, _line, _kind, _org, src in re.findall(
+                    r"^(\d+)\s+(\d+)\s+(\d+)\s+(\S.*?)\s{2,}(\d+)\s+(.*)$",
+                    sec.group(0), re.M):
+                yield name, "block", idx, src.strip()
+        sec = re.search(r"Expression Detail Report.*?(?=Toggle Detail|\Z)", body, re.S)
+        if sec:
+            for line in sec.group(0).splitlines():
+                m = re.match(r"index: (\S+) grade: .* source: (.*)$", line)
+                if m:
+                    yield name, "expression", m.group(1), m.group(2).strip()
+        sec = re.search(r"Toggle Detail Report.*?(?=Fsm Detail|\Z)", body, re.S)
+        if sec:
+            for _f, _r, _fa, sig in re.findall(r"^(\d)\s+(\d)\s+(\d)\s+(\S+)\s*$",
+                                               sec.group(0), re.M):
+                yield name, "toggle", re.sub(r"\[\d+\]$", "", sig), sig
+
+
+def emit_boundary(report: Path) -> tuple[list[str], int, set]:
+    """Exclusions that scope the boundary instances down to the DM-facing part."""
+    out = ["", "# " + "=" * 74,
+           "# Boundary scoping -- NOT unreachability. These instances are in the",
+           "# report only for their connection to the DM; everything else in them",
+           "# belongs to the processor or the rest of the SoC and is excluded by",
+           "# name so the subsystem total neither counts nor claims it.",
+           "# " + "=" * 74, ""]
+    seen: set = set()
+    total = 0
+    for inst, kind, ident, name in parse_all(report):
+        for ipat, what, sigpat, srcpat in BOUNDARY:
+            if not re.search(ipat, inst):
+                continue
+            keep = re.search(sigpat, name) if kind == "toggle" else re.search(srcpat, name)
+            if keep or (inst, kind, ident) in seen:
+                continue
+            seen.add((inst, kind, ident))
+            total += 1
+            arg = (f"-toggle {{{_imc_toggle_name(ident)}}}" if kind == "toggle"
+                   else f"-{kind} {ident}")
+            out.append(f'exclude -inst {{{inst}}} {arg} '
+                       f'-comment {{boundary-scope: {what}}}')
+    out.append("")
+    return out, total, seen
+
+
+#: FSM states and transitions this DUT cannot reach. Matched against
+#: "<state>" or "<from> -> <to>" as parse_fsm yields them.
+#: (rule name, instance regex, item regex, reason, what would make it reachable)
+FSM_RULES = [
+    ("dm-slave-single-beat-only", r"i_dm_axi2mem$", r"\bWRITE\b",
+     "the WRITE state is the multi-beat write path; the hart's accesses to the "
+     "DM region are single-beat, so a write goes IDLE/WAIT_WVALID -> SEND_B",
+     "a master that issues burst writes to the DM region"),
+
+    ("dm-master-single-request-only", r"i_dm_axi_master$",
+     r"WAIT_LAST_W_READY_AW_READY|WAIT_AW_READY_BURST|WAIT_R_VALID_MULTIPLE",
+     "burst states of this generic cache adapter; the DM's master is wired "
+     "type_i = SINGLE_REQ",
+     "a DM that issues bursts"),
+
+    ("dm-master-no-amo", r"i_dm_axi_master$", r"WAIT_AMO_R_VALID",
+     "the atomic path; amo_i is tied to AMO_NONE",
+     "a DM that issues atomics"),
+
+    ("dm-master-bus-never-backpressures", r"i_dm_axi_master$", r"WAIT_AW_READY\b",
+     "TESTBENCH LIMIT: the crossbar has accepted the DM master's AW in the "
+     "cycle it was offered in every run so far",
+     "stimulus that congests the crossbar during an SBA access"),
+]
+
+
+def emit_fsm(report: Path) -> tuple[list[str], int, list]:
+    """FSM exclusions, and the holes no rule claims."""
+    out = ["", "# " + "=" * 74,
+           "# FSM exclusions -- unreachable states and transitions.",
+           "# " + "=" * 74, ""]
+    matched: dict[str, list] = {r[0]: [] for r in FSM_RULES}
+    holes = []
+    for inst, fsm, kind, what in parse_fsm(report):
+        for rule, ipat, wpat, _why, _when in FSM_RULES:
+            if re.search(ipat, inst) and re.search(wpat, what):
+                matched[rule].append((inst, fsm, kind, what))
+                break
+        else:
+            holes.append((inst, kind, what))
+    total = 0
+    for rule, _i, _w, why, when in FSM_RULES:
+        hits = matched[rule]
+        out.append(f"# ---- {rule} ({len(hits)} item(s)) ----")
+        out += [f"#   why       : {why}", f"#   reachable : {when}"]
+        if not hits:
+            out.append("#   NO LONGER MATCHES -- delete this rule.")
+        for inst, fsm, kind, what in hits:
+            total += 1
+            arg = (f"-state {fsm}.{what}" if kind == "state"
+                   else "-transition {}.{}".format(fsm, what.replace(" -> ", ".")))
+            out.append(f'exclude -inst {{{inst}}} {arg} -comment {{{rule}: {why}}}')
+        out.append("")
+    return out, total, holes
+
+
 def parse_toggles(report: Path):
     """Yield (instance, signal) for every signal bit that never toggled."""
     for name, body in _sections(report):
@@ -333,11 +617,13 @@ def _sections(report: Path):
 
 
 def parse_fsm(report: Path):
-    """Yield (instance, 'state'|'transition', name) for every unvisited FSM item."""
+    """Yield (instance, fsm, 'state'|'transition', name) per unvisited FSM item."""
     for name, body in _sections(report):
         sec = re.search(r"Fsm Detail Report.*", body, re.S)
         if not sec:
             continue
+        reg = re.search(r"^State register: (\S+)", sec.group(0), re.M)
+        fsm = reg.group(1) if reg else "state_q"
         mode, prev = None, ""
         for line in sec.group(0).splitlines():
             if line.startswith("State Coverage"):
@@ -349,13 +635,13 @@ def parse_fsm(report: Path):
             elif mode == "state":
                 m = re.fullmatch(r"(\w+)\s+([01]+)\s+(\d+)\s*", line)
                 if m and m.group(3) == "0":
-                    yield name, "state", m.group(1)
+                    yield name, fsm, "state", m.group(1)
             elif mode == "transition":
                 m = re.fullmatch(r"(\w+)?\s+(\w+)\s+(\d+)\s*", line)
                 if m and m.group(2) not in ("N-State",):
                     prev = m.group(1) or prev
                     if m.group(3) == "0":
-                        yield name, "transition", f"{prev} -> {m.group(2)}"
+                        yield name, fsm, "transition", f"{prev} -> {m.group(2)}"
 
 
 def parse(report: Path):
@@ -508,6 +794,14 @@ def main() -> int:
                            f'-comment {{{rule}: {why}}}')
             out.append("")
 
+    flines, fcount, fsm_holes = emit_fsm(Path(a.report))
+    out += flines
+    total += fcount
+
+    blines, bcount, bscoped = emit_boundary(Path(a.report))
+    out += blines
+    total += bcount
+
     Path(a.out).write_text("\n".join(out) + "\n", encoding="utf-8")
 
     print(f"wrote {a.out}: {total} exclusion(s) across "
@@ -516,11 +810,14 @@ def main() -> int:
         print(f"\n{len(eunmatched)} uncovered expression row(s) NOT excluded -- real holes:")
         for inst, row, src, terms in eunmatched:
             print(f"  {inst.split('.')[-1]:<12} {row:<8} [{terms}]  {src[:56]}")
-    fsm_holes = list(parse_fsm(Path(a.report)))
     if fsm_holes:
         print(f"\n{len(fsm_holes)} unvisited FSM state(s)/transition(s) -- real holes:")
         for inst, kind, what in fsm_holes:
             print(f"  {inst.split('.')[-1]:<16} {kind:<10} {what}")
+    # Items the boundary rule excluded are out of scope and not holes. Items it
+    # KEPT -- the DM's own bus and JTAG signals -- are in scope, so they stay.
+    tunmatched = [(i, b) for i, b in tunmatched if (i, "toggle", b) not in bscoped]
+    unmatched = [(i, x, src) for i, x, src in unmatched if (i, "block", x) not in bscoped]
     if tunmatched:
         import collections
         c = collections.Counter(b for _i, b in tunmatched)

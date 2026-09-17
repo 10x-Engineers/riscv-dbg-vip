@@ -42,9 +42,10 @@ foreach b {timeout bad_address alignment unsupported_size other} {
 }
 
 # ── Trigger-caused debug entry (dcsr.cause=2) ──────────────────────────────
-# cv64a6_imafdc_sv39_config_pkg.sv sets SDTRIG = 0: no trigger module, tselect
-# and tdata* are not implemented, so no trigger can fire.
-set why "CVA6 cv64a6_imafdc_sv39 is built with SDTRIG=0 (no triggers)"
+# Triggers fire on this build (cva6_sim/cfg, Sdtrig=1), but RTL-012: CVA6
+# reports every action=1 trigger as dcsr.cause=3 -- csr_regfile.sv assigns
+# CauseRequest for all DEBUG_REQUEST exceptions and never CauseTrigger.
+set why "RTL-012: CVA6 reports a firing trigger as dcsr.cause=3 (csr_regfile.sv:2289)"
 exclude -inst $I -coverbin cg_debug_entry.cp_cause.trigger                          -comment $why
 exclude -inst $I -coverbin cg_debug_entry.x_cause_x_prv.trigger?*                   -comment $why
 exclude -inst $I -coverbin cg_debug_entry.x_cause_x_dpc.trigger?trap_handler_entry  -comment $why
