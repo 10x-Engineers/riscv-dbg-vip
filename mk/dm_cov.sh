@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Report (a) code coverage for the Debug Module instances only, (b) overall
-# functional (covergroup) coverage, (c) both as HTML, and (d) the code-coverage
-# text and HTML reports again with the unreachable-code exclusions applied.
+# functional (covergroup) coverage, (c) both as HTML, (d) the code-coverage
+# text and HTML reports again with the unreachable-code exclusions applied, and
+# (e) the functional reports again with mk/fcov_exclusions.tcl applied.
 set -o pipefail
 COV_DIR=$(readlink -f "${1:?usage: dm_cov.sh <cov_dir> <out_dir>}")
 OUT=$(mkdir -p "${2:?usage: dm_cov.sh <cov_dir> <out_dir>}" && readlink -f "$2")
@@ -83,7 +84,8 @@ emit_parts() {   # emit_parts <tag>: one legacy text report per DM instance
 mkdir -p "$OUT"
 # Step (d) is conditional; do not let a previous run's output stand in for it.
 rm -rf "$OUT"/*_code_html_excl "$OUT"/imc_excl.* "$OUT/dm_exclusions.tcl" \
-       "$OUT/dm_code_excl.rpt"
+       "$OUT/dm_code_excl.rpt" "$OUT"/imc_fexcl.* "$OUT/functional_excl.rpt" \
+       "$OUT/functional_html_excl"
 runs=("$COV_DIR"/scope/*/)
 [ -e "${runs[0]}" ] || { echo "no runs under $COV_DIR/scope/" >&2; exit 1; }
 echo "merging ${#runs[@]} run(s)"
@@ -168,8 +170,31 @@ if python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_exclude.py" "$OUT/dm_code.rpt"
     python3 "$(dirname "${BASH_SOURCE[0]}")/dm_cov_summary.py" "$OUT/dm_code_excl.rpt" \
         "Debug Module code coverage, unreachable code excluded" || true
 fi
+# (e) Functional coverage with the bins this DUT cannot produce excluded. Its
+# own pass, so a failure in (d) does not take this number with it.
+{
+    printf 'load -run %s/merged\n' "$COV_DIR"
+    printf 'source %s/fcov_exclusions.tcl\n' "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    printf 'report -detail -all -metrics covergroup -out %s/functional_excl.rpt\n' "$OUT"
+    printf 'report_metrics -detail -metrics covergroup -out %s/functional_html_excl\n' "$OUT"
+    printf 'exit\n'
+} > "$tcl"
+"$IMC" -exec "$tcl" -nostdout -logfile "$OUT/imc_fexcl.log" > "$OUT/imc_fexcl.stdout" 2>&1
+echo "imc (functional exclusions) exit=$?  (see $OUT/imc_fexcl.log)"
+fsum() {   # fsum <report> <label>
+    [ -s "$1" ] || { echo "$2: no report" >&2; return; }
+    awk -v label="$2" '
+        /^Number of covered cover bins:/   { split($0, a, ": "); split(a[2], c, " of "); cov = c[1]; tot = c[2] }
+        /^Number of excluded cover bins:/  { split($0, a, ": "); exc = a[2] + 0 }
+        # "N of M": imc already leaves excluded bins out of M.
+        END { if (tot) printf "%s: %d/%d bins covered (%.2f%%), %d excluded\n",
+                              label, cov, tot, 100 * cov / tot, exc }' "$1"
+}
+fsum "$OUT/functional.rpt"      "Functional coverage"
+fsum "$OUT/functional_excl.rpt" "Functional coverage, unreachable bins excluded"
+
 # imc exits 0 on command errors, so its log is the only place they show up.
 # NOMATCH is only a warning, but it means an exclusion named nothing and was
 # dropped -- the excluded numbers are then wrong without saying so.
-grep -hE '\*E,|\*W,NOMATCH' "$OUT/imc.log" "$OUT/imc_excl.log" 2>/dev/null >&2
+grep -hE '\*E,|\*W,NOMATCH' "$OUT/imc.log" "$OUT/imc_excl.log" "$OUT/imc_fexcl.log" 2>/dev/null >&2
 ls -la "$OUT"

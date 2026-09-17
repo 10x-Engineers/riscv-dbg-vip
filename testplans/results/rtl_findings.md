@@ -292,7 +292,7 @@ was visible exactly; the X is what the RTL actually produces here.
 
 ## RTL-009 — `dtmcs.dmihardreset` is not implemented
 
-**Status:** filed · [`#152`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this fork's DTM predates upstream's support; the newer pulp copy Ibex vendors implements it
+**Status:** filed · [`#152`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this fork's DTM predates upstream's support; the newer pulp copy Ibex vendors implements it (upstream: requested in [pulp-platform/riscv-dbg#87](https://github.com/pulp-platform/riscv-dbg/issues/87), implemented by [#123](https://github.com/pulp-platform/riscv-dbg/pull/123))
 **Component:** `riscv-dbg` `src/dmi_jtag_tap.sv:149-160`, `src/dmi_jtag.sv`
 **Severity:** medium — the debugger's documented way to abandon a stuck DMI transaction does nothing
 
@@ -311,6 +311,77 @@ Measured, `TC-DTM-012` in `dmi_error_uvm`: busy provoked (scans 0/3/3),
 with no error pending and required `dmistat`=0 afterwards, which a DTM that
 ignores the bit satisfies. Found while auditing what the coverage closure had
 actually proven.
+
+---
+
+## RTL-010 — A stepped instruction that traps runs the handler's first instruction
+
+**Status:** filed upstream by a third party — [openhwgroup/cva6#3429](https://github.com/openhwgroup/cva6/issues/3429) (open)
+**Component:** CVA6 `core/csr_regfile.sv:2293` (step entry), `core/commit_stage.sv:170-176` (no ack for an excepted instruction)
+**Severity:** medium — a debugger stepping into a trap never sees the handler entry, and one handler instruction executes unobserved
+
+Sdext (`dcsr.step`): if the stepped instruction transfers control to a trap
+handler, Debug Mode is re-entered immediately after the PC changes to the
+handler, before any handler instruction executes. CVA6 enters Debug Mode on a
+step only when `dcsr_q.step && commit_ack_i[0]`, and `commit_stage` never
+acknowledges an instruction that carries an exception. The trap is taken, no
+step entry happens, the handler's first instruction commits, and the hart halts
+after it. The `else if (ex_i.valid)` branch inside that `if` is dead code.
+
+Measured, `step_matrix_uvm`: stepping the illegal instruction at `0x8000006e`
+halts with `dpc=0x8000009c` = `trap_handler`+4, and the `csrr t0, mepc` at the
+handler entry appears in the trace as committed inside that step. Every trap in
+every run (illegal, `ecall`, `wfi` at U) does the same.
+
+**Coverage consequence.** The testbench latched the class of the *last*
+instruction to complete in a step, so the handler's `csrr` overwrote every
+trap: `cp_stepped_class.trapping` read 0 hits despite traps being stepped. The
+covergroup now latches the first completion. The TB's `commit_valid` also
+missed traps entirely (no ack), and now includes `ex_commit.valid`.
+
+---
+
+## RTL-011 — A stepped `mret`/`sret` reports `dpc`=pc+4 and the old privilege
+
+**Status:** filed · [`#159`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/159) — not yet raised upstream
+**Component:** CVA6 `core/csr_regfile.sv:2307` (reads `eret_o`), `:2384` (assigns it)
+**Severity:** high — stepping over any xRET resumes at the wrong address and privilege
+
+Sdext (`dcsr.step`): after the step, `dpc` is the address of the next
+instruction that would execute, and `dcsr.prv` the privilege it would run at.
+For an xRET those are `xepc` and `xPP`. CVA6's step logic has the branch:
+
+```systemverilog
+end else if (eret_o) begin
+  dpc_d = {{CVA6Cfg.XLEN - CVA6Cfg.VLEN{1'b0}}, epc_o};
+```
+
+but it sits at line 2307 of an `always_comb` whose default `eret_o = 1'b0`
+is at line 1062 and whose `if (mret) eret_o = 1'b1;` is at line 2384. Read
+before the assignment, `eret_o` is always 0 there, so an xRET falls to the
+"consecutive PC" branch: `dpc = pc + 4`. `dcsr_d.prv = priv_lvl_o` is likewise
+the level *before* the return. On resume the debugger's `dpc`/`prv` win, so the
+xRET's effect on PC and privilege is lost.
+
+Measured, `step_matrix_uvm`:
+
+- `mret` at `0x800000a2` (M handler returning to S, `mepc=0x80000072`) →
+  `dpc=0x800000a6`, `dcsr.prv`=M. The hart then executes the padding after the
+  handler, traps, and loops through the handler for the rest of the run.
+- `sret` at `0x8000008e` with `sepc=step_loop` → `dpc=0x80000092` (pc+4).
+  The first version of the program put `sret_target` directly after the
+  `sret`, so this read as correct; the program now points `sepc` elsewhere.
+
+`step_classes` stepped the same `mret` and passed, because it checks the
+step's cause, not where it lands.
+
+The upstream core (`/work/new_cva6/cva6`, `csr_regfile.sv`: step block at `:2219`, `eret_o = 1` at `:2310`) has the
+same ordering. Fix: move the xRET decode (the `if (mret)`/`if (sret)` blocks)
+ahead of the step logic, or test `mret | sret | dret` directly.
+
+`step_matrix` records both RTL-010 and RTL-011 in its final check step and, as
+a debugger working around RTL-011 would, writes `dpc`/`prv` to the xRET's
+target after each xRET step so the rest of the run is stepped where intended.
 
 ---
 
