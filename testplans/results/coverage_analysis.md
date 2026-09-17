@@ -89,8 +89,8 @@ not classify its own failure, and not reaching it is arguably correct.
 
 ## Measured: merged functional coverage
 
-All 27 tests, one compile, one coverage model, merged with `imc`
-(2026-09-17, `bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/`).
+All 36 tests, one compile, one coverage model, merged with `imc`
+(2026-09-18, `bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/`).
 
 **263 of 263 reachable bins covered — 100%.** 19 bins are excluded at report
 time by `mk/fcov_exclusions.tcl`, each because this DUT cannot produce it.
@@ -100,24 +100,10 @@ run (`out/functional.rpt`, `out/functional_excl.rpt`).
 | Covergroup | Raw | With exclusions | Excluded |
 |---|---:|---:|---|
 | `cg_dmi_access` | 22/26 | 22/22 | op status `failed` ×4 |
-| `cg_dmcontrol_write` | 47/47 | 47/47 | |
-| `cg_dmstatus_read` | 42/42 | 42/42 | |
-| `cg_hart_transition` | 5/5 | 5/5 | |
-| `cg_command_write` | 4/4 | 4/4 | |
-| `cg_abstractcs_read` | 4/4 | 4/4 | |
-| `cg_progbuf` | 2/2 | 2/2 | |
-| `cg_sbcs` | 3/3 | 3/3 | |
-| `cg_sb_access` | 3/3 | 3/3 | |
-| `cg_dmcs2_write` | 6/6 | 6/6 | |
-| `cg_hartinfo_read` | 1/1 | 1/1 | |
-| `cg_haltsum0_read` | 2/2 | 2/2 | |
-| `cg_data0_access` | 2/2 | 2/2 | |
-| `cg_trigger` | 11/11 | 11/11 | |
-| `cg_debug_entry` | 23/28 | 23/23 | cause=trigger ×5 |
-| `cg_step_external` | 74/74 | 74/74 | |
-| `cg_hart_mode` | 4/4 | 4/4 | |
+| `cg_debug_entry` | 23/28 | 23/23 | cause=trigger ×5 (RTL-012) |
 | `cg_abstract_cmd` | 5/6 | 5/5 | `cmderr` other |
-| `cg_sba` | 3/12 | 3/3 | widths ×4, `sberror` ×5 |
+| `cg_sba` | 3/12 | 3/3 | widths ×4, `sberror` ×5 (RTL-002) |
+| every other covergroup (15 of 19) | 100% | 100% | — |
 
 ### Why each exclusion is unreachable
 
@@ -126,7 +112,7 @@ run (`out/functional.rpt`, `out/functional_excl.rpt`).
 | `cg_dmi_access` `failed` | `dmi_jtag.sv` only ever assigns `DMIBusy` or `DMINoError` (lines 169, 173) |
 | `cg_abstract_cmd` `other` | `CmdErrorOther` is declared in `dm_pkg.sv` and assigned nowhere |
 | `cg_sba` widths, `sberror` | RTL-002: `dm_csrs.sv:618` forces `sbaccess`=3 every cycle; `dm_sba.sv` raises `sberror` only for `sbaccess`>3 and has no bus-error input |
-| `cg_debug_entry` trigger | `cv64a6_imafdc_sv39` is built with `SDTRIG=0`; `TC-DCSR-011` confirms the trigger CSRs raise an exception |
+| `cg_debug_entry` trigger | RTL-012 (#161): triggers fire on this build, but CVA6 reports every `action=1` trigger as `dcsr.cause`=3, so cause=2 is never sampled |
 
 Bins that cannot be sampled at all, as opposed to bins the DUT cannot produce,
 are `ignore_bins` in `covergroups.sv` with the reason beside them:
@@ -194,75 +180,78 @@ share a source.
 
 ---
 
-## Code coverage
+## Code coverage — the debug subsystem
 
-Block, expression, toggle and FSM coverage is collected by the same
-`-coverage all` build — `make regress_cov` produces it, no separate run. 20
-`.ucd` databases plus the `.ucm` design model, about 3.2 MB, under
-`cva6_sim/sim_outputs/coverage/scope/`.
+Scope, decided deliberately: **everything a debug transaction passes through**,
+not the whole SoC and not the DM alone.
 
-**Reporting works locally** — an earlier version of this document said it was
-licence-blocked, and that was wrong in a way worth recording. `imc` *is* blocked,
-but only the **23.03** build: it dies in its Java licence layer (LMF-01513,
-FLEXnet `-8 Authentication Failed`) before opening anything, while `xrun`
-authenticates against the very same `license.dat`. That is a per-product licence
-gap, not a broken licence, and the conclusion "no coverage reporting on this
-machine" did not follow from it.
+| Part | Instances |
+|---|---|
+| JTAG TAP, DTM, DMI clock-domain crossing | `i_dmi_jtag` and below (7) |
+| Debug Module | `i_dm_top` and below (6) |
+| DM ↔ system bus | `i_dm_axi2mem` (hart's path to the debug ROM, program buffer and data), `i_dm_axi_master` (SBA) |
+| `ndmreset` | `i_rstgen_main`, `i_rstgen_bypass` |
+| DM ↔ processor / harness glue | `tb_top_soc.dut`, `i_ariane` — boundary only: `debug_req_i`, the DM's bus and DMI/JTAG signals, `ndmreset` and the `debug_req` gating |
 
-The **21.09** vManager install on the same machine authenticates and reads the
-23.03 databases correctly — it prints a version-difference note and proceeds,
-which is what UCIS versioning is for. `mk/dm_cov.sh` now defaults to it:
+CVA6's internal debug logic is deliberately **not** counted here: it has no
+instance of its own, and measuring it would mean closing the core's CSR file
+and decoder. The boundary instances are scoped by name in
+`mk/dm_cov_exclude.py` (`BOUNDARY`), and those exclusions are labelled
+`boundary-scope:` so scope is never mistaken for unreachability.
 
-```bash
-bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
-```
+Merged across the suite (2026-09-18):
 
-Two things that silently corrupt the merged number:
+| Metric | Raw | Excluded | Result |
+|---|---:|---:|---:|
+| Block | 84.38% (578/685) | 119 | **100%** (566/566) |
+| Expression | 82.22% (74/90) | 19 | **100%** (74/74) |
+| Toggle | 27.45% (11981/43650) | 35133 | **100%** (8517/8517) |
+| FSM states | 86.67% (39/45) | 6 | **100%** (39/39) |
+| FSM transitions | 80.00% (56/70) | 14 | **100%** (56/56) |
 
-- **Never merge across coverage models.** Each compile writes its own `.ucm`, and
-  `merge` keeps only what the models share. Merging 21 runs from one compile with
-  1 run from another reported `cg_step_external` at **0.00%** when the same runs
-  merged on their own model give **51.98%**. Check `scope/*.ucm` is a single file
-  before trusting a merge.
-- **Coverage data goes stale against the covergroups.** The databases currently
-  on disk predate the covergroup consolidation and still contain `cg_dtm_dmi`,
-  which no longer exists. Re-run the suite from one compile before quoting a
-  number.
+Most of the toggle exclusions are the two boundary instances being scoped out
+(≈31k bits of the rest of the SoC). The rest are constants: the debug ROM,
+the abstract-command program bits proven constant by enumeration, tied AXI
+attributes, and undriven multi-hart vectors.
 
-That scopes the report to the five instances that **are** the Debug Module —
-`i_dm_top`, `i_dm_csrs`, `i_dm_sba`, `i_dm_mem` and `i_dmi_jtag`. Each must be
-named: `report -inst X` covers only X and does not recurse, and the legacy
-`report` command has no `-recursive` option. Naming only `i_dm_top`, as this
-script originally did, measured the wrapper's port toggles and not one line of
-the logic.
+### Collecting and reporting it
 
-**Whole-SoC code coverage would be dominated by CVA6 itself and would say
-nothing about the DM**, which is the DUT here.
+Block, expression, toggle and FSM coverage come from the same `-coverage all`
+build — `make regress_cov`, no separate run — as `.ucd` databases plus one
+`.ucm` design model under `cva6_sim/sim_outputs/coverage/scope/`.
+`bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/` merges and reports them.
 
-Merged across all 26 tests, 2026-09-16, one compile. The Debug Module is 19
-instances: `i_dm_top` and `i_dmi_jtag` and everything under them.
+**Reporting works locally**, with one catch worth keeping: `imc` *is* licence-
+blocked, but only the **23.03** build, which dies in its Java licence layer
+(LMF-01513, FLEXnet `-8`) before opening anything, while `xrun` authenticates
+against the very same `license.dat`. The **21.09** vManager install reads the
+23.03 databases correctly — a per-product licence gap, not a broken licence —
+and `mk/dm_cov.sh` defaults to it.
 
-| Instance | Block | Expression | Toggle | FSM states | FSM trans. |
-|---|---:|---:|---:|---:|---:|
-| `i_dm_top` | — | — | 99.00% (1188/1200) | — | — |
-| `i_dm_csrs` (+ `gen_haltsum0_single`) | 96.88% (155/160) | 75.00% (6/8) | 78.39% (1999/2550) | — | — |
-| `i_dm_sba` | 86.36% (38/44) | 88.89% (8/9) | 98.94% (558/564) | 5/5 | 6/6 |
-| `i_dm_mem` | 100% (94/94) | 100% (20/20) | 74.28% (1421/1913) | 4/4 | 5/5 |
-| `i_debug_rom` | 100% (6/6) | — | 9.84% (133/1351) | — | — |
-| `i_dmi_jtag` | 92.73% (51/55) | 94.12% (16/17) | 97.33% (365/375) | 5/5 | 6/6 |
-| `i_dmi_jtag_tap` (+ clock cells) | 100% (78/78) | — | 97.75% (174/178) | 16/16 | 26/26 |
-| `i_dmi_cdc` (+ 2 × `cdc_2phase`, src/dst) | 100% (42/42) | 88.89% (16/18) | 95.65% (835/873) | — | — |
-| **Total** | **96.87%** (464/479) | **91.67%** (66/72) | **74.11%** (6673/9004) | **30/30** | **43/43** |
+Two things silently corrupt a merged number:
 
-With the generated exclusions applied (`out/dm_code_excl.rpt`), every row is
-100%: 15 blocks, 8 expression rows (2 of them constants imc excludes itself)
-and 2331 toggle bits excluded; FSM needs no exclusions.
+- **Never merge across coverage models.** Each compile writes its own `.ucm`,
+  and `merge` keeps only what the models share. Merging runs from two compiles
+  once reported `cg_step_external` at 0.00% when the same runs on their own
+  model gave 51.98%. Check `scope/*.ucm` is a single file before trusting a
+  merge — and after any change to the testbench or the covergroups, re-run the
+  whole suite rather than merging old databases with new.
+- **`mk/xcelium_cov.ccf` is load-bearing.** Without it Xcelium skips
+  type-parameterised modules (the entire DMI clock-domain crossing) and
+  multi-dimensional arrays (the program buffer, the abstract-command program,
+  the haltsum trees). IMC's `-metrics code` also omits FSM, so `dm_cov.sh` asks
+  for `code:fsm`.
 
-Before this pass the quoted figure covered five instances only, left out FSM,
-and missed the CDC and every multi-dimensional array entirely. Its "100%" was
-not comparable to this one.
+### What the bus bridges cost
 
----
+`axi2mem` and CVA6's `axi_adapter` are generic IP. The DM uses them in one
+narrow way — single-beat 64-bit accesses, `type_i = SINGLE_REQ`,
+`amo_i = AMO_NONE`, id `'0`, one outstanding access, a 4 KiB region at address
+0 — so their burst, wrapping-address and atomic logic is unreachable here: 86
+blocks, 11 expression rows, 5 FSM states and 14 transitions, each excluded with
+that wiring cited. Two waivers are testbench limits rather than impossibilities:
+the crossbar has never backpressured the DM master's AW/W, and `+debug_disable`
+is never passed.
 
 ## How the code coverage closed
 
@@ -305,7 +294,12 @@ deleted once they were driven.
 | X for the whole run, RTL-007 | `haltsum-undriven` | — | — | 320 |
 | DTM encodings no transition produces; forced-constant DMI response | `dtm-parasitic-state`, `dtm-unencoded-error`, `dmi-response-constants` | 2 | 1 | 32 |
 | **Argued from the RTL, not proven** — response FIFO never fills, CDC always ready | `dmi-resp-fifo-never-full`, `dmi-request-always-ready`, `dtm-request-backpressure` | 2 | 4 | 9 |
-| **Waiver — testbench limit**: one power-on reset and one TRST per run | `waiver-*` | — | — | 20 |
+| **Waiver — testbench limit**: one power-on reset and one TRST per run, `+debug_disable` never passed, crossbar never backpressures the DM master | `waiver-*`, `testbench-debug-always-enabled`, `dm-master-bus-never-backpressures` | — | — | 25 |
+| The DM's bus bridges used one narrow way — single-beat 64-bit accesses, no bursts, no atomics, one outstanding access, tied AXI attributes, a 4 KiB region at 0 | `dm-slave-*`, `dm-master-*`, `dm-bridge-*`, `dm-region-address-bits`, `rstgen-parameter-check` | 87 | 10 | 1385 signals |
+| **Scope, not unreachability** — the rest of the testharness and the `ariane` wrapper, excluded by name so the subsystem total neither counts nor claims them | `boundary-scope` | 17 | — | 807 signals (≈31.8k bits) |
+
+The bridge rules also exclude 6 FSM states and 14 transitions (the burst,
+atomic and wait-for-ready states of `axi2mem` and `axi_adapter`).
 
 The `abstract_cmd` rule first excluded every untoggled bit "left constant
 after the walk". Enumerating the generator showed three of those 423 bits were

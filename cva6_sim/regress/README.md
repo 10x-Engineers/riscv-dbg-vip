@@ -31,6 +31,7 @@ Build the test programs once:
 
 ```bash
 make -C cva6_sim/sw
+bash mk/act_build.sh     # riscv-arch-test Sdtrig programs; needs its own tools, see the top-level README
 ```
 
 ---
@@ -41,8 +42,8 @@ make -C cva6_sim/sw
 cd cva6_sim
 
 make regress_list        # what is in the suite and what each is expected to do
-make regress             # all 22 tests, no coverage       (~20 min)
-make regress_cov         # all 22 tests with coverage      (~35 min)
+make regress             # all 36 tests, no coverage
+make regress_cov         # all 36 tests with coverage      (~1 h)
 make regress ONLY=cmderr,step_classes,priv_irq
 ```
 
@@ -62,8 +63,9 @@ hart_selection           fail      fail            -       0
 ```
 
 `expected` comes from `regress/regression.yaml` and records **what happens
-today**, not what should happen. Two tests are expected to fail and one to abort
-early; each is a known RTL defect written up in
+today**, not what should happen. Thirteen tests are expected to fail and one
+to abort early (the sample output above is from an older suite); each is listed
+under "Known-failing tests" below, and the RTL defects are written up in
 [`testplans/results/rtl_findings.md`](../../testplans/results/rtl_findings.md).
 
 **The regression fails only when a result differs from `expected`**, and the
@@ -294,10 +296,8 @@ did — measured the wrapper's port toggles and not one line of `dm_csrs`,
 `dm_mem` or `dm_sba`. An unknown instance path produces an **empty section, not
 an error**, so the script warns when an instance reports nothing.
 
-Current DM-only figures, merged across all 22 tests: block **74.43%**,
-expression **75.93%**, toggle **38.79%**. Toggle is kept separate because it is
-dominated by wide buses a single-hart, 32-bit-DMI configuration never fully
-drives. Full breakdown in
+Current figures (DM code coverage, functional coverage, with and without the
+stated exclusions) are in
 [`testplans/results/coverage_analysis.md`](../../testplans/results/coverage_analysis.md).
 
 ---
@@ -318,14 +318,24 @@ drives. Full breakdown in
 
 ## Known-failing tests
 
-Three entries are not expected to pass. They are in the suite deliberately —
+Fourteen entries are not expected to pass. They are in the suite deliberately —
 removing a test because it fails is how a defect stops being tracked.
 
 | Test | Why | Detail |
 |---|---|---|
-| `hart_selection` | RTL-003 | A nonexistent hart reports `allrunning=1` |
+| `hart_selection` (partial) | RTL-003 | A nonexistent hart reports `allrunning=1` |
 | `csr_access` | testplan bug, not RTL | `TC-DCSR-003` expects `dscratch0/1` to survive a program-buffer command; `hartinfo.nscratch=2` means the DM owns them |
-| `sba` | RTL-002 | `sbcs.sbaccess` hardwired, so the scenario aborts before its verdict |
+| `priv_irq` | test-side | The M→S→U walk does not drive the hart where the bins need it |
+| `dmi_error` | RTL-009 | `dmihardreset` is not implemented |
+| `dm_corners` | RTL-006/007/008 | `sbcs` reserved bits, `haltsum1-3` and `dmstatus` for a nonexistent hart |
+| `debug_entry` | RTL-012 | A trigger enters Debug Mode with `dcsr.cause`=3 |
+| `step_matrix` | RTL-010/011 | Stepped traps and xRETs land in the wrong place |
+| `trigger` | RTL-013 | `tdata1=0` does not disable a trigger on RV64 |
+| `act_sdtrig_mcontrol6` | RTL-013 | The same, seen from native code |
+| `act_sdtrig_icount`, `native_icount` | RTL-014 | `icount` counts in disabled modes |
+| `native_etrigger` | RTL-015 | `etrigger` never matches in S without `textra` |
+| `native_itrigger` | RTL-016 | `itrigger` fires after the handler returns |
+| `native_reentrancy` | RTL-017 | No re-entrancy protection (a Sdtrig SHOULD) |
 
 `step_stall` is the regression for RTL-001 and passes **only with the
 `csr_regfile.sv` `wfi` fix applied**. Without it the hart deadlocks and the test

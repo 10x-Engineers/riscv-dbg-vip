@@ -385,6 +385,122 @@ target after each xRET step so the rest of the run is stepped where intended.
 
 ---
 
+## RTL-012 — A trigger with `action=1` reports `dcsr.cause`=3, not 2
+
+**Status:** filed · [`#161`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/161) — regression from upstream `e4184b66` (cva6 #3418); not yet raised upstream
+**Component:** CVA6 `core/csr_regfile.sv:2279-2289`
+**Severity:** medium — a debugger cannot tell a trigger hit from its own halt request
+
+Found once the build enabled Sdtrig (`cva6_sim/cfg/cv64a6_imafdc_sv39_sdtrig_config_pkg.sv`).
+A firing trigger with `action=1` reaches `csr_regfile` as an exception with
+cause `DEBUG_REQUEST`, and the `DEBUG_REQUEST` branch sets
+`dcsr_d.cause = CauseRequest` unconditionally. `CauseTrigger` is declared in
+`ariane_pkg.sv` and assigned nowhere. The July trigger overhaul removed the
+`debug_from_trigger` branch that used to set it. Upstream master
+(`81245a47`, 2026-09-15) is unchanged.
+
+Measured, `debug_entry_uvm` TC-DCSR-011: an M-mode `mcontrol6` execute trigger
+(`dmode=1`, `action=1`), the hart resumed one instruction before the target
+and **no** halt request sent. The hart halts by itself with `dpc` on the
+target and `dcsr.cause`=3.
+
+Consequence: `cg_debug_entry` `cp_cause.trigger` stays unreachable; its
+exclusion in `mk/fcov_exclusions.tcl` now cites this defect.
+
+---
+
+## RTL-013 — On RV64, `tdata1=0` is ignored, so a trigger cannot be disabled
+
+**Status:** filed · [`#162`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/162) — present on upstream master; not yet raised upstream
+**Component:** CVA6 `core/trigger_module.sv:856-924`
+**Severity:** high — a trigger, once armed, keeps firing
+
+The `tdata1` write decode accepts type 0 on RV32 (`:790`) but the RV64 branch
+has cases for types 3, 6, 5, 4 and 15 only, so writing 0 changes nothing.
+
+Measured twice:
+
+- `trigger_uvm` TC-TRIG-006 (DMI): arm `mcontrol6` → `0x6000000000000044`;
+  write 0 → still `0x6000000000000044`.
+- riscv-arch-test `SdtrigSm_Mcontrol6-00` (native): trigger 0, an M-mode store
+  trigger on `scratch`, is "disabled" with `csrw tdata1, x0`; the next store
+  to `scratch` (PC `0x80000280`) still traps. Spike, the reference, does not,
+  and the program fails its own trap check.
+
+**The trigger test had claimed TRIG-006 without checking it.** It wrote
+`tdata1=0` and moved on; with triggers absent (`Sdtrig=0`) there was nothing to
+check. It also wrote `tdata1.type` at the RV32 position, so on this RV64 hart
+its type-configuration steps configured nothing. Both fixed when the build
+gained triggers.
+
+---
+
+## Native-debug findings (RTL-014 … RTL-017)
+
+Found by the self-checking native-debug programs `cva6_sim/sw/native_*.S`, run
+on the Sdtrig build through the `run_elf` scenario. Each program passes on
+Spike (current `riscv-isa-sim`, `--isa=rv64imafdc_zicsr_zifencei
+--priv=msu`), so the expectations are the reference model's as well as the
+spec's. Root causes were located by probing `trigger_module_i` in a
+signal-access snapshot. Upstream master (`81245a47`, 2026-09-15) has the same
+code in every case; no upstream issue covers any of them.
+
+### RTL-014 — `icount` counts instructions in disabled modes
+
+**Status:** filed · [`#163`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/163)
+**Component:** `core/trigger_module.sv:321-331`
+**Severity:** high — native single-step lands on the wrong instruction
+
+The decrement runs for every retired instruction, with no `priv_match`
+condition. Armed from M with `u=1, m=0, count=1`, the M-mode instructions after
+the `tdata1` write take `count` to 0 (probe: 3755 ns, `priv_lvl_i`=M). The
+breakpoint is then taken as `mret` enters U, recording a stale M-mode
+`mepc=0x800000a8`. Sdtrig: the trigger fires "after `count` instructions **in
+enabled modes**".
+
+### RTL-015 — `etrigger`/`itrigger` never match in S-mode without `textra`
+
+**Status:** filed · [`#164`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/164)
+**Component:** `core/trigger_module.sv:640-657`, `:695-712`; `include/triggers_pkg.sv` `match_scontext32/64`
+**Severity:** high — native exception/interrupt triggers are dead for S-mode
+
+The S-mode `scontext` match is applied without the `SdtrigSupportTextra`
+guard that icount and mcontrol6 have, and `match_scontext*` returns 0 for
+`sselect=0`, which Sdtrig defines as "ignore". Probe: an illegal instruction
+taken from S (`ex_i` cause 2, valid, `priv_lvl_i`=S) leaves `e_matched_d` at 0.
+
+### RTL-016 — `itrigger` fires when the handler returns
+
+**Status:** filed · [`#165`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/165)
+**Component:** `core/trigger_module.sv:714-730`
+**Severity:** high — the breakpoint arrives after the handler has already run
+
+The fire is gated on `mret_reg_q` (set by `mret_i || sret_i`), so the
+trigger fires on the first instruction committed after an xRET, and checks
+privilege in the mode returned to. Sdtrig: it fires "just before the first
+instruction of the trap handler is executed". Measured: `mepc=0x80000380`
+(`u_done2`, after the S handler's `sret`), expected `stvec`.
+
+### RTL-017 — no re-entrancy protection for `action=0` triggers (SHOULD)
+
+**Status:** filed · [`#166`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/166)
+**Component:** `core/trigger_module.sv` (no `mstatus` input); `tcontrol` not implemented
+**Severity:** low — a SHOULD, but an M-mode native trigger in a handler overwrites `mcause`/`mepc`
+
+Sdtrig recommends one of two protections for harts with `action=0` triggers:
+gate them in M-mode while `MIE`=0, or implement `tcontrol`. CVA6 does neither.
+`tcontrol` access raises illegal instruction (correct for its absence); the
+same M-mode execute trigger fires with `MIE`=1, as it should, and also inside
+the M trap handler, as it should not.
+
+### What passes
+
+`native_hit` (hit bits identify the trigger that fired; `tval` is the matched
+address) and `native_dbgcsr` (`dcsr`/`dpc`/`dscratch0-1` raise illegal
+instruction from M-mode), and riscv-arch-test `SdtrigSm_Access-00`.
+
+---
+
 ## Observations that are NOT RTL defects
 
 Recorded because each cost time to diagnose and would otherwise be re-diagnosed.
