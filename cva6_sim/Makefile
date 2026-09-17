@@ -160,6 +160,12 @@ CVA6_SRC_SOC = \
     $(CVA6_REPO_DIR)/corev_apu/tb/ariane_peripherals.sv \
     $(CVA6_REPO_DIR)/corev_apu/tb/ariane_testharness.sv
 
+# The CVA6 configuration under test: cv64a6_imafdc_sv39 with Sdtrig enabled.
+# The stock package is swapped for it in the flattened file list, so CVA6-fork
+# itself stays unmodified. Point this at the stock file to build without
+# triggers.
+CVA6_CONFIG_PKG ?= $(abspath cfg/cv64a6_imafdc_sv39_sdtrig_config_pkg.sv)
+
 # CVA6's own flattener resolves Flist.cva6 (which needs these three env vars)
 # into a plain file list the simulator can consume.
 define cva6_flatten
@@ -167,7 +173,10 @@ define cva6_flatten
 	export TARGET_CFG=cv64a6_imafdc_sv39; \
 	export HPDCACHE_DIR=$(CVA6_REPO_DIR)/core/cache_subsystem/hpdcache; \
 	python3 $(CVA6_REPO_DIR)/util/flist_flattener.py --print_incdir --print_newline \
-	    $(CVA6_REPO_DIR)/core/Flist.cva6 > flist_soc.tmp
+	    $(CVA6_REPO_DIR)/core/Flist.cva6 \
+	  | sed 's|$(CVA6_REPO_DIR)/core/include/cv64a6_imafdc_sv39_config_pkg.sv|$(CVA6_CONFIG_PKG)|' \
+	  > flist_soc.tmp; \
+	grep -qF '$(CVA6_CONFIG_PKG)' flist_soc.tmp || { echo "CVA6 config substitution failed" >&2; exit 1; }
 endef
 
 uvm_bridge_soc.so: $(SRC_C_SOC)
