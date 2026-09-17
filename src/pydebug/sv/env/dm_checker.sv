@@ -91,6 +91,10 @@ class dm_checker extends uvm_component;
   local bit [31:0] sbaddress0;
 
   // One-deep pending-request register (see file header).
+  // +DM_MODEL_TRACE output, for mk/model_crosscheck.py.
+  local string     trace_path;
+  local int        trace_fd;
+
   local bit        pending_valid;
   local bit [6:0]  pending_addr;
   local bit [1:0]  pending_op;
@@ -171,6 +175,15 @@ class dm_checker extends uvm_component;
     // One call carrying the whole declared configuration, rather than a
     // positional list that stopped being reviewable around its tenth entry.
     model.set_config(read_cfg(cfg, 1));
+    // +DM_MODEL_TRACE=<file>: record the model's inputs and predictions for
+    // mk/model_crosscheck.py (see dm_ref_model.sv).
+    if ($value$plusargs("DM_MODEL_TRACE=%s", trace_path)) begin
+      trace_fd = $fopen(trace_path, "w");
+      if (!trace_fd)
+        `uvm_error("MODEL_TRACE", {"cannot open ", trace_path})
+      model.set_trace(trace_fd);
+      model.trace_note(dut_config_path);
+    end
   endfunction
 
   function void connect_phase(uvm_phase phase);
@@ -186,6 +199,7 @@ class dm_checker extends uvm_component;
   // this component's own build_phase.
   function void set_model(dm_ref_model m);
     model = m;
+    model.set_trace(trace_fd);
   endfunction
 
   // One task per monitored interface, plus the correlator. Kept separate
@@ -391,16 +405,24 @@ class dm_checker extends uvm_component;
     if (status == dm_defines_pkg::DMI_STAT_FAILED) return;
 
     total_checked++;
-    if (!model.has_model(addr)) return; // nothing checkable for this address
+
+    // Traced before the sync below, so the trace holds the model's own
+    // run-control prediction as well as the one actually compared.
+    model.trace_read(addr, actual);
 
     // Sync the hart-driven dmstatus fields (halted/running/resume_ack) to
     // what the DUT just reported BEFORE comparing -- they reach the DM
     // through real, variable-latency hart-side hardware this model cannot
     // predict synchronously (see dm_ref_model.sv's sync_observed_hart_
     // signals / hart_signal_bit.sv). Every other dmstatus field is
-    // unaffected and still compared normally below.
-    if (addr == dm_defines_pkg::DM_ADDR_DMSTATUS)
+    // unaffected and still compared normally below. (dmstatus is always
+    // modelled, so doing this before the has_model() test changes nothing.)
+    if (addr == dm_defines_pkg::DM_ADDR_DMSTATUS) begin
       model.sync_observed_hart_signals(actual);
+      model.trace_read(addr, actual, "V");
+    end
+
+    if (!model.has_model(addr)) return; // nothing checkable for this address
 
     // Compare only the bits the model claims to predict. predict_mask()
     // excludes genuinely dynamic state -- abstractcs.busy is set while an
@@ -543,6 +565,10 @@ class dm_checker extends uvm_component;
           name, expected, got, expected ^ got,
           dm_defines_pkg::dm_field_table(addr, actual)))
     end
+  endfunction
+
+  function void final_phase(uvm_phase phase);
+    if (trace_fd) $fclose(trace_fd);
   endfunction
 
   function void report_phase(uvm_phase phase);

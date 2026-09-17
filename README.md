@@ -696,6 +696,23 @@ Toggle is still reported separately rather than folded into one figure: a wide
 field that a parameter fixes counts once per bit, so averaging it with block
 coverage produces a number that is neither.
 
+### Reference-model cross-check
+
+The checker's model (`sv/model/dm_ref_model.sv`) and the Python model
+(`model/predictor.py`) predict the same Debug Module, and are held to it by
+execution. Every simulation writes the SV model's inputs and predictions to
+`<test>.model_trace`, and `mk/model_crosscheck.py` replays them through the
+Python model and compares the two at every read:
+
+```bash
+make -C cva6_sim regress            # writes sim_outputs/*.model_trace
+make -C cva6_sim model_crosscheck   # both models, every read, every test
+```
+
+It exits non-zero on any disagreement. The latest full result, and the check
+that it detects deliberately broken rules, is in
+`testplans/results/model_crosscheck_2026-09-17.md`.
+
 ### RTL findings
 
 [`testplans/results/rtl_findings.md`](testplans/results/rtl_findings.md) —

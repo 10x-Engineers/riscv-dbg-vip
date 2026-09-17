@@ -30,10 +30,12 @@
 // twin of pydebug/model/coverage.py — same bins, same names, so a UVM run and a
 // Python run report one number. The external-debug covergroups added below
 // (abstractcs/command/progbuf/sbcs/dmcs2/hartinfo/haltsum0/data0) are, as of this
-// pass, SV-ONLY: coverage.py and registers.py still model dmcontrol/dmstatus only
-// (a gap that testplans/riscv_debug_testplan.md already states). Restoring full twin
-// parity means extending those two Python files to match — tracked, not silently
-// assumed. The bin names here are chosen to be portable to that later Python
+// pass, SV-ONLY: coverage.py still covers dmcontrol/dmstatus only (a gap that
+// testplans/riscv_debug_testplan.md already states). The *reference model* is no
+// longer part of that gap -- predictor.py matches dm_ref_model.sv and the two are
+// cross-checked by execution (mk/model_crosscheck.py, #75) -- but restoring full
+// coverage twin parity still means extending coverage.py to match: tracked, not
+// silently assumed. The bin names here are chosen to be portable to that later Python
 // extension.
 //
 // Register addresses come from dm_defines_pkg (fully qualified, so that this file

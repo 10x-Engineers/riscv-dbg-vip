@@ -4,12 +4,12 @@
 // System Bus Access data paths.
 //
 // This is the SV counterpart of `pydebug/src/pydebug/model/predictor.py`
-// (`DMPredictor`) — ported field-for-field, not re-derived, so the two cannot
-// silently drift apart in what they claim the spec requires. Per
-// VERIFICATION_STRATEGY.md ("Checker implementation (SV register model)"),
-// this is the model `dm_checker.sv` compares DUT reads against; the Python
-// model is NOT run alongside it this pass (decided 2026-07-23) — the two are
-// equivalent in intent but only one runs checking at a time.
+// (`DMPredictor`), which covers the same scope. Per VERIFICATION_STRATEGY.md
+// ("Checker implementation (SV register model)") this is the model
+// `dm_checker.sv` compares DUT reads against. The two are held together by
+// execution, not by inspection: with +DM_MODEL_TRACE this model records every
+// input and prediction, and mk/model_crosscheck.py replays that through the
+// Python model and compares them (riscv-dbg-vip#75).
 //
 // Scope, stated plainly (mirrors predictor.py's own documentation discipline):
 //   - dmcontrol/dmstatus run control: full model, spec #3.5 Run Control,
@@ -114,6 +114,38 @@ class dm_ref_model;
   local bit          sbcs_read_on_addr_armed;   // last sbcs write's sbreadonaddr
   local bit          sbdata0_pending_valid;
   local bit [31:0]   sbdata0_pending_value;
+
+  // ── Model-input trace ─────────────────────────────────────────────────────
+  // Every input this model receives, and every prediction the checker asks of
+  // it at a read, one line each. mk/model_crosscheck.py replays the file
+  // through the Python DMPredictor and compares the two models prediction by
+  // prediction, which is the only evidence that the port is still a port.
+  //   C <text>                    note (the DUT config path)
+  //   B <busy>                    set_observed_cmdbusy
+  //   W <addr> <value>            on_write
+  //   S <dmstatus>                sync_observed_hart_signals
+  //   O                           observe_sbdata0_read
+  //   R <addr> <rtl> <has> <mask> <prediction>   a read, as predicted before
+  //                               the checker syncs any hart signals into us
+  //   V <addr> <rtl> <has> <mask> <prediction>   the same read after that sync,
+  //                               i.e. what the checker actually compared
+  // dmstatus needs both: after the sync its halted/running/resumeack bits are
+  // the RTL's own, so only the R line tests the run-control logic.
+  local int trace_fd;
+
+  function void set_trace(int fd);
+    trace_fd = fd;
+  endfunction
+
+  function void trace_note(string text);
+    if (trace_fd) $fdisplay(trace_fd, "C %s", text);
+  endfunction
+
+  function void trace_read(bit [6:0] addr, bit [31:0] actual, string kind = "R");
+    if (trace_fd)
+      $fdisplay(trace_fd, "%s %02h %08h %0d %08h %08h", kind, addr, actual,
+                has_model(addr), predict_mask(addr), predict(addr));
+  endfunction
 
   // ── Construction ───────────────────────────────────────────────────────────
   // Declared configuration. The positional constructor below stays for the
@@ -256,6 +288,7 @@ class dm_ref_model;
   local bit observed_cmdbusy;
 
   function void set_observed_cmdbusy(bit b);
+    if (trace_fd) $fdisplay(trace_fd, "B %0d", b);
     observed_cmdbusy = b;
   endfunction
 
@@ -271,6 +304,7 @@ class dm_ref_model;
 
   // ── Write dispatch ─────────────────────────────────────────────────────────
   function void on_write(bit [6:0] addr, bit [31:0] value);
+    if (trace_fd) $fdisplay(trace_fd, "W %02h %08h", addr, value);
     if (observed_cmdbusy && guarded_while_busy(addr)) begin
       // Dropped, exactly as the DM drops it. The resulting cmderr=1 is not
       // set here: cmderr is excluded from predict_mask() and tracked
@@ -578,6 +612,7 @@ class dm_ref_model;
   // trigger is the data read rather than the address write, so it has its own
   // entry point -- dm_checker calls this after sampling a DMI read of sbdata0.
   function void observe_sbdata0_read();
+    if (trace_fd) $fdisplay(trace_fd, "O");
     // Order matters: the triggered read happens at the address sbaddress0
     // holds NOW, and only then does the autoincrement advance it. Incrementing
     // first leaves the model one access ahead of the DM for the rest of the
@@ -654,6 +689,7 @@ class dm_ref_model;
   // field is untouched and still meaningfully compared.
   function void sync_observed_hart_signals(bit [31:0] r);
     int sel = selected_index();
+    if (trace_fd) $fdisplay(trace_fd, "S %08h", r);
     if (!hart_exists(sel)) return;
     harts[sel].halted.observe(r[9]);      // allhalted
     harts[sel].running.observe(r[11]);    // allrunning

@@ -125,6 +125,14 @@
       "status": "framework"
     },
     {
+      "id": "reference_model",
+      "name": "Reference-model parity: dm_ref_model.sv and DMPredictor predict the same (#75)",
+      "spec": "n/a - framework",
+      "testplan_area": "n/a - framework",
+      "tc_ids": [],
+      "status": "framework"
+    },
+    {
       "id": "transport",
       "name": "Transport abstraction and swap",
       "spec": "n/a - framework",

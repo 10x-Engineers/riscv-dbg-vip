@@ -22,7 +22,7 @@ Usage:
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 from .registers import (
     DMSTATUS_VERSION_0_13,
@@ -52,6 +52,9 @@ class DutConfig:
     resumeack_reset: bool
     stickyunavail: bool
     havereset_poweron: bool
+    #: Every other declared key (Presets and optional features), as read.
+    #: Only declared_config() interprets them.
+    raw: Dict[str, Any]
 
     def predictor_kwargs(self) -> Dict[str, Any]:
         """kwargs suitable for DMPredictor(**...) / ModelBackedMockTransport(**...)."""
@@ -68,15 +71,42 @@ class DutConfig:
         }
 
 
-def load_dut_config(name: str) -> DutConfig:
-    """Load dut_configs/<name>.json (e.g. "ibex", "cva6").
+    def declared_config(self, num_harts: int = 1):
+        """The whole declaration as a DeclaredConfig, the Python twin of the
+        dm_cfg_t that dm_checker.sv's read_cfg() builds from the same file.
+        Every key is required, as it is there: a missing Preset must fail
+        loudly rather than be guessed."""
+        from .predictor import DeclaredConfig
+
+        r = self.raw
+
+        def num(key: str) -> int:
+            v = r[key]
+            return int(v, 0) if isinstance(v, str) else int(v)
+
+        flags = ("sba_enable", "abstractauto_enable", "hartarray_enable",
+                 "authentication_enable", "haltgroups_enable", "relaxedpriv_reset",
+                 "dataaccess", "sbaccess_writable", "sbaccess128", "sbaccess64",
+                 "sbaccess32", "sbaccess16", "sbaccess8")
+        numbers = ("progbufsize", "datacount", "nscratch", "datasize", "dataaddr",
+                   "sbversion", "sbasize", "sbaccess_reset", "nextdm")
+        return DeclaredConfig(
+            num_harts=num_harts,
+            **{k: bool(r[k]) for k in flags},
+            **{k: num(k) for k in numbers},
+            **self.predictor_kwargs(),
+        )
+
+
+def load_dut_config(name: Union[str, Path]) -> DutConfig:
+    """Load dut_configs/<name>.json (e.g. "ibex", "cva6"), or a .json path.
 
     Raises FileNotFoundError with the searched path if the DUT name has no
     declared config yet -- deliberately not a silent default, since every
     field here is a fact about real hardware that must be stated, not
     guessed.
     """
-    path = _CONFIG_DIR / f"{name}.json"
+    path = Path(name) if str(name).endswith(".json") else _CONFIG_DIR / f"{name}.json"
     if not path.is_file():
         raise FileNotFoundError(f"No DUT config declared at {path}")
     raw = json.loads(path.read_text())
@@ -99,4 +129,5 @@ def load_dut_config(name: str) -> DutConfig:
         resumeack_reset=bool(raw["resumeack_reset"]),
         stickyunavail=bool(raw["stickyunavail"]),
         havereset_poweron=bool(raw["havereset_poweron"]),
+        raw=raw,
     )
