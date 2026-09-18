@@ -88,6 +88,43 @@ done:
         CHECK_EQ(0x31, t1, CAUSE_ECALL_U)
         LOAD(t1, m_count)
         CHECK_EQ(0x32, t1, 3)
+
+# ── the same trigger, enabled for S, matched from S ─────────────────────────
+# The privilege bits are the whole point of a trigger's mode gating, so the
+# same execute trigger is run once more at a different privilege.
+        li      t0, 0
+        csrw    CSR_TSELECT, t0
+        la      t0, s_target
+        csrw    CSR_TDATA2, t0
+        li      t0, TYPE_MCONTROL6 | MC6_S | MC6_EXECUTE
+        csrw    CSR_TDATA1, t0
+        ON_M_TRAP(s_bp)
+        MRET_TO(s_target, PRV_S)
+
+s_bp:
+        LOAD(t1, m_cause)
+        CHECK_EQ(0x41, t1, CAUSE_BREAKPOINT)
+        LOAD(t1, m_epc)
+        CHECK_SYM(0x42, t1, s_target)
+        LOAD(t1, m_status)
+        srli    t1, t1, 11
+        andi    t1, t1, 3
+        CHECK_EQ(0x43, t1, PRV_S)           # taken from S
+        li      t0, 0
+        csrw    CSR_TSELECT, t0
+        csrr    t1, CSR_TDATA1
+        li      t2, MC6_HIT_BITS
+        and     t1, t1, t2
+        CHECK_EQ(0x44, t1, 1 << 22)
+        DISABLE_TRIGGER(0, TYPE_MCONTROL6)
+        ON_M_TRAP(s_done)
+        LOAD(t1, m_epc)
+        csrw    mepc, t1
+        mret
+
+s_done:
+        LOAD(t1, m_cause)
+        CHECK_EQ(0x45, t1, CAUSE_ECALL_S)
         j       native_pass
 
 # ── U-mode code ──────────────────────────────────────────────────────────────
@@ -96,6 +133,11 @@ u_first:
         addi    s1, s1, 1
 u_second:
         addi    s1, s1, 1
+        ecall
+
+# ── S-mode code ──────────────────────────────────────────────────────────────
+s_target:
+        addi    s2, s2, 1
         ecall
 
         NATIVE_END

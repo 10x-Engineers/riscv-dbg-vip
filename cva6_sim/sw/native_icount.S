@@ -66,6 +66,21 @@ case3_trap:
         CHECK_SYM(0x32, t1, u_ecall)
         LOAD(t1, m_count)
         CHECK_EQ(0x33, t1, 3)
+
+# ── case 4: the same step, counted in S ─────────────────────────────────────
+        li      t0, TYPE_ICOUNT | IC_COUNT(1) | IC_S
+        csrw    CSR_TDATA1, t0
+        ON_M_TRAP(case4_trap)
+        MRET_TO(s_d1, PRV_S)
+
+case4_trap:
+        LOAD(t1, m_cause)
+        CHECK_EQ(0x41, t1, CAUSE_BREAKPOINT)
+        LOAD(t1, m_epc)
+        CHECK_SYM(0x42, t1, s_d2)
+        LOAD(t1, m_tval)
+        CHECK_EQ(0x43, t1, 0)
+        DISABLE_TRIGGER(0, TYPE_ICOUNT | IC_COUNT(1))
         j       native_pass
 
 # ── U-mode code ──────────────────────────────────────────────────────────────
@@ -82,5 +97,10 @@ u_c1:   addi    s3, s3, 1
         addi    s3, s3, 1
 u_ecall:
         ecall
+
+# ── S-mode code, for the S pass ──────────────────────────────────────────────
+s_d1:   addi    s4, s4, 1
+s_d2:   addi    s4, s4, 1
+        j       s_d2
 
         NATIVE_END

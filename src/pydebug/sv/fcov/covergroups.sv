@@ -1039,6 +1039,13 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     // demonstrably running in U, that is an RTL defect, and a coverpoint that
     // reads dcsr.prv for both cannot tell the two apart.
     logic [1:0]  s_actual_prv;
+
+    //: Native-debug sampling state (cg_native_trigger).
+    logic [3:0]  s_native_type;      // tdata1.type of the selected trigger
+    logic [1:0]  s_native_prv;       // privilege the breakpoint was taken from
+    logic        s_native_tval_zero; // whether tval was written 0
+    logic        s_native_mie;       // mstatus.MIE when it fired
+    logic        prev_trap_valid;
     logic [3:0]  s_prv_seen_mask;    // bit per privilege ever observed
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1225,6 +1232,53 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
 
 
     // ══════════════════════════════════════════════════════════════════════════
+    // cg_native_trigger -- a trigger with action=0 raises an ordinary
+    // breakpoint exception that the hart's own handler deals with. None of it
+    // is visible on the DMI side: this samples the trap itself, off the hart
+    // backdoor, when a breakpoint is taken outside Debug Mode with a trigger
+    // armed. spec: Sdtrig "Native Triggers"
+    // ══════════════════════════════════════════════════════════════════════════
+    covergroup cg_native_trigger;
+      option.per_instance = 1;
+      option.comment = "Native (action=0) trigger firing, from the hart side";
+
+      // Which kind of trigger raised it. mcontrol is v0.13 and not implemented
+      // by this DUT; tmexttrigger raises no breakpoint at all.
+      cp_native_type: coverpoint s_native_type {
+        bins icount     = {3};            // NATIVE-OP3
+        bins itrigger   = {4};            // NATIVE-OP2
+        bins etrigger   = {5};            // NATIVE-OP2
+        bins mcontrol6  = {6};            // NATIVE-OP2
+        ignore_bins not_a_native_trigger = {0, 1, 2, 7, [8:15]};
+      }
+
+      // The privilege the breakpoint was taken from: a native monitor in M
+      // debugging U code is the arrangement Sdtrig describes.
+      cp_native_prv: coverpoint s_native_prv {
+        bins U = {0}; bins S = {1}; bins M = {3};
+        illegal_bins reserved = {2};
+      }
+
+      // tval says which kind fired: an address for mcontrol6, zero for
+      // icount/itrigger/etrigger (Sdtrig 5.7.13/5.7.14/5.7.15).
+      cp_native_tval: coverpoint s_native_tval_zero {
+        bins address = {0};
+        bins zero    = {1};
+      }
+
+      // Sdtrig "Native Triggers": a hart supporting action=0 should not let a
+      // trigger fire in M-mode while MIE=0, which is where its own handler
+      // runs. A hit on `in_handler` is that protection missing -- RTL-017.
+      cp_native_reentrancy: coverpoint {s_native_prv == 2'd3, s_native_mie} {
+        bins lower_privilege = {2'b00, 2'b01};
+        bins m_mode_enabled  = {2'b11};
+        bins in_handler      = {2'b10};
+      }
+
+      x_type_x_prv: cross cp_native_type, cp_native_prv;
+    endgroup
+
+    // ══════════════════════════════════════════════════════════════════════════
     // cg_abstract_cmd -- every failure mode distinct enough for a debugger to
     // react correctly. spec: debug_module.html#abstractcs
     // ══════════════════════════════════════════════════════════════════════════
@@ -1333,6 +1387,7 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cg_debug_entry   = new();
         cg_step_external = new();
         cg_hart_mode     = new();
+        cg_native_trigger = new();
         cg_abstract_cmd  = new();
         cg_sba           = new();
     endfunction
@@ -1404,6 +1459,22 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
           s_stepping = hart_vif.step();
           cg_hart_mode.sample();
         end
+
+        // ── Native debug: a breakpoint taken outside Debug Mode ───────────
+        // Sampled on the cycle the exception is taken, before mcause/mepc are
+        // updated, and only with a trigger actually armed -- an ebreak
+        // instruction raises the same cause and is not a trigger firing.
+        if (hart_vif.trap_valid && !prev_trap_valid && !hart_vif.debug_mode
+            && hart_vif.trap_cause == 64'd3
+            && hart_vif.trigger_type() inside {4'd3, 4'd4, 4'd5, 4'd6}
+            && hart_vif.trigger_action() == 6'd0) begin
+          s_native_type      = hart_vif.trigger_type();
+          s_native_prv       = hart_vif.priv_lvl;
+          s_native_tval_zero = (hart_vif.mtval == '0);
+          s_native_mie       = hart_vif.mstatus_mie;
+          cg_native_trigger.sample();
+        end
+        prev_trap_valid = hart_vif.trap_valid;
 
         // Debug Mode entry: the one moment dcsr.cause is meaningful.
         if (hart_vif.debug_mode && !prev_debug_entry) begin
@@ -1820,6 +1891,13 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       report_cg("cg_hart_mode", cg_hart_mode.get_inst_coverage());
       report_cp("  cp_mode_transition", cg_hart_mode.cp_mode_transition.get_inst_coverage());
       report_cp("  cp_haltreq_guard",   cg_hart_mode.cp_haltreq_guard.get_inst_coverage());
+
+      report_cg("cg_native_trigger", cg_native_trigger.get_inst_coverage());
+      report_cp("  cp_native_type",       cg_native_trigger.cp_native_type.get_inst_coverage());
+      report_cp("  cp_native_prv",        cg_native_trigger.cp_native_prv.get_inst_coverage());
+      report_cp("  cp_native_tval",       cg_native_trigger.cp_native_tval.get_inst_coverage());
+      report_cp("  cp_native_reentrancy", cg_native_trigger.cp_native_reentrancy.get_inst_coverage());
+      report_cp("  x_type_x_prv",         cg_native_trigger.x_type_x_prv.get_inst_coverage());
 
       report_cg("cg_abstract_cmd", cg_abstract_cmd.get_inst_coverage());
       report_cp("  cp_cmderr", cg_abstract_cmd.cp_cmderr.get_inst_coverage());

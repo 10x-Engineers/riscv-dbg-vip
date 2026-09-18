@@ -88,7 +88,10 @@ include ../mk/simulator.mk
 # One list, used twice. It was duplicated verbatim between soc_compile and
 # soc_compile_cov, which is exactly how a coverage build ends up measuring a
 # different set of files than the one under test.
-CVA6_DEFINES = +define+RISCV_VIP_MODE +define+DUT_VERSION_1_0
+# SDTRIG_PRESENT guards the testbench's probes into the trigger module: the
+# module only exists when the config package enables Sdtrig, and a hierarchical
+# reference into a generate block that was not elaborated is an error, not a 0.
+CVA6_DEFINES = +define+RISCV_VIP_MODE +define+DUT_VERSION_1_0 +define+SDTRIG_PRESENT
 
 CVA6_INCDIRS = \
     +incdir+$(CVA6_REPO_DIR)/corev_apu/register_interface/include \
