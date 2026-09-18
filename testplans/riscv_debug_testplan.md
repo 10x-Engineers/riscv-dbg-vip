@@ -201,8 +201,8 @@ access and what the permission is *from there*.
 | RAP-021-S | Stimulate | Debugger issues Access Register write to `dcsr` while the hart is **running** | `Sdext.html#csr-dcsr` | P1 | Not started | |
 | RAP-021-C | Check | Command fails with `cmderr=4`; `dcsr` is not modified | `Sdext.html#csr-dcsr` | P1 | Not started | Spec forbids changing some `dcsr` bits while running |
 | RAP-022-C | Check | Hart reads `dcsr` or `dpc` in M-mode → illegal-instruction trap | `Sdext.html#csr-dcsr` | P0 | Not started | Debug CSRs are invisible outside Debug Mode |
-| RAP-023-S | Stimulate | Debugger writes `0xDEADBEEF` to `dscratch0`, then executes any program-buffer command | `Sdext.html#csr-dscratch0` | P1 | **Fail** | |
-| RAP-023-C | Check | With `hartinfo.nscratch=2`, `dscratch0/1` are DM scratch — the debugger's value is **not** expected to survive | `debug_module.html#hartinfo` | P1 | **Fail** | `TC-DCSR-003` asserts preservation. The **testplan expectation is wrong**, not the RTL — re-specify, do not file |
+| RAP-023-S | Stimulate | Debugger writes `0xDEADBEEF` to `dscratch0`, then executes any program-buffer command | `Sdext.html#csr-dscratch0` | P1 | Pass | `csr_access_uvm` TC-DCSR-003 |
+| RAP-023-C | Check | With `hartinfo.nscratch=2`, `dscratch0/1` are DM scratch — the debugger's value is **not** expected to survive | `debug_module.html#hartinfo` | P1 | Pass | Re-specified: with `nscratch`=2 the DM owns `dscratch0/1`, so the check requires them to hold while halted and to stay accessible after the DM uses them -- measured: clobbered to 0x8/0xa by the resume, as declared |
 | RAP-024-S | Stimulate | Debugger writes `progbuf0..7` over DMI; hart executes them | `debug_module.html#program-buffer` | P1 | Not started | |
 | RAP-024-C | Check | Hart cannot write `progbuf` — a store to that address does not alter the buffer | `debug_module.html#program-buffer` | P1 | Not started | |
 | RAP-025-S | Stimulate | Debugger writes `data0`; then runs an Access Register read of a GPR | `debug_module.html#data0` | P1 | Pass | `gpr_write_uvm` |
