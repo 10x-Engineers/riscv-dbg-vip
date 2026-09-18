@@ -328,7 +328,8 @@ reached on this DUT, and reports itself when it stops matching.
 | Path | Purpose |
 |---|---|
 | `api/` | `RISCVDebug`/`DMI` command layer, `DebugTransport`/`UVMTransport`/`OpenOCDTransport`, `DebugSession` |
-| `sequences/` | Pre-built scenarios (halt, memory scan, CSR access, single-step, ...) |
+| `sequences/` | Pre-built scenarios (halt, memory scan, CSR access, single-step, run a self-checking program, ...) |
+| `model/` | The Python side of the models: `registers.py` (DMI registers, the hart's debug CSRs and the Sdtrig registers, spec-cited), `predictor.py` (DM behaviour, cross-checked against `dm_ref_model.sv`), `coverage.py` (the functional-coverage twin), `native_trigger.py` (what an `action=0` trigger does, per Sdtrig), `invariants.py` |
 | `sv/` | Shared UVM VIP: `model/` (register/predictor model), `agents/jtag/` (driver, monitor, sequencer), `sequences/`, `assertions/`, `fcov/` (covergroups), `env/` (env, checker, scoreboard, base test) + per-SoC `templates/` |
 | `c_bridge/` | DPI-C bridge sources compiled into the simulator's shared object |
 | `cli.py` | `pydebug` console-script entry point (`run`, `init`, `sources`) |
@@ -386,10 +387,14 @@ a per-DUT binding layer ([`bindings/cva6.yaml`](testplans/generated/bindings/cva
 35 of 70 coverpoints bound) and kept as a standing gap list, not as a build input.
 
 `covergroups.sv` samples two sources: the DMI transaction stream (14 covergroups,
-via `uvm_subscriber #(jtag_txn_c)`) and a **hart backdoor** (5 covergroups) for
-`dcsr`, `dpc`, privilege and which instruction a step stepped over. The second
-exists because the `wfi` single-step deadlock **could not have appeared as a
-coverage hole** — nothing sampled which instruction a step stepped over.
+via `uvm_subscriber #(jtag_txn_c)`) and a **hart backdoor** (6 covergroups) for
+`dcsr`, `dpc`, privilege, which instruction a step stepped over, and native
+trigger firing. The second exists because the `wfi` single-step deadlock **could
+not have appeared as a coverage hole** — nothing sampled which instruction a
+step stepped over. The same is true of native debug: a trigger with `action=0`
+raises an ordinary breakpoint the hart handles itself, and no DMI transaction
+ever mentions it, so `cg_native_trigger` samples the trap and the armed trigger
+directly.
 
 **100% is not the target and not achievable here.** The model is architectural, so
 it contains bins CVA6 cannot reach for reasons that are not defects: single-hart
