@@ -234,6 +234,208 @@ def with_hartsel(dmcontrol_word: int, hartsel: int) -> int:
     return DMCONTROL.field("hartselhi").insert(word, (hartsel >> 10) & 0x3FF)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Hart-side debug CSRs (Sdext ch.4) and the Trigger Module (Sdtrig ch.5)
+#
+# These live in the hart's CSR space, not in DMI space: a debugger reaches them
+# through an Access Register abstract command, and native (self-hosted) debug
+# code reaches the trigger CSRs directly. They are defined here, beside the DMI
+# registers, because the same three consumers need them: predictor.py to model
+# what a command writes, coverage.py to name bins, and the native-trigger model
+# to decide whether a trigger fires.
+#
+# Field positions are for XLEN=64 where they differ: dcsr is 32 bits on both,
+# but tdata1.type/dmode sit at [XLEN-1:XLEN-4] and [XLEN-5].
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: dcsr — Debug Control and Status (Sdext 4.9.1), CSR 0x7b0. Accessible only
+#: from Debug Mode: a read or write from M-mode raises an illegal instruction.
+DCSR = Register(
+    name="dcsr",
+    address=0x7B0,
+    spec="Sdext 4.9.1",
+    fields=(
+        Field("debugver", 28, 4, ACCESS_R, "Sdext 4.9.1 debugver", reset=4),
+        Field("ebreakvs", 17, 1, ACCESS_WARL, "Sdext 4.9.1 ebreakvs", reset=0),
+        Field("ebreakvu", 16, 1, ACCESS_WARL, "Sdext 4.9.1 ebreakvu", reset=0),
+        Field("ebreakm", 15, 1, ACCESS_RW, "Sdext 4.9.1 ebreakm", reset=0),
+        Field("ebreaks", 13, 1, ACCESS_WARL, "Sdext 4.9.1 ebreaks", reset=0),
+        Field("ebreaku", 12, 1, ACCESS_WARL, "Sdext 4.9.1 ebreaku", reset=0),
+        Field("stepie", 11, 1, ACCESS_WARL, "Sdext 4.9.1 stepie", reset=0),
+        Field("stopcount", 10, 1, ACCESS_WARL, "Sdext 4.9.1 stopcount"),
+        Field("stoptime", 9, 1, ACCESS_WARL, "Sdext 4.9.1 stoptime"),
+        Field("cause", 6, 3, ACCESS_R, "Sdext 4.9.1 cause"),
+        Field("v", 5, 1, ACCESS_WARL, "Sdext 4.9.1 v", reset=0),
+        Field("mprven", 4, 1, ACCESS_WARL, "Sdext 4.9.1 mprven"),
+        Field("nmip", 3, 1, ACCESS_R, "Sdext 4.9.1 nmip"),
+        Field("step", 2, 1, ACCESS_RW, "Sdext 4.9.1 step", reset=0),
+        Field("prv", 0, 2, ACCESS_WARL, "Sdext 4.9.1 prv"),
+    ),
+)
+
+#: dcsr.cause values (Sdext 4.9.1, table "cause").
+DCSR_CAUSE_EBREAK = 1
+DCSR_CAUSE_TRIGGER = 2
+DCSR_CAUSE_HALTREQ = 3
+DCSR_CAUSE_STEP = 4
+DCSR_CAUSE_RESETHALTREQ = 5
+
+#: dpc and the two scratch registers (Sdext 4.9.2/4.9.3). dpc is XLEN wide and
+#: has no fields; dscratch0/1 are free for the DM's use -- hartinfo.nscratch
+#: says how many of them the DM takes, and a debugger must save/restore those.
+DPC = Register(name="dpc", address=0x7B1, spec="Sdext 4.9.2", fields=())
+DSCRATCH0 = Register(name="dscratch0", address=0x7B2, spec="Sdext 4.9.3", fields=())
+DSCRATCH1 = Register(name="dscratch1", address=0x7B3, spec="Sdext 4.9.3", fields=())
+
+#: tselect — which trigger tdata1/2/3 address (Sdtrig 5.7.1). WARL over the
+#: implemented trigger indices: write all ones and read back to discover how
+#: many there are.
+TSELECT = Register(name="tselect", address=0x7A0, spec="Sdtrig 5.7.1", fields=())
+
+#: tdata1 — the selected trigger's type and configuration (Sdtrig 5.7.2). The
+#: type and dmode fields sit at the top of XLEN; everything below depends on
+#: the type, so the per-type layouts are separate definitions.
+TDATA1_TYPE_LSB_RV32, TDATA1_TYPE_LSB_RV64 = 28, 60
+
+#: tdata1.type values (Sdtrig 5.7.2).
+TRIGGER_TYPE_NONE = 0
+TRIGGER_TYPE_MCONTROL = 2
+TRIGGER_TYPE_ICOUNT = 3
+TRIGGER_TYPE_ITRIGGER = 4
+TRIGGER_TYPE_ETRIGGER = 5
+TRIGGER_TYPE_MCONTROL6 = 6
+TRIGGER_TYPE_TMEXTTRIGGER = 7
+TRIGGER_TYPE_DISABLED = 15
+
+#: tdata1.action values (Sdtrig, "Actions"). 0 is the native one: raise a
+#: breakpoint exception, for software using triggers with no debugger attached.
+TRIGGER_ACTION_BREAKPOINT = 0
+TRIGGER_ACTION_DEBUG_MODE = 1
+
+#: mcontrol6 (Sdtrig 5.7.12), the low fields; type/dmode are above them.
+MCONTROL6 = Register(
+    name="mcontrol6",
+    address=0x7A1,
+    spec="Sdtrig 5.7.12",
+    fields=(
+        Field("uncertain", 26, 1, ACCESS_WARL, "Sdtrig 5.7.12 uncertain", reset=0),
+        Field("hit1", 25, 1, ACCESS_WARL, "Sdtrig 5.7.12 hit1", reset=0),
+        Field("vs", 24, 1, ACCESS_WARL, "Sdtrig 5.7.12 vs", reset=0),
+        Field("vu", 23, 1, ACCESS_WARL, "Sdtrig 5.7.12 vu", reset=0),
+        Field("hit0", 22, 1, ACCESS_WARL, "Sdtrig 5.7.12 hit0", reset=0),
+        Field("select", 21, 1, ACCESS_WARL, "Sdtrig 5.7.12 select", reset=0),
+        Field("size", 16, 3, ACCESS_WARL, "Sdtrig 5.7.12 size", reset=0),
+        Field("action", 12, 4, ACCESS_WARL, "Sdtrig 5.7.12 action", reset=0),
+        Field("chain", 11, 1, ACCESS_WARL, "Sdtrig 5.7.12 chain", reset=0),
+        Field("match", 7, 4, ACCESS_WARL, "Sdtrig 5.7.12 match", reset=0),
+        Field("m", 6, 1, ACCESS_WARL, "Sdtrig 5.7.12 m", reset=0),
+        Field("uncertainen", 5, 1, ACCESS_WARL, "Sdtrig 5.7.12 uncertainen", reset=0),
+        Field("s", 4, 1, ACCESS_WARL, "Sdtrig 5.7.12 s", reset=0),
+        Field("u", 3, 1, ACCESS_WARL, "Sdtrig 5.7.12 u", reset=0),
+        Field("execute", 2, 1, ACCESS_WARL, "Sdtrig 5.7.12 execute", reset=0),
+        Field("store", 1, 1, ACCESS_WARL, "Sdtrig 5.7.12 store", reset=0),
+        Field("load", 0, 1, ACCESS_WARL, "Sdtrig 5.7.12 load", reset=0),
+    ),
+)
+
+#: icount (Sdtrig 5.7.13): fire after `count` instructions retire in an enabled
+#: mode. `pending` is set when count reaches 0 and cleared as the trigger fires.
+ICOUNT = Register(
+    name="icount",
+    address=0x7A1,
+    spec="Sdtrig 5.7.13",
+    fields=(
+        Field("vs", 26, 1, ACCESS_WARL, "Sdtrig 5.7.13 vs", reset=0),
+        Field("vu", 25, 1, ACCESS_WARL, "Sdtrig 5.7.13 vu", reset=0),
+        Field("hit", 24, 1, ACCESS_WARL, "Sdtrig 5.7.13 hit", reset=0),
+        Field("count", 10, 14, ACCESS_WARL, "Sdtrig 5.7.13 count", reset=1),
+        Field("m", 9, 1, ACCESS_WARL, "Sdtrig 5.7.13 m", reset=0),
+        Field("pending", 8, 1, ACCESS_RW, "Sdtrig 5.7.13 pending", reset=0),
+        Field("s", 7, 1, ACCESS_WARL, "Sdtrig 5.7.13 s", reset=0),
+        Field("u", 6, 1, ACCESS_WARL, "Sdtrig 5.7.13 u", reset=0),
+        Field("action", 0, 6, ACCESS_WARL, "Sdtrig 5.7.13 action", reset=0),
+    ),
+)
+
+#: itrigger (5.7.14) and etrigger (5.7.15): fire on an interrupt or exception
+#: taken FROM an enabled mode, before the handler's first instruction. Their
+#: m/s/u bits name the mode the trap came from, not the mode it goes to.
+ITRIGGER = Register(
+    name="itrigger",
+    address=0x7A1,
+    spec="Sdtrig 5.7.14",
+    fields=(
+        Field("hit", 24, 1, ACCESS_WARL, "Sdtrig 5.7.14 hit", reset=0),
+        Field("vs", 12, 1, ACCESS_WARL, "Sdtrig 5.7.14 vs", reset=0),
+        Field("vu", 11, 1, ACCESS_WARL, "Sdtrig 5.7.14 vu", reset=0),
+        Field("nmi", 10, 1, ACCESS_WARL, "Sdtrig 5.7.14 nmi", reset=0),
+        Field("m", 9, 1, ACCESS_WARL, "Sdtrig 5.7.14 m", reset=0),
+        Field("s", 7, 1, ACCESS_WARL, "Sdtrig 5.7.14 s", reset=0),
+        Field("u", 6, 1, ACCESS_WARL, "Sdtrig 5.7.14 u", reset=0),
+        Field("action", 0, 6, ACCESS_WARL, "Sdtrig 5.7.14 action", reset=0),
+    ),
+)
+
+ETRIGGER = Register(
+    name="etrigger",
+    address=0x7A1,
+    spec="Sdtrig 5.7.15",
+    fields=(
+        Field("hit", 24, 1, ACCESS_WARL, "Sdtrig 5.7.15 hit", reset=0),
+        Field("vs", 12, 1, ACCESS_WARL, "Sdtrig 5.7.15 vs", reset=0),
+        Field("vu", 11, 1, ACCESS_WARL, "Sdtrig 5.7.15 vu", reset=0),
+        Field("m", 9, 1, ACCESS_WARL, "Sdtrig 5.7.15 m", reset=0),
+        Field("s", 7, 1, ACCESS_WARL, "Sdtrig 5.7.15 s", reset=0),
+        Field("u", 6, 1, ACCESS_WARL, "Sdtrig 5.7.15 u", reset=0),
+        Field("action", 0, 6, ACCESS_WARL, "Sdtrig 5.7.15 action", reset=0),
+    ),
+)
+
+#: tdata2 (5.7.3): the match value -- an address, or a cause bitmask for
+#: itrigger/etrigger. tdata3/textra (5.7.4) is context matching; a DUT without
+#: it must raise an illegal instruction on access, since no implemented trigger
+#: uses that register.
+TDATA2 = Register(name="tdata2", address=0x7A2, spec="Sdtrig 5.7.3", fields=())
+TDATA3 = Register(name="tdata3", address=0x7A3, spec="Sdtrig 5.7.4", fields=())
+
+#: tinfo (5.7.6): bit N set means trigger type N is supported by the selected
+#: trigger; bit 0 means the trigger does not exist.
+TINFO = Register(
+    name="tinfo",
+    address=0x7A4,
+    spec="Sdtrig 5.7.6",
+    fields=(Field("version", 24, 8, ACCESS_R, "Sdtrig 5.7.6 version"),
+            Field("info", 0, 16, ACCESS_R, "Sdtrig 5.7.6 info")),
+)
+
+#: The hart-side registers, keyed by CSR number. Separate from REGISTERS: these
+#: are not reachable over DMI directly, only through an abstract command.
+CSR_REGISTERS: Dict[int, Register] = {
+    r.address: r for r in (DCSR, DPC, DSCRATCH0, DSCRATCH1,
+                           TSELECT, TDATA2, TDATA3, TINFO)
+}
+
+#: tdata1 layouts by trigger type, for decoding what a write configured.
+TDATA1_LAYOUTS: Dict[int, Register] = {
+    TRIGGER_TYPE_MCONTROL6: MCONTROL6,
+    TRIGGER_TYPE_ICOUNT: ICOUNT,
+    TRIGGER_TYPE_ITRIGGER: ITRIGGER,
+    TRIGGER_TYPE_ETRIGGER: ETRIGGER,
+}
+
+
+def tdata1_type(word: int, xlen: int = 64) -> int:
+    """The type field of a tdata1 word, which sits at [XLEN-1:XLEN-4]."""
+    lsb = TDATA1_TYPE_LSB_RV64 if xlen == 64 else TDATA1_TYPE_LSB_RV32
+    return (word >> lsb) & 0xF
+
+
+def tdata1_dmode(word: int, xlen: int = 64) -> int:
+    """tdata1.dmode: set means only Debug Mode may write this trigger."""
+    lsb = TDATA1_TYPE_LSB_RV64 if xlen == 64 else TDATA1_TYPE_LSB_RV32
+    return (word >> (lsb - 1)) & 1
+
+
 #: Registers this model knows about, keyed by DMI address.
 REGISTERS: Dict[int, Register] = {
     DMCONTROL.address: DMCONTROL,
