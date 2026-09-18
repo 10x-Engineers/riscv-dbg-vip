@@ -772,6 +772,26 @@ It exits non-zero on any disagreement. The latest full result, and the check
 that it detects deliberately broken rules, is in
 `testplans/results/model_crosscheck_2026-09-17.md`.
 
+The **functional-coverage twin** is held to its SystemVerilog original the same
+way. `pydebug.model.coverage` models the DMI-visible covergroups with the same
+bin names as `covergroups.sv`, so a replay -- of a trace, a unit test, or a
+hardware session -- can be scored without a simulator:
+
+```bash
+python3 mk/fcov_crosscheck.py out/functional.rpt \
+    cva6_sim/sim_outputs/coverage/*.model_trace
+```
+
+It replays the recorded DMI stream and diffs the resulting bins against `imc`'s
+report: 38 bins across `cg_command_write`, `cg_abstractcs_read`, `cg_progbuf`,
+`cg_sbcs`, `cg_sb_access`, `cg_dmcs2_write`, `cg_hartinfo_read`,
+`cg_haltsum0_read`, `cg_data0_access` and `cg_trigger`. It earned its keep
+immediately: the Python model had `dmcs2.grouptype` and `group` at the wrong
+bit positions, which the comparison caught. The Sdext groups and the two that
+read the DM's own registers sample backdoors no DMI replay can reconstruct;
+they are registered as exclusions and reported as "not modelled" rather than
+skipped silently.
+
 ### RTL findings
 
 [`testplans/results/rtl_findings.md`](testplans/results/rtl_findings.md) —

@@ -202,9 +202,16 @@ def test_run_control_slice_coverage_closure(full_trace):
     #    unavailable_i input to constant 0, confirmed against real RTL.
     #  See testplans/riscv_debug_testplan.md (2026-07-25 revision) for the
     #  corresponding testplan-side updates to every TC-ID referenced above.
-    assert report["summary"]["hit"] == 100, report["summary"]
-    assert report["summary"]["bins"] == 100, report["summary"]
-    assert len(report["unhit"]) == 0, report["unhit"]
+    #
+    # The pinned numbers are the RUN-CONTROL slice, which is what this stimulus
+    # drives. coverage.py also models the DMI-visible external-debug
+    # covergroups (groups named cg_*, mirroring covergroups.sv); those are
+    # closed by the UVM suite and checked bin-for-bin by mk/fcov_crosscheck.py
+    # against a real run, not by this offline replay.
+    unhit_run_control = [b for b in report["unhit"] if not b["bin"].startswith("cg_")]
+    hit_run_control = sum(1 for k in report["hit"] if not k.startswith("cg_"))
+    assert hit_run_control == 100, report["summary"]
+    assert not unhit_run_control, unhit_run_control
 
 
 @pytest.mark.feature("assertions")
@@ -243,3 +250,61 @@ def test_expected_stimulus_legality_violations_fire_as_designed(full_trace):
     assert all(v.tc_ids for v in stim_violations), (
         "every stimulus-legality violation must trace back to the TC-ID that provokes it"
     )
+
+
+# ── external-debug covergroups (the DMI-visible twin of covergroups.sv) ──────
+
+
+@pytest.mark.feature("coverage_model")
+@pytest.mark.smoke
+def test_external_debug_bins_sampled_from_the_dmi_stream():
+    """The external-debug bins fill from DMI traffic alone.
+
+    This is the offline half of the twin's check: it proves each bin is
+    reachable from the stream and that the decode is right. The other half,
+    mk/fcov_crosscheck.py, replays a real run and compares bin for bin with
+    what the SystemVerilog covergroups recorded for the same traffic.
+    """
+    from pydebug.api.observer import OP_READ, OP_WRITE
+    from pydebug.model.coverage import DebugCoverageModel
+
+    cov = DebugCoverageModel()
+    # abstract command: a CSR read, a GPR write, and postexec
+    cov.sample(OP_WRITE, 0x17, (2 << 20) | (1 << 17) | 0x07B0, None)
+    cov.sample(OP_WRITE, 0x17, (1 << 17) | (1 << 16) | 0x1008, None)
+    cov.sample(OP_WRITE, 0x17, (1 << 18), None)            # postexec
+    # every trigger CSR, and every tdata1.type -- 32-bit writes carry the type
+    # in data0, 64-bit ones (aarsize=3) in data1
+    for regno in (0x07A0, 0x07A2, 0x07A3, 0x07A4):
+        cov.sample(OP_WRITE, 0x17, (2 << 20) | (1 << 17) | regno, None)
+    for i, ttype in enumerate((2, 3, 4, 5, 6, 7)):
+        if i % 2:
+            cov.sample(OP_WRITE, 0x04, ttype << 28, None)
+            size = 2
+        else:
+            cov.sample(OP_WRITE, 0x05, ttype << 28, None)   # data1: the upper half
+            size = 3
+        cov.sample(OP_WRITE, 0x17, (size << 20) | (1 << 17) | (1 << 16) | 0x07A1, None)
+    # abstractcs: idle with progbuf and data present, then busy
+    cov.sample(OP_READ, 0x16, None, (8 << 24) | (1 << 0) | 2)
+    cov.sample(OP_READ, 0x16, None, 1 << 12)
+    # program buffer, data, hartinfo, haltsum0
+    cov.sample(OP_WRITE, 0x20, 0x00100073, None)
+    cov.sample(OP_READ, 0x04, None, 0xDEAD)
+    cov.sample(OP_READ, 0x12, None, 0x00220000)
+    cov.sample(OP_READ, 0x40, None, 0)
+    cov.sample(OP_READ, 0x40, None, 1)
+    # SBA: arm, address write, data write and read
+    cov.sample(OP_WRITE, 0x38, 1 << 20, None)
+    cov.sample(OP_READ, 0x38, None, 0)
+    cov.sample(OP_WRITE, 0x39, 0x8000_0000, None)
+    cov.sample(OP_WRITE, 0x3C, 0x1234, None)
+    cov.sample(OP_READ, 0x3C, None, 0x1234)
+    # dmcs2: both group types, grouped and ungrouped
+    cov.sample(OP_WRITE, 0x32, 0, None)
+    cov.sample(OP_WRITE, 0x32, (1 << 11) | (1 << 2) | 1, None)
+
+    report = cov.report()
+    unhit = sorted(b["bin"] for b in report["unhit"] if b["bin"].startswith("cg_"))
+    assert not unhit, unhit
+    assert not [k for k in report["excluded_hits"] if k.startswith("cg_")]
