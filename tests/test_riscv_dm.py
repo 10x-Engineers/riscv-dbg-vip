@@ -300,3 +300,29 @@ def test_top_level_imports():
     # Just verify they are importable
     assert RISCVDebug is not None
     assert UVMTransport is not None
+
+
+# ── Review findings from #11 (Interfaces), regression-tested ─────────────────
+
+@pytest.mark.feature("abstract_commands")
+def test_clear_cmderr_writes_ones_not_zeros(model_dm):
+    """abstractcs.cmderr is W1C (#3.14.6): clearing it means writing ones to
+    the field. A write of 0 leaves it set, and every later abstract command
+    then fails with the old error."""
+    dm, t = model_dm
+    dm.clear_cmderr()
+    assert t.writes_to(0x16) == [0x7 << 8]
+
+
+@pytest.mark.feature("transport")
+def test_observing_transport_keeps_the_jtag_capabilities(model_dm):
+    """ObservingTransport claims to be transparent. Transports that reach the
+    DTM carry `dtmcs()`/`dmi_scan()`, which have no DMI address; four sequences
+    use them, two behind hasattr(). Wrapping must not make them disappear."""
+    from pydebug.api.observer import ObservingTransport
+
+    backend = model_dm[1]
+    backend.dtmcs = lambda write=None: 0x71      # a DTM-capable transport
+    wrapped = ObservingTransport(backend)
+    assert hasattr(wrapped, "dtmcs") and wrapped.dtmcs() == 0x71
+    assert not hasattr(wrapped, "no_such_capability")
