@@ -427,19 +427,53 @@ Build the test programs once:
 
 ```bash
 make -C cva6_sim/sw
+bash mk/act_build.sh          # riscv-arch-test programs (see "Native debug" below)
 ```
+
+### The DUT build
+
+`cva6_sim` builds CVA6 `cv64a6_imafdc_sv39` **with the Sdtrig trigger module
+enabled** -- `mcontrol6` (every match type, execute/load/store), `icount`,
+`itrigger`, `etrigger`, chaining, actions 0 and 1; no `textra`. The config is
+[`cva6_sim/cfg/cv64a6_imafdc_sv39_sdtrig_config_pkg.sv`](cva6_sim/cfg/cv64a6_imafdc_sv39_sdtrig_config_pkg.sv),
+which differs from the stock package only in its `Sdtrig*` fields; the Makefile
+substitutes it into the flattened file list so `CVA6-fork` stays an unmodified
+upstream track. `make ... CVA6_CONFIG_PKG=<stock package>` builds without
+triggers. CVA6's own note on its trigger module: "not completely and
+exhaustively verified" -- RTL-012 … RTL-017 below came from turning it on.
+
+### Native debug (Sdtrig `action=0`)
+
+Self-checking firmware that needs no debugger. Each program ends by writing
+`tohost` (1 pass, 3 fail); the `run_elf` scenario waits for that over System
+Bus Access, halts the hart, and reports where it stopped and -- on a failure --
+the program's own record of which check failed.
+
+| Source | Programs | How they are built |
+|---|---|---|
+| riscv-arch-test (ACT4) | `act_sdtrig_access`, `act_sdtrig_mcontrol6`, `act_sdtrig_icount` | `bash mk/act_build.sh`: generates the SdtrigSm suite for [`cva6_sim/act/cv64a6-sdtrig/`](cva6_sim/act/cv64a6-sdtrig/) with Spike as the reference (Sail has no Sdtrig) and stages the ELFs in `cva6_sim/sw/act/` |
+| this repo | `native_icount`, `native_etrigger`, `native_itrigger`, `native_hit`, `native_reentrancy`, `native_dbgcsr` | `make -C cva6_sim/sw`; each also passes on Spike |
+
+Upstream's SdtrigSm suite is only partly written (its own note: "only the
+mcontrol6 covergroup is fully developed"). Its Itrigger and NativeTriggers
+programs are empty and are not run; its icount cases are written but commented
+out, and `act_build.sh` switches them on. `act_build.sh` also adapts the
+generator to this CVA6 (no `tdata3`/`scontext`/`mcontext`/VS/VU) and restores
+it afterwards. It needs a riscv-arch-test `act4` checkout, GCC 15+, a current
+Spike, `uv` and Ruby 3.2+ (`mise install` in the checkout); the paths are
+variables at the top of the script.
 
 ### Running the regression
 
-22 tests, in [`cva6_sim/regress/regression.yaml`](cva6_sim/regress/regression.yaml).
+36 tests, in [`cva6_sim/regress/regression.yaml`](cva6_sim/regress/regression.yaml).
 Deeper detail — per-test rationale, how to add a test, the known-failing list —
 is in [`cva6_sim/regress/README.md`](cva6_sim/regress/README.md).
 
 ```bash
 cd cva6_sim
 make regress_list     # what is in the suite and what each is expected to do
-make regress          # all 22, no coverage        (~20 min)
-make regress_cov      # all 22 with -coverage all  (~35 min)
+make regress          # all 36, no coverage
+make regress_cov      # all 36 with -coverage all  (~1 h)
 make regress ONLY=step_classes,cmderr
 ```
 
@@ -447,7 +481,8 @@ A report lands in `testplans/results/regression_report.md`; per-test logs in
 `cva6_sim/sim_outputs/<test>/regress.log`.
 
 Each entry names the ELF it needs, the testplan items it covers, and its
-**known** result — `expect: pass|partial|fail`, currently 17/3/2. The driver
+**known** result — `expect: pass|partial|fail`, currently 22/1/13. Every
+`fail` names the RTL defect (or, for two tests, the test-side problem) behind it. The driver
 reports only results that *differ*: a suite where the known failures still fail
 tells you nothing changed. Exit status is non-zero on any difference, so this
 works in CI as-is.
@@ -506,15 +541,16 @@ bash mk/dm_cov.sh cva6_sim/sim_outputs/coverage out/
 #   out/dm_code.rpt                 code coverage scoped to the DM
 #   out/dm_exclusions.tcl           generated exclusions, one stated reason per rule
 #   out/dm_code_excl.rpt            the same, with the exclusions applied
-#   out/{dm,dmi_jtag}_code_html/    browsable code coverage: dm_top and below, and the DTM
-#   out/{dm,dmi_jtag}_code_html_excl/   the same, with the exclusions applied
+#   out/{dm,dmi_jtag,dm_axi2mem,dm_axi_master,rstgen_main}_code_html/
+#                                   browsable code coverage, one directory per root
+#   out/..._code_html_excl/         the same, with the exclusions applied
 #   out/functional_html/            browsable functional coverage
 #   out/functional_excl.rpt         functional, with mk/fcov_exclusions.tcl applied
 #   out/functional_html_excl/       the same, browsable
 ```
 
 `mk/fcov_exclusions.tcl` lists the covergroup bins this DUT cannot produce --
-triggers (`SDTRIG=0`), SBA widths and bus errors (RTL-002), DMI op-failed and
+trigger-caused entry (RTL-012), SBA widths and bus errors (RTL-002), DMI op-failed and
 `cmderr` "other" (never driven) -- each with the RTL line that makes it
 unreachable. The bins stay in `covergroups.sv`; the unexcluded report is always
 written alongside.
@@ -644,16 +680,21 @@ build — no separate run, and no extra flag. `bash mk/dm_cov.sh <cov_dir> <out>
 reports it and prints a per-instance table.
 
 Whole-SoC code coverage would be dominated by CVA6 itself and say nothing about
-the DM, so the report is scoped to the five instances that **are** the Debug
-Module:
+the debug path, so the report is scoped to the **debug subsystem**: the Debug
+Module, everything that carries a debug transaction to it, and its connections
+to the rest of the SoC.
 
-```
-tb_top_soc.dut.i_dm_top
-tb_top_soc.dut.i_dm_top.i_dm_csrs
-tb_top_soc.dut.i_dm_top.i_dm_sba
-tb_top_soc.dut.i_dm_top.i_dm_mem
-tb_top_soc.dut.i_dmi_jtag          # sibling of dm_top, in ariane_testharness
-```
+| Part | Instances |
+|---|---|
+| JTAG TAP, DTM, and the DMI clock-domain crossing | `i_dmi_jtag` and everything under it (7 instances) |
+| Debug Module | `i_dm_top` and everything under it (6 instances: `dm_csrs`, `dm_sba`, `dm_mem`, the debug ROM) |
+| DM ↔ system bus | `i_dm_axi2mem` (the AXI slave the hart fetches the debug ROM, program buffer and data through) and `i_dm_axi_master` (the SBA bus master) |
+| `ndmreset` | `i_rstgen_main`, `i_rstgen_bypass` |
+| DM ↔ processor, and the harness glue | `tb_top_soc.dut` and `i_ariane`, **scoped to the boundary**: the hart's `debug_req_i` port, the DM's bus and DMI/JTAG signals, `ndmreset` and its `debug_req` gating. CVA6's internal debug logic (`dcsr`/`dpc`, Debug Mode entry, step) is the processor's own coverage, not the subsystem's; `mk/dm_cov_exclude.py` excludes it by name and says so |
+
+25 instances in all. The boundary scoping is the one place where exclusions are
+**scope rather than unreachability**, and the generated file labels those
+`boundary-scope:` so the two are never confused.
 
 **Each one has to be named.** `report -inst X` covers *only* X — it does not
 recurse, and the legacy `report` command has no `-recursive` option at all
@@ -663,18 +704,21 @@ one line** of `dm_csrs`, `dm_mem` or `dm_sba`. An unknown instance path is
 reported as an empty section rather than an error, so `dm_cov.sh` now warns when
 an instance produces nothing.
 
-Current Debug Module code coverage, merged across all 26 tests (2026-09-16).
-"Debug Module" is `i_dm_top` and `i_dmi_jtag` **and everything under them** —
-19 instances, including the debug ROM, the DTM's TAP and both halves of its
-clock-domain crossing:
+Current debug-subsystem code coverage, merged across the whole suite
+(2026-09-18):
 
-| Metric | Raw | Unreachable code excluded |
+| Metric | Raw | Unreachable and out-of-scope excluded |
 |---|---:|---:|
-| Block | 96.87% (464/479) | **100%** (464/464, 15 excluded) |
-| Expression | 91.67% (66/72) | **100%** (66/66, 8 excluded) |
-| Toggle | 74.11% (6673/9004) | **100%** (6673/6673, 2331 excluded) |
-| FSM states | **100%** (30/30) | 100% |
-| FSM transitions | **100%** (43/43) | 100% |
+| Block | 84.38% (578/685) | **100%** (566/566, 119 excluded) |
+| Expression | 82.22% (74/90) | **100%** (74/74, 19 excluded) |
+| Toggle | 27.45% (11981/43650) | **100%** (8517/8517, 35133 excluded) |
+| FSM states | 86.67% (39/45) | **100%** (39/39, 6 excluded) |
+| FSM transitions | 80.00% (56/70) | **100%** (56/56, 14 excluded) |
+
+The raw column now includes the two boundary instances whole — the entire
+testharness and the `ariane` wrapper — which is why it is much lower than the
+DM-only figure this table used to show; almost all of that difference is the
+rest of the SoC being scoped out, not coverage lost.
 
 Per instance: `bash mk/dm_cov.sh` prints both tables; `out/dm_code_excl.rpt`
 has every item.
@@ -690,8 +734,15 @@ What the 100% rests on, stated plainly:
 - **Three rules are argued from the RTL, not proven** and say so: the response
   FIFO never fills, and the CDC is always ready when the DTM asks (2 blocks,
   4 expression rows, 9 bits).
-- **Two rules are testbench limits, labelled as waivers**: one power-on reset
-  and one TRST per run (20 bits).
+- **Testbench limits are labelled as waivers**, not as unreachability: one
+  power-on reset and one TRST per run, `+debug_disable` never passed, and the
+  AXI crossbar never backpressuring the DM master's AW/W.
+- **The DM's two bus bridges are generic IP used one narrow way.** `axi2mem`
+  and CVA6's `axi_adapter` implement bursts, wrapping addresses and atomics;
+  the DM is wired `type_i = SINGLE_REQ`, `amo_i = AMO_NONE`, one access at a
+  time, id `'0`, and its memory region is a single 4 KiB page. Those paths —
+  including five FSM states and fourteen transitions — are excluded with that
+  wiring cited.
 - **Measured scope has one known gap:** toggle coverage of arrays of structs
   (`hartinfo_aligned`) is off — `set_toggle_scoring -sv_mda_of_struct` crashes
   `xmelab` 23.03.
@@ -741,6 +792,12 @@ it.
 | RTL-009 | `dtmcs.dmihardreset` is not implemented | [#152](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this DTM predates upstream's support; upstream already has it ([pulp-platform/riscv-dbg#87](https://github.com/pulp-platform/riscv-dbg/issues/87), [#123](https://github.com/pulp-platform/riscv-dbg/pull/123)) |
 | RTL-010 | A stepped instruction that traps runs the handler's first instruction before halting | already filed upstream by a third party — [openhwgroup/cva6#3429](https://github.com/openhwgroup/cva6/issues/3429) |
 | RTL-011 | A stepped `mret`/`sret` reports `dpc`=pc+4 and the pre-return privilege | [#159](https://github.com/10x-Engineers/riscv-dbg-vip/issues/159) — same ordering upstream; not yet raised there |
+| RTL-012 | A trigger with `action=1` reports `dcsr.cause`=3 (haltreq), not 2 | [#161](https://github.com/10x-Engineers/riscv-dbg-vip/issues/161) — regression from cva6 #3418; not yet raised upstream |
+| RTL-013 | On RV64, `tdata1=0` is ignored, so a trigger cannot be disabled | [#162](https://github.com/10x-Engineers/riscv-dbg-vip/issues/162) — present on upstream master; not yet raised upstream |
+| RTL-014 | `icount` counts instructions in modes where it is disabled | [#163](https://github.com/10x-Engineers/riscv-dbg-vip/issues/163) — present on upstream master |
+| RTL-015 | `etrigger`/`itrigger` never match in S-mode without `textra` | [#164](https://github.com/10x-Engineers/riscv-dbg-vip/issues/164) — present on upstream master |
+| RTL-016 | `itrigger` fires when the handler returns, not before it runs | [#165](https://github.com/10x-Engineers/riscv-dbg-vip/issues/165) — present on upstream master |
+| RTL-017 | No re-entrancy protection for `action=0` triggers (Sdtrig SHOULD) | [#166](https://github.com/10x-Engineers/riscv-dbg-vip/issues/166) — present on upstream master |
 
 RTL defects are deliberately **not** attached to any milestone — milestones track
 development work. RTL findings are tracked in that file and upstream.

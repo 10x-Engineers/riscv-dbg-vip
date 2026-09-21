@@ -228,7 +228,7 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     localparam logic [3:0] TRIG_MCONTROL6    = 4'd6;
     localparam logic [3:0] TRIG_TMEXTTRIGGER = 4'd7;
     localparam logic [3:0] TRIG_DISABLED     = 4'd15;
-    localparam int         TRIG_TYPE_LSB_RV32 = 28;  // tdata1[31:28] on RV32
+    localparam int         TRIG_TYPE_LSB_RV32 = 28;  // tdata1[31:28] on RV32, [63:60] on RV64
 
     // ── Computed sample values ────────────────────────────────────────────────
     //
@@ -359,6 +359,12 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     // data0 write (the operand), then command write (the trigger) — so decoding a
     // trigger's configured type needs the operand remembered from the prior write.
     logic [31:0] last_data0_wr = '0;
+    //: Last value staged into data1, the upper half of a 64-bit operand. On an
+    //: RV64 hart tdata1.type lives at [63:60], so a 64-bit tdata1 write carries
+    //: the type here and data0 holds only the low fields. Reading the type from
+    //: data0 alone made every cp_trigger_type bin read 0 once the sequences
+    //: started writing tdata1 64-bit.
+    logic [31:0] last_data1_wr = '0;
 
     // ══════════════════════════════════════════════════════════════════════════
     // Covergroup: DMI access shape
@@ -1511,7 +1517,10 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
                 cg_trigger.sample(
                     cmd_regno,
                     (cmd_regno == CSR_TDATA1) && t.dmi_wdata[CMD_WRITE],
-                    last_data0_wr[TRIG_TYPE_LSB_RV32 +: 4]);
+                    // aarsize=3 is a 64-bit transfer: the type is in data1.
+                    (t.dmi_wdata[CMD_AARSIZE_LSB +: 3] == 3'd3)
+                        ? last_data1_wr[TRIG_TYPE_LSB_RV32 +: 4]
+                        : last_data0_wr[TRIG_TYPE_LSB_RV32 +: 4]);
         end
         else if (t.dmi_addr == ADDR_ABSTRACTCS && is_read) begin
             pending_read_addr  = ADDR_ABSTRACTCS;
@@ -1527,6 +1536,8 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             cg_data0_access.sample(t.dmi_op);
             if (t.dmi_addr == ADDR_DATA0 && is_write)
                 last_data0_wr = t.dmi_wdata;               // stage operand for trigger decode
+            if (t.dmi_addr == ADDR_DATA0 + 7'd1 && is_write)
+                last_data1_wr = t.dmi_wdata;               // upper half of a 64-bit operand
         end
 
         // ── Program Buffer write ─────────────────────────────────────────────

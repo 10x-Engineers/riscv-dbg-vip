@@ -600,8 +600,8 @@ behaviour:
 
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
-| NSTEP-001-S | Stimulate | From M-mode, set `icount` with `count=1`, `action=0`, `m=0`; `mret` to U-mode | `Sdext.html#stepicount` | P2 | Not started | |
-| NSTEP-001-C | Check | Exactly one U-mode instruction retires before the trap back to M-mode | `Sdext.html#stepicount` | P2 | Not started | |
+| NSTEP-001-S | Stimulate | From M-mode, set `icount` with `count=1`, `action=0`, `m=0`; `mret` to U-mode | `Sdext.html#stepicount` | P2 | Pass | `native_icount` (sw/native_icount.S), count 1 and 2 |
+| NSTEP-001-C | Check | Exactly one U-mode instruction retires before the trap back to M-mode | `Sdext.html#stepicount` | P2 | Fail | RTL-014 (#163): the count also runs down in M, so the U instruction is never stepped |
 | NSTEP-002-S | Stimulate | Repeat NSTEP-001 with an enabled interrupt pending | `Sdext.html#stepicount` | P2 | Not started | |
 | NSTEP-002-C | Check | The interrupt fires — `icount` provides **no** masking, unlike `dcsr.stepie` | `Sdext.html#stepicount` | P2 | Not started | Inverts SSTEP-006 |
 | NSTEP-003-S | Stimulate | Clear `mstatus.MIE` before stepping, then step | `Sdext.html#stepicount` | P2 | Not started | The spec's prescribed workaround |
@@ -613,6 +613,25 @@ behaviour:
 | NSTEP-006-C | Check | Stepping in the same privilege mode as the debug stub behaves per §`nativestep` | `debugger_implementation.html#nativestep` | P3 | Not started | Appendix A flags this case as more complicated |
 | NSTEP-007-V | Cover | `icount` step from = {U-mode with M-mode stub, same privilege as stub} | `Sdext.html#stepicount` | P2 | Not started | |
 | NSTEP-008-V | Cover | Native-step guarantee × privilege relationship | `Sdext.html#stepicount` | P2 | Not started | `x_guarantee_x_privilege` — stepping at the stub's own privilege makes the `mstatus` edit visible to the program being debugged |
+
+## 3.10a Native debug (Sdtrig `action=0`, no debugger)
+
+Self-checking firmware, run through the `run_elf` scenario, which reads the
+program's own verdict from `tohost`. `native_*` programs are in
+`cva6_sim/sw/`; `act_*` are riscv-arch-test (ACT4) programs built by
+`mk/act_build.sh` with Spike as the reference. Every `native_*` program passes
+on Spike. Operation catalog: VERIFICATION_STRATEGY.md, "Sdext & Trigger Module — Native-Debugging Verification Strategy".
+
+| ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
+|---|---|---|---|---|---|---|
+| NATIVE-OP1-C | Check | `ebreak` with `dcsr.ebreakm=0` is an ordinary breakpoint exception (`mcause=3`, `mepc` at the ebreak) | `Sdext.html#csr-dcsr` | P1 | Pass | `debug_entry_uvm` TC-DCSR-012 |
+| NATIVE-OP2-C | Check | `action=0` triggers raise a breakpoint exception: `mcontrol6` execute/load/store, `itrigger`, `etrigger` | `Sdtrig.html#nativetrigger` | P1 | Fail | `act_sdtrig_mcontrol6` (RTL-013), `native_etrigger` (RTL-015), `native_itrigger` (RTL-016) |
+| NATIVE-OP3-C | Check | Native single-step with `icount`: fires after `count` instructions in enabled modes, `tval`=0, `pending` cleared | `Sdtrig.html` icount | P1 | Fail | `native_icount`, `act_sdtrig_icount` -- RTL-014 |
+| NATIVE-OP4-C | Check | Re-entrancy: an `action=0` trigger does not fire in M-mode while `MIE`=0 (no `tcontrol`) | `Sdtrig.html#nativetrigger` | P2 | Fail | `native_reentrancy` -- RTL-017 (a SHOULD) |
+| NATIVE-OP5-C | Check | The hit bits identify which trigger fired; `tval` is the matched address | `Sdtrig.html` mcontrol6 | P1 | Pass | `native_hit` |
+| NATIVE-OP6-C | Check | Context-scoped triggers (`mcontext`/`scontext`/`textra`) | `Sdtrig.html` textra | P3 | N/A | This build has `SdtrigSupportTextra=0`: no `textra`, `scontext` or `mcontext` |
+| NATIVE-OP7-C | Check | `dcsr`, `dpc`, `dscratch0/1` raise illegal instruction outside Debug Mode | `Sdext.html` | P1 | Pass | `native_dbgcsr` |
+| NATIVE-ACT-C | Check | Trigger CSR access from M-mode (`tselect`/`tdata1-2`/`tinfo`) | `Sdtrig.html` | P1 | Pass | `act_sdtrig_access` |
 
 ## 3.11 Debug Mode entry and exit
 
@@ -664,20 +683,20 @@ untested area in this plan.
 | TRIG-001-C | Check | Trigger count and each trigger's `type` are discoverable | `Sdtrig.html#enumeration` | P0 | Pass | |
 | TRIG-002-S | Stimulate | Write `tselect` beyond the implemented count | `Sdtrig.html` | P1 | Pass | |
 | TRIG-002-C | Check | `tselect` reads back a legal (implemented) index | `Sdtrig.html` | P1 | Pass | |
-| TRIG-003-S | Stimulate | Configure `mcontrol6` as an execute trigger at a known instruction address; run | `Sdtrig.html#mcontrol6` | P0 | Not started | |
-| TRIG-003-C | Check | Debug Mode entered at that address; `dcsr.cause=2` (trigger) | `Sdext.html#csr-dcsr` | P0 | Not started | |
+| TRIG-003-S | Stimulate | Configure `mcontrol6` as an execute trigger at a known instruction address; run | `Sdtrig.html#mcontrol6` | P0 | Pass | `debug_entry_uvm` TC-DCSR-011; the hart runs into the target with no halt request |
+| TRIG-003-C | Check | Debug Mode entered at that address; `dcsr.cause=2` (trigger) | `Sdext.html#csr-dcsr` | P0 | Fail | RTL-012 (#161): Debug Mode is entered at the target but `dcsr.cause`=3 |
 | TRIG-004-S | Stimulate | Configure `mcontrol6` as a load trigger on a known data address; run a load | `Sdtrig.html#mcontrol6` | P0 | Not started | |
 | TRIG-004-C | Check | `dcsr.cause=2`; `dpc` is the load instruction | `Sdtrig.html#mcontrol6` | P0 | Not started | |
 | TRIG-005-S | Stimulate | Configure a store trigger; run a store | `Sdtrig.html#mcontrol6` | P0 | Not started | |
 | TRIG-005-C | Check | `dcsr.cause=2` | `Sdtrig.html#mcontrol6` | P0 | Not started | |
-| TRIG-006-S | Stimulate | Write `tdata1=0` for a configured trigger; re-run the matching access | `Sdtrig.html` | P1 | Pass | |
-| TRIG-006-C | Check | No trigger fires | `Sdtrig.html` | P1 | Pass | |
+| TRIG-006-S | Stimulate | Write `tdata1=0` for a configured trigger; re-run the matching access | `Sdtrig.html` | P1 | Pass | `trigger_uvm` TC-TRIG-006 (DMI); riscv-arch-test `SdtrigSm_Mcontrol6-00` (native) |
+| TRIG-006-C | Check | No trigger fires | `Sdtrig.html` | P1 | Fail | RTL-013 (#162): on RV64 `tdata1=0` is ignored; the trigger stays armed and fires. Previously marked Pass without being checked |
 | TRIG-007-S | Stimulate | Attempt `tdata1` writes while the hart is running | `Sdtrig.html` | P1 | Not started | |
 | TRIG-007-C | Check | Behaviour matches the spec's restriction on updates from a running hart | `Sdtrig.html` | P1 | Not started | |
-| TRIG-008-S | Stimulate | Configure `icount` with `count=1` | `Sdtrig.html#icount` | P2 | Not started | Feeds §3.10 |
-| TRIG-008-C | Check | Fires after exactly one instruction | `Sdtrig.html#icount` | P2 | Not started | |
-| TRIG-009-S | Stimulate | Configure `itrigger` and `etrigger` | `Sdtrig.html#itrigger` | P2 | Not started | |
-| TRIG-009-C | Check | Fire on the configured interrupt and exception respectively | `Sdtrig.html#itrigger` | P2 | Not started | |
+| TRIG-008-S | Stimulate | Configure `icount` with `count=1` | `Sdtrig.html#icount` | P2 | Pass | `native_icount`; riscv-arch-test `SdtrigSm_Icount-00` (enabled by `mk/act_build.sh`) |
+| TRIG-008-C | Check | Fires after exactly one instruction | `Sdtrig.html#icount` | P2 | Fail | RTL-014 (#163) |
+| TRIG-009-S | Stimulate | Configure `itrigger` and `etrigger` | `Sdtrig.html#itrigger` | P2 | Pass | `native_itrigger`, `native_etrigger` |
+| TRIG-009-C | Check | Fire on the configured interrupt and exception respectively | `Sdtrig.html#itrigger` | P2 | Fail | RTL-015 (#164): etrigger never matches in S; RTL-016 (#165): itrigger fires after the handler returns |
 | TRIG-010-C | Check | Trigger priority against a simultaneous exception matches §5.1.3 | `Sdtrig.html#5-1-3-priority` | P2 | Not started | |
 | TRIG-011-V | Cover | Trigger type = {execute, load, store, `icount`, `itrigger`, `etrigger`} | `Sdtrig.html` | P1 | Not started | |
 | TRIG-012-V | Cover | Privilege enable bits = {m, s, u} × fired/not-fired | `Sdtrig.html#mcontrol6` | P1 | Not started | |

@@ -66,6 +66,13 @@ DCSR_STEP_BIT = 2
 MASK32 = 0xFFFF_FFFF
 
 
+def _reads_back_as_written(regno: int) -> bool:
+    """Mirror of dm_ref_model.sv reads_back_as_written(): the trigger CSRs
+    (0x7A0-0x7AF) legalize what is written (tselect is WARL, tdata1-3 depend on
+    the trigger type), so the last write is not a prediction."""
+    return not (0x07A0 <= regno <= 0x07AF)
+
+
 @dataclass(frozen=True)
 class DeclaredConfig:
     """The declared implementation, field for field `dm_defines_pkg::dm_cfg_t`.
@@ -411,7 +418,7 @@ class DMPredictor:
             elif regno == GPR_X0_REGNO:
                 self.data0_pending_valid = True
                 self.data0_pending_value = 0
-            elif regno in self.shadow_regs:
+            elif regno in self.shadow_regs and _reads_back_as_written(regno):
                 self.data0_pending_valid = True
                 self.data0_pending_value = self.shadow_regs[regno]
             else:

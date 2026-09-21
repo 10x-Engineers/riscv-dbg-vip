@@ -514,6 +514,14 @@ class dm_ref_model;
     end
   endfunction
 
+  // Whether a register reads back the value last written to it. The trigger
+  // CSRs do not: tselect is WARL over the implemented trigger indices and
+  // tdata1-3 legalize per trigger type (Sdtrig #5), so the written value is not
+  // a prediction. Their writes are still recorded (nothing else reads them).
+  local function bit reads_back_as_written(bit [15:0] regno);
+    return !(regno inside {[16'h07A0 : 16'h07AF]});
+  endfunction
+
   // ── Abstract command (spec #3.7.1.1; bit layout from riscv_dm.py
   // read_gpr()/write_gpr()/execute_progbuf(): cmd[18]=postexec,
   // cmd[17]=transfer, cmd[16]=write, cmd[15:0]=regno)
@@ -537,7 +545,7 @@ class dm_ref_model;
           // independent of anything this traffic has written.
           data0_pending_valid = 1'b1;
           data0_pending_value = 32'h0;
-        end else if (shadow_regs.exists(regno)) begin
+        end else if (shadow_regs.exists(regno) && reads_back_as_written(regno)) begin
           data0_pending_valid = 1'b1;
           data0_pending_value = shadow_regs[regno];
         end else begin
