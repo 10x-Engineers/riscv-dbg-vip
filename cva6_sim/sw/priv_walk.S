@@ -35,9 +35,32 @@ main:
 # ── M ────────────────────────────────────────────────────────────────────
 # Kept short on purpose: M already gets the whole trap handler and both mret
 # setups, so it does not need a long body to be well represented.
+# The three blocks dwell for a comparable number of instructions on purpose:
+# the debugger catches a privilege by halting a freely running hart, so a block
+# that is over in four instructions is almost never the one caught. M used to
+# be exactly that, and every asynchronous halt landed in U.
 m_block:
         addi    a0, a0, 1
         addi    a0, a0, 1
+        addi    a0, a0, 1
+        addi    a0, a0, 1
+        addi    a0, a0, 1
+        addi    a0, a0, 1
+        addi    a0, a0, 1
+        addi    a0, a0, 1
+        nop
+        nop
+        nop
+        nop
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        addi    a1, a1, 1
+        nop
         nop
         nop
 

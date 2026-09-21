@@ -96,11 +96,13 @@ tests:
   - name: csr_access
     config: configs/csr_access_uvm.json
     covers: [AC-004, RAP-020, RAP-023]
-    expect: fail
     why: >-
-      TC-DCSR-003 asserts dscratch0/1 survive a program-buffer command. With
-      hartinfo.nscratch=2 the DM owns them, so the expectation is wrong rather
-      than the RTL. Re-specify the row, then this becomes a pass.
+      CSR access through Access Register, using dscratch0/1. TC-DCSR-003 reads
+      hartinfo.nscratch and requires what the DM owes for that value: the
+      registers hold while the hart is halted and nothing else runs, and stay
+      accessible after the DM has used them as scratch. It used to assert that
+      the debugger's value survives a resume, which the DM never promised with
+      nscratch=2.
 
   - name: cmderr
     config: configs/cmderr_uvm.json
@@ -145,16 +147,22 @@ tests:
   - name: priv_irq
     config: configs/priv_irq_uvm.json
     elf: sw/priv_walk.elf
-    timeout_s: 600
+    timeout_s: 2400
     covers: [DM-011-V, SSTEP-006, SSTEP-007, SSTEP-018-V, SSTEP-022-V]
-    expect: fail
     why: >-
-      Cycles M -> S -> U and steps in each. Currently FAILS: the halt phase
-      catches S but never U, and the step walk stays in M, so the privilege
-      bins are only partly filled. dcsr.prv itself is correct -- a separate
-      priv_lvl_q diagnostic confirmed that -- so this is the test not yet
-      driving the hart where it needs to go, not an RTL defect. Recorded as
-      failing rather than relaxed to make the suite green.
+      Cycles M -> S -> U with a timer interrupt left pending, and catches each
+      privilege by halting the freely running hart. The dwell between resume
+      and halt is swept in TCK ticks: a dwell measured in host time, or in
+      whole DMI reads, stays phase-locked to the program's own loop and lands
+      in the same block every time (first always U, then always M).
+    expect: fail
+    known: >-
+      7/10. The halt phase now catches all three privileges (U, S and M). The
+      two step passes fail on RTL-011 (#159): a stepped mret/sret reports the
+      pre-return privilege and the resume puts that privilege back, so the
+      program's privilege walk is undone one step at a time -- the hart
+      executes the S and U blocks (dpc walks through them) but always in M.
+      Not a test-side problem: stepping cannot leave M on this DUT.
 
   # ── Triggers and external ─────────────────────────────────────────────
   - name: trigger

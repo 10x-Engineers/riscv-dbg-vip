@@ -43,13 +43,17 @@ DCSR_PRV_MASK = 0x3
 
 REGNO_DCSR = 0x07B0
 PRV_NAME = {0: "U", 1: "S", 3: "M"}
+PRV_M = 3
 
 #: Steps per stepie pass. Deliberately modest: each step costs a resume, a
 #: dmstatus poll and an abstract command, so ~10 DMI round trips. 180 steps
 #: overran a 25-minute timeout. The privilege bins are filled by the halt/resume
 #: phase below, which is far cheaper; stepping only has to cover the stepie
 #: cross, and 40 is plenty for that.
-STEPS_PER_PASS = 20
+#: Steps per pass. The program's M -> S -> U loop is about 70 instructions, so
+#: a pass has to be longer than that to step in more than one privilege: 20
+#: steps never left the block the hart happened to halt in.
+STEPS_PER_PASS = 90
 
 
 def _wait_halted(dm: RISCVDebug, timeout: float = 2.0):
@@ -150,16 +154,27 @@ def build_priv_irq_sequence(
             seen = ", ".join(f"{PRV_NAME.get(p, p)}={n}"
                              for p, n in sorted(privs.items()))
             state[label] = privs
+            span = (f"dpc {min(pcs):#x}..{max(pcs):#x} over {len(set(pcs))} distinct"
+                    if pcs else "no dpc samples")
+            # Stepping cannot leave M on this DUT: RTL-011 (#159). A stepped
+            # mret/sret reports the pre-return privilege in dcsr.prv, and the
+            # resume then restores that privilege, so the program's M -> S -> U
+            # walk is undone one step at a time -- the hart executes the S and U
+            # blocks' instructions (the dpc span shows it) but always in M.
+            stuck_in_M = set(privs) == {PRV_M} and len(set(pcs)) > 1
+            note = ""
+            if failures:
+                note = f"; {len(failures)} failure(s): {failures[0]}"
+            elif stuck_in_M:
+                note = ("; every step stayed in M while dpc walked through the "
+                        "S and U blocks -- RTL-011 (#159): a stepped xRET "
+                        "reports the pre-return privilege and the resume puts "
+                        "it back, so the privilege change is lost")
+            elif len(privs) <= 1:
+                note = "; only one privilege reached and dpc did not move"
             return StepResult(
                 ok=(not failures) and len(privs) > 1,
-                msg=f"{label}: privileges stepped in -- {seen or 'none'}; "
-                    f"dpc {min(pcs):#x}..{max(pcs):#x} over {len(set(pcs))} distinct"
-                    if pcs else f"{label}: no steps completed"
-                    + (f"; {len(failures)} failure(s): {failures[0]}"
-                       if failures else "")
-                    + ("" if len(privs) > 1 else
-                       "; only one privilege reached -- the program never left M, "
-                       "so the privilege crosses stay unfilled"),
+                msg=f"{label}: privileges stepped in -- {seen or 'none'}; {span}{note}",
             )
         return run
 
@@ -170,12 +185,29 @@ def build_priv_irq_sequence(
     # cost hundreds of round trips to reach the same bin.
     def catch_privileges():
         privs = {}
-        for i in range(12):
+        for i in range(20):
             dm.resume_no_wait()
-            # Varying the dwell is what makes this work: a fixed delay
-            # resynchronises with the program's own loop and lands in the same
-            # place every time.
-            time.sleep(0.002 + (i % 7) * 0.003)
+            # The dwell has to vary in SIMULATED time. time.sleep() is host
+            # time: the simulator advances by whatever it advances during it,
+            # so the resume->halt round trip stayed phase-locked to the
+            # program's own loop and every halt landed in the same block --
+            # first always U, then (after the program was rebalanced) always M.
+            # An idle dmstatus read is one JTAG scan of simulated time, so a
+            # varying number of them is a dwell the program cannot resonate
+            # with.
+            # A DMI read is a whole JTAG scan -- hundreds of core cycles, far
+            # coarser than the program's ~70-instruction loop, so varying the
+            # number of reads still lands in the same block. Idle TCK ticks are
+            # the fine-grained knob: a few core cycles each.
+            dm.t.read(DMI.DMSTATUS)
+            # Sweep the dwell widely: the phase that matters is (dwell mod the
+            # program's loop period), and one scan already overshoots the loop,
+            # so the sweep is in TCK ticks and spans several loop periods.
+            ticks = 1 + (i * 13) % 97
+            while ticks:
+                chunk = min(ticks, 32)
+                dm.t.tms_walk([0] * chunk)
+                ticks -= chunk
             dm.halt()
             halted, _ = _wait_halted(dm, timeout=1.0)
             if not halted:

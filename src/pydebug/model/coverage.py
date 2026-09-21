@@ -210,6 +210,10 @@ class DebugCoverageModel:
         self._excluded[e.key] = e
         self._excluded_hits[e.key] = 0
 
+    #: Last data0/data1 written, for decoding an abstract command's operand.
+    _staged_data0 = 0
+    _staged_data1 = 0
+
     def _build_bins(self) -> None:
         self._build_dmi_access_bins()
         self._build_dmcontrol_field_bins()
@@ -217,6 +221,82 @@ class DebugCoverageModel:
         self._build_dmstatus_field_bins()
         self._build_all_any_bins()
         self._build_cross_bins()
+        self._build_external_debug_bins()
+
+    # ── External-debug covergroups (the DMI-visible half of covergroups.sv) ──
+    #
+    # Bin names match the SystemVerilog side exactly -- group "cg_x" and bin
+    # "cp_y.z" -- so mk/fcov_crosscheck.py can compare a Python replay against
+    # the UVM run's own functional report, bin for bin.
+    #
+    # Only what a DMI observer can see is modelled. cg_abstract_cmd, cg_sba,
+    # cg_debug_entry, cg_step_external and cg_hart_mode sample the DM and hart
+    # backdoors (abstractcs/sbcs state, dcsr, dpc, privilege, the instruction a
+    # step retired), which no replay of the DMI stream can reconstruct: they are
+    # registered as exclusions below rather than left as a silent gap.
+
+    #: DMI addresses this slice decodes (riscv_dm.DMI).
+    _DATA0, _DATA11, _HARTINFO, _ABSTRACTCS, _COMMAND = 0x04, 0x0F, 0x12, 0x16, 0x17
+    _PROGBUF0, _PROGBUF15, _DMCS2 = 0x20, 0x2F, 0x32
+    _SBCS, _SBADDRESS0, _SBDATA0, _HALTSUM0 = 0x38, 0x39, 0x3C, 0x40
+
+    #: regno classes (#3.7.1.1): CSRs 0x0000-0x0fff, GPRs 0x1000-0x101f.
+    _REGNO_CSR_HI, _REGNO_GPR_LO, _REGNO_GPR_HI = 0x0FFF, 0x1000, 0x101F
+
+    #: The trigger CSRs, by regno (Sdtrig Ch.5), and the tdata1.type values.
+    _TRIGGER_CSRS = {0x07A0: "tselect", 0x07A1: "tdata1", 0x07A2: "tdata2",
+                     0x07A3: "tdata3", 0x07A4: "tinfo"}
+    _TRIGGER_TYPES = {2: "mcontrol", 3: "icount", 4: "itrigger",
+                      5: "etrigger", 6: "mcontrol6", 7: "tmexttrigger"}
+
+    def _build_external_debug_bins(self) -> None:
+        def add(group, bins, spec, why):
+            for name in bins:
+                self._add(group, name, spec, why)
+
+        add("cg_command_write", ("cp_write.read", "cp_write.write"),
+            "#3.14.14", "abstract-command direction")
+        add("cg_command_write", ("cp_regno_class.gpr", "cp_regno_class.csr"),
+            "#3.7.1.1", "the two register namespaces this project exercises")
+        add("cg_abstractcs_read", ("cp_busy.idle", "cp_busy.busy"),
+            "#3.14.6", "a command seen in flight, and not")
+        add("cg_abstractcs_read", ("cp_has_progbuf.present", "cp_has_data.present"),
+            "#3.14.6", "discovery: progbufsize and datacount read non-zero")
+        add("cg_progbuf", ("cp_written.written", "cp_executed.executed"),
+            "#3.14.15", "the Program Buffer written, and executed via postexec")
+        add("cg_sbcs", ("cp_readonaddr.off", "cp_readonaddr.on"),
+            "#3.14.20", "read-on-address-write armed, and not")
+        add("cg_sbcs", ("cp_sbbusy.idle",),
+            "#3.14.20", "sbcs read back with the bus idle")
+        add("cg_sb_access", ("cp_access.addr_write", "cp_access.data_write",
+                             "cp_access.data_read"),
+            "#3.10", "the three System Bus Access shapes")
+        add("cg_dmcs2_write", ("cp_hgselect.halt_group", "cp_hgselect.resume_group",
+                               "cp_grouptype.halt", "cp_grouptype.ext_trigger",
+                               "cp_group.ungrouped", "cp_group.grouped"),
+            "#3.14.17", "hart/external-trigger group selection")
+        add("cg_hartinfo_read", ("cp_dataaccess.observed",),
+            "#3.14.3", "hartinfo read at all")
+        add("cg_haltsum0_read", ("cp_haltsum0.none_halted", "cp_haltsum0.some_halted"),
+            "#3.14.9", "the summary with no hart halted, and with one")
+        add("cg_data0_access", ("cp_op.read", "cp_op.write"),
+            "#3.14.11", "the abstract data register as operand and as result")
+        add("cg_trigger", tuple(f"cp_trigger_csr.{n}" for n in self._TRIGGER_CSRS.values()),
+            "Sdtrig Ch.5", "which trigger CSR the debugger reached")
+        add("cg_trigger", tuple(f"cp_trigger_type.{n}" for n in self._TRIGGER_TYPES.values()),
+            "Sdtrig Ch.5", "the trigger type configured by a tdata1 write")
+
+        for group, why in (
+            ("cg_abstract_cmd", "samples abstractcs.cmderr from the DM backdoor"),
+            ("cg_sba", "samples sbcs.sbaccess/sberror from the DM backdoor"),
+            ("cg_debug_entry", "samples dcsr.cause/prv from the hart backdoor"),
+            ("cg_step_external", "samples the instruction a step retired, from the hart"),
+            ("cg_hart_mode", "samples the hart's debug_mode signal directly"),
+        ):
+            self._exclude(group, "(whole covergroup)",
+                          f"Not modelled here: {why}. A replay of the DMI stream "
+                          f"cannot see it, so it is stated as out of scope rather "
+                          f"than reported as an unfilled bin.")
 
     def _build_dmi_access_bins(self) -> None:
         """Which registers we touched, and in which direction."""
@@ -758,6 +838,91 @@ class DebugCoverageModel:
             self._sample_dmstatus_read(readback or 0)
         elif op == OP_WRITE and addr == DMSTATUS.address:
             self._hit("dmi_access", "write:dmstatus")
+        else:
+            self._sample_external_debug(op, addr, data, readback)
+
+    def _sample_external_debug(self, op: str, addr: int, data: Optional[int],
+                               readback: Optional[int]) -> None:
+        """The DMI-visible external-debug covergroups (see _build_external_debug_bins).
+
+        Stateful in two places, exactly as the SV side is: an abstract-command
+        write is decoded against the data0/data1 written just before it (the
+        trigger type lives in the operand, and on RV64 in its upper half), and
+        abstractcs reads are decoded for discovery fields.
+        """
+        w, r = data or 0, readback or 0
+        if op == OP_WRITE and addr == self._DATA0:
+            self._staged_data0 = w
+        elif op == OP_WRITE and addr == self._DATA0 + 1:
+            self._staged_data1 = w
+
+        # The whole data0..data11 window, as the SV side samples it.
+        if self._DATA0 <= addr <= self._DATA11 and op in (OP_READ, OP_WRITE):
+            self._hit("cg_data0_access", f"cp_op.{'write' if op == OP_WRITE else 'read'}")
+
+        elif op == OP_WRITE and addr == self._COMMAND:
+            transfer, write = (w >> 17) & 1, (w >> 16) & 1
+            regno, aarsize = w & 0xFFFF, (w >> 20) & 0x7
+            if transfer:
+                self._hit("cg_command_write", f"cp_write.{'write' if write else 'read'}")
+                if regno <= self._REGNO_CSR_HI:
+                    self._hit("cg_command_write", "cp_regno_class.csr")
+                elif self._REGNO_GPR_LO <= regno <= self._REGNO_GPR_HI:
+                    self._hit("cg_command_write", "cp_regno_class.gpr")
+                csr = self._TRIGGER_CSRS.get(regno)
+                if csr:
+                    self._hit("cg_trigger", f"cp_trigger_csr.{csr}")
+                    if regno == 0x07A1 and write:
+                        # tdata1.type is at [XLEN-1:XLEN-4]: a 64-bit transfer
+                        # (aarsize=3) carries it in data1, a 32-bit one in data0.
+                        operand = self._staged_data1 if aarsize == 3 else self._staged_data0
+                        name = self._TRIGGER_TYPES.get((operand >> 28) & 0xF)
+                        if name:
+                            self._hit("cg_trigger", f"cp_trigger_type.{name}")
+            if (w >> 18) & 1:
+                self._hit("cg_progbuf", "cp_executed.executed")
+
+        elif op == OP_READ and addr == self._ABSTRACTCS:
+            self._hit("cg_abstractcs_read", f"cp_busy.{'busy' if (r >> 12) & 1 else 'idle'}")
+            if (r >> 24) & 0x1F:
+                self._hit("cg_abstractcs_read", "cp_has_progbuf.present")
+            if (r >> 0) & 0xF:
+                self._hit("cg_abstractcs_read", "cp_has_data.present")
+
+        elif op == OP_WRITE and self._PROGBUF0 <= addr <= self._PROGBUF15:
+            self._hit("cg_progbuf", "cp_written.written")
+
+        elif addr == self._SBCS:
+            # sbreadonaddr is binned from whichever word this access carried --
+            # the value written, or the value read back -- and sbbusy only from
+            # a read, exactly as cg_sbcs is sampled.
+            word = w if op == OP_WRITE else r
+            self._hit("cg_sbcs", f"cp_readonaddr.{'on' if (word >> 20) & 1 else 'off'}")
+            if op == OP_READ and not (r >> 21) & 1:
+                self._hit("cg_sbcs", "cp_sbbusy.idle")
+
+        elif addr == self._SBADDRESS0 and op == OP_WRITE:
+            self._hit("cg_sb_access", "cp_access.addr_write")
+        elif addr == self._SBDATA0 and op in (OP_READ, OP_WRITE):
+            self._hit("cg_sb_access",
+                      f"cp_access.data_{'write' if op == OP_WRITE else 'read'}")
+
+        elif op == OP_WRITE and addr == self._DMCS2:
+            self._hit("cg_dmcs2_write",
+                      f"cp_hgselect.{'resume_group' if (w >> 2) & 1 else 'halt_group'}")
+            # dmcs2 (#3.14.17): hgselect[0], hgwrite[1], group[6:2],
+            # dmexttrigger[10:7], grouptype[11].
+            self._hit("cg_dmcs2_write",
+                      f"cp_grouptype.{'ext_trigger' if (w >> 11) & 1 else 'halt'}")
+            self._hit("cg_dmcs2_write",
+                      f"cp_group.{'grouped' if (w >> 2) & 0x1F else 'ungrouped'}")
+
+        elif op == OP_READ and addr == self._HARTINFO:
+            self._hit("cg_hartinfo_read", "cp_dataaccess.observed")
+
+        elif op == OP_READ and addr == self._HALTSUM0:
+            self._hit("cg_haltsum0_read",
+                      f"cp_haltsum0.{'some_halted' if r else 'none_halted'}")
 
     def _sample_dmcontrol_write(self, word: int) -> None:
         f = DMCONTROL.decode(word)

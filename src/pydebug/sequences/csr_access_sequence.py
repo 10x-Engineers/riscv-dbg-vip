@@ -2,6 +2,13 @@
 sequences/csr_access_sequence.py — CSR access via Access Register (TC-AC-005),
 using dscratch0/1 as the concrete CSR target (TC-DCSR-003).
 
+TC-DCSR-003 used to assert that the debugger's dscratch values survive a
+resume/halt cycle. That was the testplan being wrong, not the DUT: with
+hartinfo.nscratch=2 the DM owns dscratch0/1 for its own abstract-command and
+debug-ROM use, so a debugger must save and restore them. The check now reads
+nscratch and requires what the DM actually owes -- the registers hold while
+nothing else touches them, and stay accessible afterwards.
+
 CSR access is optional per spec #3.7.1.1 and is discovered by attempting it,
 not by querying a capability bit first — abstractcs.cmderr=2 ("not supported")
 is a legitimate pass here, same as TC-AC-005's own description states; only a
@@ -66,25 +73,53 @@ def build_csr_access_sequence(
         )
     session.add_step("TC-AC-005: dscratch0 write/read-back", tc_ac_005)
 
-    # ── TC-DCSR-003: dscratch0/1 survive a resume/halt cycle ──────────────
-    def tc_dcsr_003():
+    # ── TC-DCSR-003: dscratch0/1 hold while nothing else uses them ────────
+    def tc_dcsr_003a():
+        dm.write_gpr(DSCRATCH0_REGNO, pattern0)
+        dm.write_gpr(DSCRATCH1_REGNO, pattern1)
+        r0 = dm.read_gpr(DSCRATCH0_REGNO)
+        r1 = dm.read_gpr(DSCRATCH1_REGNO)
+        ok = (r0 == pattern0) and (r1 == pattern1)
+        return StepResult(
+            ok=ok,
+            msg=f"TC-DCSR-003: dscratch0/1 read back 0x{r0:08x}/0x{r1:08x} "
+                f"(wrote 0x{pattern0:08x}/0x{pattern1:08x})  "
+                f"{'OK' if ok else 'MISMATCH'}")
+    session.add_step("TC-DCSR-003: dscratch0/1 hold their value while halted",
+                     tc_dcsr_003a)
+
+    # ── TC-DCSR-003b: who owns dscratch across a resume ───────────────────
+    # hartinfo.nscratch (#3.14.3) is the DM telling the debugger how many
+    # dscratch registers IT uses for abstract commands and the debug ROM. With
+    # nscratch>0 the debugger's value is NOT expected to survive anything that
+    # runs the ROM -- it must save and restore them. Asserting preservation,
+    # as this check used to, tests the debugger's misunderstanding rather than
+    # the DM. What the DM does owe either way is that the registers stay
+    # accessible.
+    def tc_dcsr_003b():
+        nscratch = (dm.read_hartinfo() >> 20) & 0xF
         dm.write_gpr(DSCRATCH0_REGNO, pattern0)
         dm.write_gpr(DSCRATCH1_REGNO, pattern1)
         dm.resume()
         dm.halt()
         r0 = dm.read_gpr(DSCRATCH0_REGNO)
         r1 = dm.read_gpr(DSCRATCH1_REGNO)
-        ok = (r0 == pattern0) and (r1 == pattern1)
+        cmderr = (dm.read_abstractcs() >> 8) & 0x7
+        kept = (r0 == pattern0) and (r1 == pattern1)
+        if nscratch:
+            ok = cmderr == 0
+            verdict = ("still accessible after the DM used them"
+                       if ok else f"access failed, cmderr={cmderr}")
+            note = "kept the debugger's value anyway" if kept else "clobbered, as declared"
+        else:
+            ok = kept and cmderr == 0
+            verdict = "preserved" if ok else "NOT preserved"
+            note = "nscratch=0: the DM claims no scratch, so they must survive"
         return StepResult(
             ok=ok,
-            msg=f"TC-DCSR-003: dscratch0/1 after resume->halt: "
-                f"0x{r0:08x}/0x{r1:08x}, expected 0x{pattern0:08x}/0x{pattern1:08x} "
-                f"{'OK' if ok else 'MISMATCH'} (private Debug-Mode scratch, "
-                f"must not be disturbed by the hart running)",
-        )
-    session.add_step(
-        "TC-DCSR-003: dscratch0/1 preserved across resume/halt",
-        tc_dcsr_003,
-    )
+            msg=f"TC-DCSR-003: hartinfo.nscratch={nscratch}; after resume->halt "
+                f"dscratch0/1 read 0x{r0:08x}/0x{r1:08x}  {verdict} ({note})")
+    session.add_step("TC-DCSR-003: dscratch ownership across a resume",
+                     tc_dcsr_003b)
 
     return session

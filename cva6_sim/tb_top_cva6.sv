@@ -231,6 +231,28 @@ module tb_top_soc;
     assign hart_backdoor_if.commit_pc =
         dut.i_ariane.i_cva6.commit_instr_id_commit[0].pc;
 
+    // ── Native debug: the trap being taken, and the selected trigger ──────
+    // ex_i is the exception the commit stage is taking this cycle; the trigger
+    // module's outputs are what the hart would read from tselect/tdata1/tdata2.
+    assign hart_backdoor_if.trap_valid  = dut.i_ariane.i_cva6.csr_regfile_i.ex_i.valid;
+    assign hart_backdoor_if.trap_cause  = dut.i_ariane.i_cva6.csr_regfile_i.ex_i.cause;
+    assign hart_backdoor_if.mcause      = dut.i_ariane.i_cva6.csr_regfile_i.mcause_q;
+    assign hart_backdoor_if.mepc        = dut.i_ariane.i_cva6.csr_regfile_i.mepc_q;
+    assign hart_backdoor_if.mtval       = dut.i_ariane.i_cva6.csr_regfile_i.mtval_q;
+    assign hart_backdoor_if.mstatus_mie = dut.i_ariane.i_cva6.csr_regfile_i.mstatus_q.mie;
+`ifdef SDTRIG_PRESENT
+    assign hart_backdoor_if.tselect =
+        dut.i_ariane.i_cva6.csr_regfile_i.tm_gen.trigger_module_i.tselect_o;
+    assign hart_backdoor_if.tdata1 =
+        dut.i_ariane.i_cva6.csr_regfile_i.tm_gen.trigger_module_i.tdata1_o;
+    assign hart_backdoor_if.tdata2 =
+        dut.i_ariane.i_cva6.csr_regfile_i.tm_gen.trigger_module_i.tdata2_o;
+`else
+    assign hart_backdoor_if.tselect = '0;
+    assign hart_backdoor_if.tdata1  = '0;
+    assign hart_backdoor_if.tdata2  = '0;
+`endif
+
     assign hart_backdoor_if.irq_pending =
         |(dut.i_ariane.i_cva6.csr_regfile_i.mip_q &
           dut.i_ariane.i_cva6.csr_regfile_i.mie_q);

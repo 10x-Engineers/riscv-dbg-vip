@@ -318,14 +318,13 @@ stated exclusions) are in
 
 ## Known-failing tests
 
-Fourteen entries are not expected to pass. They are in the suite deliberately —
+Thirteen entries are not expected to pass. They are in the suite deliberately —
 removing a test because it fails is how a defect stops being tracked.
 
 | Test | Why | Detail |
 |---|---|---|
 | `hart_selection` (partial) | RTL-003 | A nonexistent hart reports `allrunning=1` |
-| `csr_access` | testplan bug, not RTL | `TC-DCSR-003` expects `dscratch0/1` to survive a program-buffer command; `hartinfo.nscratch=2` means the DM owns them |
-| `priv_irq` | test-side | The M→S→U walk does not drive the hart where the bins need it |
+| `priv_irq` | RTL-011 | The halt phase catches U, S and M; the step passes cannot leave M, because a stepped xRET reports the pre-return privilege and the resume restores it |
 | `dmi_error` | RTL-009 | `dmihardreset` is not implemented |
 | `dm_corners` | RTL-006/007/008 | `sbcs` reserved bits, `haltsum1-3` and `dmstatus` for a nonexistent hart |
 | `debug_entry` | RTL-012 | A trigger enters Debug Mode with `dcsr.cause`=3 |

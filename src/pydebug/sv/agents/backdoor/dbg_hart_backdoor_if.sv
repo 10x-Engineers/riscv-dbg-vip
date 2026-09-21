@@ -45,6 +45,30 @@ interface dbg_hart_backdoor_if (
   // ── Interrupt state, for stepie crosses ─────────────────────────────────
   logic        irq_pending;   // any enabled interrupt pending (mip & mie)
 
+  // ── Native debug (Sdtrig action=0) ──────────────────────────────────────
+  // A native trigger never touches the Debug Module: it raises an ordinary
+  // breakpoint exception the hart's own handler deals with. Nothing on the DMI
+  // side can see that, so the trap itself and the trigger that caused it are
+  // brought out here.
+  logic        trap_valid;    // an exception is being taken this cycle
+  logic [63:0] trap_cause;    // its cause (3 = breakpoint)
+  logic [63:0] mcause;
+  logic [63:0] mepc;
+  logic [63:0] mtval;
+  logic        mstatus_mie;   // for the re-entrancy rule: a native trigger
+                              // should not fire in M-mode while this is 0
+  logic [63:0] tselect;
+  logic [63:0] tdata1;        // the SELECTED trigger's tdata1
+  logic [63:0] tdata2;
+
+  //: tdata1.type, at [XLEN-1:XLEN-4] (Sdtrig 5.7.2).
+  function automatic logic [3:0] trigger_type(); return tdata1[63:60]; endfunction
+  //: tdata1.action, whose position depends on the type: mcontrol6 keeps it at
+  //: [15:12], icount/itrigger/etrigger at [5:0].
+  function automatic logic [5:0] trigger_action();
+    return (trigger_type() == 4'd6) ? {2'b0, tdata1[15:12]} : tdata1[5:0];
+  endfunction
+
   // ── Derived: dcsr field accessors ───────────────────────────────────────
   // Decoded here rather than at each sampling site, so a field-position change
   // is fixed once. Positions are from Sdext "Debug Control and Status".
