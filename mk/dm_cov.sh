@@ -4,8 +4,12 @@
 # text and HTML reports again with the unreachable-code exclusions applied, and
 # (e) the functional reports again with mk/fcov_exclusions.tcl applied.
 set -o pipefail
-COV_DIR=$(readlink -f "${1:?usage: dm_cov.sh <cov_dir> <out_dir>}")
-OUT=$(mkdir -p "${2:?usage: dm_cov.sh <cov_dir> <out_dir>}" && readlink -f "$2")
+COV_DIR=$(readlink -f "${1:?usage: dm_cov.sh <cov_dir> <out_dir> [cva6|ibex]}")
+OUT=$(mkdir -p "${2:?usage: dm_cov.sh <cov_dir> <out_dir> [cva6|ibex]}" && readlink -f "$2")
+# Which SoC the databases came from. The two DUTs carry different copies of the
+# Debug Module -- CVA6 the 10x fork of PR #4, Ibex the newer pulp upstream --
+# and their hierarchies differ, so the instance list is per DUT.
+DUT=${3:-cva6}
 # Use the 21.09 vManager install, NOT 23.03. Both are installed; only this one
 # authenticates against this site's licence file. The 23.03 imc dies in its Java
 # licence layer (LMF-01513 / FLEXnet -8 "Authentication Failed") before it opens
@@ -26,9 +30,54 @@ export PATH="$IMC_ROOT/tools.lnx86/bin:$IMC_ROOT/bin:$PATH"
 #
 # That includes everything below them. An earlier list stopped at these five
 # and quoted 100% while the DTM's TAP sat at 68/78 blocks, uncounted.
-DM=tb_top_soc.dut.i_dm_top
-DTM=tb_top_soc.dut.i_dmi_jtag      # sibling of dm_top in ariane_testharness
-TB=tb_top_soc.dut                   # ariane_testharness
+case "$DUT" in
+cva6)
+  DM=tb_top_soc.dut.i_dm_top
+  DTM=tb_top_soc.dut.i_dmi_jtag    # sibling of dm_top in ariane_testharness
+  TB=tb_top_soc.dut                # ariane_testharness
+  ;;
+ibex)
+  # ibex-demo-system wraps the DM in a generate block and puts the DTM INSIDE
+  # dm_top (instance `dap`), where CVA6 has it as a sibling.
+  DM=tb_top_ibex.dut.gen_dm_top.u_dm_top
+  DTM=$DM.dap
+  TB=tb_top_ibex.dut
+  ;;
+*) echo "dm_cov.sh: unknown DUT '$DUT' (expected cva6 or ibex)" >&2; exit 2 ;;
+esac
+if [ "$DUT" = ibex ]; then
+# Ibex carries the newer pulp upstream DM, whose sub-hierarchy differs from the
+# fork CVA6 uses: the response queue is a lowRISC prim_fifo_sync rather than a
+# fifo_v2, and the DMI clock crossing is prim_fifo_async_simple/prim_sync_reqack
+# rather than cdc_2phase. Measured down to those wrappers, which are the DM's
+# own crossing logic; the lowRISC leaf cells below them (prim_flop,
+# prim_cdc_rand_delay) are library primitives and are not part of the DM.
+DM_INSTS=(
+    $DM
+    $DM.i_dm_csrs
+    $DM.i_dm_csrs.i_fifo
+    $DM.i_dm_csrs.i_fifo.gen_normal_fifo
+    $DM.i_dm_csrs.i_fifo.gen_normal_fifo.u_fifo_cnt
+    $DM.i_dm_sba
+    $DM.i_dm_mem
+    # DmBaseAddress is passed as 1, so dm_mem takes the two-scratch ROM.
+    $DM.i_dm_mem.gen_rom_snd_scratch.i_debug_rom
+    $DTM
+    $DTM.i_dmi_jtag_tap
+    $DTM.i_dmi_cdc
+    $DTM.i_dmi_cdc.u_combined_rstn_sync
+    $DTM.i_dmi_cdc.u_rst_mux
+    $DTM.i_dmi_cdc.i_cdc_req
+    $DTM.i_dmi_cdc.i_cdc_req.u_prim_sync_reqack
+    $DTM.i_dmi_cdc.i_cdc_req.u_prim_sync_reqack.gen_rz_hs_protocol
+    $DTM.i_dmi_cdc.i_cdc_resp
+    $DTM.i_dmi_cdc.i_cdc_resp.u_prim_sync_reqack
+    $DTM.i_dmi_cdc.i_cdc_resp.u_prim_sync_reqack.gen_rz_hs_protocol
+)
+# report_metrics -recursive takes exactly one -inst, and the DTM here is
+# inside dm_top, so one root covers the whole subsystem.
+declare -A HTML_ROOTS=( [dm]=$DM )
+else
 DM_INSTS=(
     $DM
     $DM.i_dm_csrs
@@ -69,19 +118,19 @@ DM_INSTS=(
     $TB
     $TB.i_ariane
 )
-# `code` is block, expression and toggle only; FSM has to be asked for.
-METRICS=code:fsm
 # Roots of the HTML reports. report_metrics -recursive accepts exactly one
 # -inst (*E,report.recursive.mult_entities otherwise), and i_dmi_jtag is not
 # under i_dm_top, so each root gets its own report directory.
 declare -A HTML_ROOTS=(
-    [dm]=tb_top_soc.dut.i_dm_top
-    [dmi_jtag]=tb_top_soc.dut.i_dmi_jtag
-    [dm_axi2mem]=tb_top_soc.dut.i_dm_axi2mem
-    [dm_axi_master]=tb_top_soc.dut.i_dm_axi_master
-    [rstgen_main]=tb_top_soc.dut.i_rstgen_main
+    [dm]=$DM
+    [dmi_jtag]=$DTM
+    [dm_axi2mem]=$TB.i_dm_axi2mem
+    [dm_axi_master]=$TB.i_dm_axi_master
+    [rstgen_main]=$TB.i_rstgen_main
 )
-
+fi
+# `code` is block, expression and toggle only; FSM has to be asked for.
+METRICS=code:fsm
 # report_metrics refuses to write into an existing directory
 # (*E,report.dir_exist) and imc still exits 0, so a rerun would leave the
 # previous run's HTML in place looking current.
