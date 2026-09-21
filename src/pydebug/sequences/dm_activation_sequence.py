@@ -20,6 +20,18 @@ from pydebug.api import RISCVDebug, DebugSession, StepResult
 from pydebug.api.riscv_dm import dmcontrol_dmactive, version
 
 
+#: The spec's procedure is a poll, not a read: "write 0 to dmactive, poll until
+#: dmactive is observed 0, write 1 ... and poll until dmactive is observed 1"
+#: (#3.14.2). A DM is allowed to take more than one read to get there; reading
+#: once reports a failure where the spec says to wait.
+POLL_READS = 8
+
+
+def _poll(predicate, reads: int = POLL_READS) -> bool:
+    """True as soon as `predicate` holds, False after `reads` attempts."""
+    return any(predicate() for _ in range(reads))
+
+
 def build_dm_activation_sequence(
     dm: RISCVDebug,
     mode: str = "batch",
@@ -67,9 +79,9 @@ def build_dm_activation_sequence(
         # only ever writes 1 — this step is what actually exercises the full
         # round trip, and is reusable as a precondition fixture elsewhere.
         dm.write_dmcontrol(dmactive=False)
-        deactivated = not dmcontrol_dmactive(dm.read_dmcontrol())
+        deactivated = _poll(lambda: not dmcontrol_dmactive(dm.read_dmcontrol()))
         dm.activate()
-        reactivated = dmcontrol_dmactive(dm.read_dmcontrol())
+        reactivated = _poll(lambda: dmcontrol_dmactive(dm.read_dmcontrol()))
         status = dm.read_dmstatus()
         v = version(status)
         return StepResult(

@@ -121,10 +121,15 @@ def build_reset_ctrl_sequence(
                 note += (
                     f" [divergence: DUT ndmresetpending={int(dut_pending)} vs "
                     f"model={int(model_pending)} — some v1.0-reporting dm_pkg "
-                    f"forks still lack a routed ndmresetpending field; checked "
-                    f"against the model instead, per #3.14.1]"
+                    f"forks still lack a routed ndmresetpending field, #3.14.1]"
                 )
-            ok = mutex_ok and model_pending
+            # Gate on what the DUT reported, not on what the model predicted.
+            # This used to be `mutex_ok and model_pending`, which made the check
+            # unfalsifiable: a DUT that never set ndmresetpending still passed,
+            # with its failure demoted to the note above. The model's value is
+            # what says the bit is *expected* here at all, so it stays in the
+            # condition -- but the DUT has to agree.
+            ok = mutex_ok and model_pending and dut_pending
         else:
             # No predictor, or a v0.13-configured one: ndmresetpending isn't
             # meaningfully predictable either way, so only the universal
