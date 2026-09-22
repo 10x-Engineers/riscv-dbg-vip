@@ -164,3 +164,33 @@ def test_every_covers_entry_names_a_real_testplan_row():
     assert not dangling, (
         "these `covers:` entries name no testplan row, RTL finding or "
         "NATIVE-OP:\n  " + "\n  ".join(dangling))
+
+
+#: The five words a testplan row's Status column may contain (its own legend).
+#: A row may qualify one per DUT -- "Pass (CVA6) / Blocked (Ibex)" -- so each
+#: part is checked separately.
+TESTPLAN_STATUSES = {"Not started", "Pass", "Fail", "Blocked", "N/A"}
+
+
+@pytest.mark.feature("packaging")
+def test_testplan_status_column_uses_the_documented_vocabulary():
+    """Status must be one of five words, in one spelling.
+
+    `Fail` and `**Fail**` were both in use, which made every count of them
+    wrong -- including the summary the plan now states about itself.
+    """
+    text = TESTPLAN.read_text(encoding="utf-8")
+    rows = re.findall(
+        r"^\| ((?:TC-)?[A-Z]+-\d+[A-Z0-9-]*) \| \w+ \|.*?\| P\d \| ([^|]+)\|",
+        text, re.M)
+    assert rows, "no testplan rows parsed -- has the table shape changed?"
+    bad = []
+    for row_id, status in rows:
+        # " / " separates per-DUT parts; a bare "/" is inside "N/A".
+        for part in status.split(" / "):
+            word = re.sub(r"\s*\([^)]*\)", "", part).strip()
+            if word and word not in TESTPLAN_STATUSES:
+                bad.append(f"{row_id}: {status.strip()!r}")
+    assert not bad, (
+        "these rows' Status is not one of "
+        f"{sorted(TESTPLAN_STATUSES)}:\n  " + "\n  ".join(bad))
