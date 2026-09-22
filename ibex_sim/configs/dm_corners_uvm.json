@@ -3,7 +3,8 @@
     "transport": "uvm",
     "mode": "batch",
     "params": {
-        "scratch_addr": 1052672
+        "scratch_addr": 1052672,
+        "dm_base": 437321728
     },
     "uvm": {
         "socket_path": "/tmp/uvm_bridge.sock",

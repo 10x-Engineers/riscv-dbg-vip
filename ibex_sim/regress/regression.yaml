@@ -159,8 +159,12 @@ tests:
     expect: partial
     covers: [DMC-005-S, DMC-008-C]
     why: >-
-      RTL-003 -- the run aborts on the same nonexistent-hart dmstatus
-      mismatch as hart_selection (0x0000cc82 vs 0x0000c082).
+      Runs 10 of its 12 steps, then aborts on RTL-003 -- the same
+      nonexistent-hart dmstatus mismatch as hart_selection (0x0000cc82 vs
+      0x0000c082), which is why its two nonexistent-hart steps are last.
+      Three CVA6-isms had to become parameters first: the SBA scratch
+      address, the DM's own base (0x1a110000 here, 0 on CVA6) and the 64-bit
+      bus steps, which this 32-bit SBA answers with sberror=3.
 
   - name: mem_scan
     config: configs/mem_scan_uvm.json

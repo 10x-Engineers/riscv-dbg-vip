@@ -70,6 +70,11 @@ DMC_DMACTIVE  = 0
 #: the simulation before the scenario reaches anything else.
 SCRATCH_ADDR = 0x8FFFE000
 
+#: All offsets from the DM's own base address, which is where the SoC maps
+#: dm_mem: 0 on CVA6, 0x1a110000 on the Ibex demo system (DEBUG_START). An
+#: absolute address here reaches nothing on a SoC that maps it elsewhere, and
+#: the read comes back X rather than as a bus error.
+#:
 #: dm_mem regions, as 64-bit words (dm_mem.sv / debug_rom.sv): the debug ROM
 #: (19 words at HaltAddress), the abstract-command slots, the Program Buffer
 #: and the data registers.
@@ -113,7 +118,8 @@ def _sbcs_read_on_addr() -> int:
 
 
 def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
-                              scratch_addr: int = SCRATCH_ADDR) -> DebugSession:
+                              scratch_addr: int = SCRATCH_ADDR,
+                              dm_base: int = 0) -> DebugSession:
     session = DebugSession(mode=mode, stop_on_error=False)
 
     session.add_step("Activate Debug Module", lambda: dm.activate())
@@ -157,8 +163,8 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
         # bus's write-data register holds 0 for the reads below: dm_mem
         # indexes a per-hart array with the low bit of that register.
         dm.write_mem32(DM_UNDECODED, 0)
-        flags_mine  = dm.read_mem32(DM_FLAGS)
-        flags_other = dm.read_mem32(DM_FLAGS + 8)
+        flags_mine  = dm.read_mem32(dm_base + DM_FLAGS)
+        flags_other = dm.read_mem32(dm_base + DM_FLAGS + 8)
         # whereto with no command pending, and again while a resume request
         # is outstanding: resumereq stays up because the hart is running and
         # so never acknowledges it.
@@ -267,6 +273,16 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
     # half of each bus untoggled. Likewise every abstract command used
     # aarsize=2, so the hart never wrote the upper half of the data window.
     def tc_dmc_006():
+        # The whole step is about the 64-bit halves: sbdata1/sbaddress1 and
+        # 64-bit reads of dm_mem. A DM whose system bus is 32 bits wide
+        # advertises no sbaccess64 and answers a 64-bit access with
+        # sberror=3 -- which `_wait_sbus()` raises, killing the session. Gate
+        # on what sbcs says rather than assuming CVA6's bus width.
+        if not (dm.t.read(DMI.SBCS) >> 3) & 1:
+            return StepResult(
+                ok=True,
+                msg="TC-DMC-006: N/A -- sbcs advertises no 64-bit access, so "
+                    "there are no sbdata1/sbaddress1 halves to exercise")
         problems = []
         dm.t.write(DMI.SBCS, 2 << SB_ACCESS_LSB)      # no read-on-address
         dm.t.write(SBADDRESS1, ONES)
@@ -285,7 +301,7 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
                 problems.append(f"SBA 64-bit 0x{pattern:08x}{pattern:08x} read back "
                                 f"0x{readback[pattern]:016x}")
         # An address with its low two bits set: the byte-enable index.
-        _sba_read64(DM_FLAGS + 3)
+        _sba_read64(dm_base + DM_FLAGS + 3)
         # 64-bit reads of every dm_mem region, with the Program Buffer holding
         # all-ones and then all-zeros so its read path toggles both ways. Each
         # word is checked against what dm_mem should serve, except the
@@ -293,17 +309,17 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
         for fill in (ONES, 0):
             for i in range(8):
                 dm.write_progbuf(i, fill)
-            for addr in PROGBUF_WORDS:
+            for addr in [dm_base + w for w in PROGBUF_WORDS]:
                 got = _sba_read64(addr)
                 if got != (fill << 32) | fill:
                     problems.append(f"progbuf word 0x{addr:03x}=0x{got:016x}")
         for i in range(8):
             dm.write_progbuf(i, EBREAK)
-        for addr, want in zip(ROM_WORDS, DEBUG_ROM):
+        for addr, want in zip([dm_base + w for w in ROM_WORDS], DEBUG_ROM):
             got = _sba_read64(addr)
             if got != want:
                 problems.append(f"ROM 0x{addr:03x}=0x{got:016x}, expected 0x{want:016x}")
-        for addr in ABSTRACT_WORDS:
+        for addr in [dm_base + w for w in ABSTRACT_WORDS]:
             _sba_read64(addr)
         data_now = (dm.t.read(DMI.DATA1) << 32) | dm.t.read(DMI.DATA0)
         got = _sba_read64(DATA_WORDS[0])
