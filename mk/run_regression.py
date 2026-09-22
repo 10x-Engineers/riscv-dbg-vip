@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-run_regression.py — run the CVA6 Debug VIP regression and report it.
+run_regression.py — run a Debug VIP regression and report it.
 
-Reads cva6_sim/regress/regression.yaml, runs each test, collects its output
-under sim_outputs/<name>/, and prints a verdict table plus merged functional
-coverage.
+Reads <sim>/regress/regression.yaml, runs each test, collects its output under
+sim_outputs/<name>/, and prints a verdict table plus merged functional
+coverage. `--dut` picks the SoC: the two carry different copies of the Debug
+Module and different suites, but the same runner, so a result means the same
+thing on both.
 
-    python3 mk/run_regression.py                      # everything
+    python3 mk/run_regression.py                      # everything, on CVA6
+    python3 mk/run_regression.py --dut ibex           # the Ibex suite
     python3 mk/run_regression.py --only step_classes,cmderr
     python3 mk/run_regression.py --coverage           # build with -coverage all
     python3 mk/run_regression.py --list
@@ -33,8 +36,19 @@ except ImportError:
     sys.exit("pyyaml required: python3 -m pip install --user pyyaml")
 
 ROOT = Path(__file__).resolve().parent.parent
+#: Set by main() from --dut. Module-level because every helper below runs
+#: against one DUT for the life of the process.
 SIM = ROOT / "cva6_sim"
 SUITE = SIM / "regress" / "regression.yaml"
+
+
+def select_dut(dut: str) -> None:
+    """Point SIM/SUITE at `dut`'s simulation directory and suite file."""
+    global SIM, SUITE
+    SIM = ROOT / f"{dut}_sim"
+    SUITE = SIM / "regress" / "regression.yaml"
+    if not SUITE.exists():
+        sys.exit(f"no suite for DUT {dut!r}: {SUITE} does not exist")
 
 # Session verdict, e.g. "Session complete - 9/9 passed" or "... (1 failed)".
 RE_VERDICT = re.compile(r"Session complete\s*-\s*(\d+)/(\d+)\s*passed")
@@ -145,6 +159,8 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--dut", default="cva6", choices=("cva6", "ibex"),
+                    help="which SoC to run against (default: cva6)")
     ap.add_argument("--only", help="comma-separated test names")
     ap.add_argument("--coverage", action="store_true",
                     help="build with -coverage all and collect functional coverage")
@@ -153,6 +169,7 @@ def main() -> int:
                     help="write a markdown report here")
     a = ap.parse_args()
 
+    select_dut(a.dut)
     suite = load_suite()
     defaults = suite.get("defaults", {})
     tests = suite["tests"]

@@ -1,0 +1,187 @@
+# regression.yaml — the Ibex Debug VIP regression.
+#
+# Same runner and the same rules as cva6_sim/regress/regression.yaml
+# (`python3 mk/run_regression.py --dut ibex`), against a different Debug
+# Module: ibex-demo-system vendors pulp upstream untouched, where CVA6 carries
+# the 10x fork. A test meaning the same thing on both DUTs is the point --
+# where a result differs, the DM differs.
+#
+# `expect` is the known state today, not an aspiration:
+#   pass     every step passes
+#   fail     a known RTL defect makes it fail; see testplans/results/rtl_findings.md
+#   partial  runs but aborts before its verdict, blocked behind a known defect
+#
+# The Ibex suite is smaller than CVA6's: the scenarios that need a program to
+# step through, a trigger-enabled core or native-debug firmware are CVA6-only
+# for now. Every *_uvm.json config in ibex_sim/configs is listed here, so a
+# scenario cannot be quietly left out of the regression.
+
+suite: ibex-debug-vip
+description: >-
+  RISC-V Debug Module verification against ibex-demo-system with the vendored
+  PULP riscv-dbg. Functional coverage is collected per run and merged across
+  the suite.
+
+defaults:
+  elf: sw/halt_probe.elf
+  timeout_s: 900
+  expect: pass
+
+tests:
+
+  # ── Discovery and activation ──────────────────────────────────────────
+  - name: discovery
+    config: configs/discovery_uvm.json
+    covers: [DIS-001, DIS-002, RST-025]
+    why: Version detection and IDCODE. This DM reports version=2 (0.13), not 3.
+
+  - name: dm_activation
+    config: configs/dm_activation_uvm.json
+    covers: [ACT-001, ACT-002, ACT-003, RAP-040]
+    why: dmactive as a reset, and the 0->poll->1->poll recovery procedure.
+
+  - name: read_dmstatus
+    config: configs/read_dmstatus_uvm.json
+    covers: [RST-031, DIS-001]
+    why: The minimal smoke test; if this fails nothing else is meaningful.
+
+  # ── Run control ───────────────────────────────────────────────────────
+  - name: halt
+    config: configs/halt_uvm.json
+    covers: [HALT-001, HALT-002, RC-001]
+    why: >-
+      Halt, read dpc/GPRs, and the first sbcs read of the run. Was aborting on
+      a MODEL_MISMATCH until dut_configs/ibex.json declared the SBA widths the
+      DM actually reports (8/16/32 from BusWidth=32, dm_csrs.sv:551-555).
+
+  - name: run_control
+    config: configs/run_control_uvm.json
+    covers: [HALT-001, RES-001, RES-002, RES-003, RES-007-V]
+    why: The halt/resume matrix, including resumereq's documented asymmetry.
+
+  - name: report_halt_status
+    config: configs/report_halt_status_uvm.json
+    covers: [DHS-001]
+    why: haltsum0 tracks the hart's actual run state, in both states.
+
+  - name: hart_selection
+    config: configs/hart_selection_uvm.json
+    expect: partial
+    covers: [HS-001, HS-002, HS-003]
+    why: >-
+      RTL-003 -- selecting a nonexistent hart reports allnonexistent=1 AND
+      allrunning=1 (dmstatus 0x0000cc82 vs 0x0000c082). The same defect as on
+      CVA6, and inherited rather than introduced: the two lines are
+      character-identical in both DMs. Filed upstream as
+      pulp-platform/riscv-dbg#200; the run aborts on the checker's UVM_ERROR.
+
+  # ── Reset ─────────────────────────────────────────────────────────────
+  - name: reset_ctrl
+    config: configs/reset_ctrl_uvm.json
+    covers: [RST-001, RST-002, RST-003, RST-004, RST-005, RST-006]
+    why: ndmreset, hartreset discovery, havereset and the keepalive probe.
+
+  - name: halt_on_reset
+    config: configs/halt_on_reset_uvm.json
+    covers: [HOR-001, HOR-002, HOR-003, HOR-004, HOR-005]
+    why: >-
+      hasresethaltreq is 0 on this DM too, so TC-HOR-002..004 report N/A. The
+      mutex-bit negative test still runs -- it is a dmcontrol rule, not a
+      halt-on-reset one.
+
+  # ── Abstract commands and the program buffer ──────────────────────────
+  - name: gpr_write
+    config: configs/gpr_write_uvm.json
+    covers: [AC-001, AC-002, AC-004]
+    why: Access Register write/read-back through data0.
+
+  - name: csr_access
+    config: configs/csr_access_uvm.json
+    covers: [DCSR-001, DCSR-002, DCSR-003, AC-005]
+    why: The debug CSRs through abstract commands.
+
+  - name: program_buffer
+    config: configs/program_buffer_uvm.json
+    covers: [PB-001, PB-002, PB-003, AC-010]
+    why: progbuf write/read-back and postexec.
+
+  - name: sw_breakpoint_progbuf
+    config: configs/sw_breakpoint_progbuf_uvm.json
+    covers: [PB-004, SB-001]
+    why: A software breakpoint planted and executed through the program buffer.
+
+  # ── Single-step, triggers, SBA, external trigger ──────────────────────
+  - name: single_step
+    config: configs/single_step_uvm.json
+    covers: [SSTEP-001, SSTEP-002, DCSR-001]
+    why: dcsr.step, and the re-halt that resume-with-step must produce.
+
+  - name: trigger
+    config: configs/trigger_uvm.json
+    covers: [TRIG-001, TRIG-002, TRIG-004, TRIG-006]
+    why: >-
+      Trigger CSR discovery and write isolation. Passes 15/15 here: this core
+      answers tselect/tdata as WARL without the RV64 tdata1 defect (RTL-013)
+      CVA6 shows.
+
+  - name: sba
+    config: configs/sba_uvm.json
+    covers: [SBA-001, SBA-002, SBA-003, SBA-004]
+    why: >-
+      System Bus Access reads and writes. This DM implements sbaccess as a
+      writable field over 8/16/32, so unlike CVA6 (RTL-002) the width bins are
+      genuinely reachable.
+
+  # ── Ported from the CVA6 suite ────────────────────────────────────────
+  # These five are DMI-level: they need no firmware and no core feature, so
+  # the same scenario runs against both DMs. They were added because Ibex's
+  # code coverage named exactly what they exercise -- haltsum1-3 reads, the
+  # abstractauto/command read paths and the cmderr arms -- as its largest
+  # block-coverage holes.
+  - name: cmderr
+    config: configs/cmderr_uvm.json
+    covers: [AC-022-V]
+    why: >-
+      One abstract command per error class. Exposed that the scenario
+      hardcoded 64-bit register accesses, which an RV32 hart legitimately
+      answers with cmderr=2 -- it now probes the hart's width first. The
+      busy window is not provoked on this DUT: its DM completes the first
+      command before the second DMI write arrives, which the step reports
+      rather than failing on.
+
+  - name: cmd_busy
+    config: configs/cmd_busy_uvm.json
+    covers: [AC-021-S]
+    why: Writes to command/abstractauto/abstractcs while a command is running.
+
+  - name: dm_corners
+    config: configs/dm_corners_uvm.json
+    expect: partial
+    covers: [DMC-005-S, DMC-008-C]
+    why: >-
+      RTL-003 -- the run aborts on the same nonexistent-hart dmstatus
+      mismatch as hart_selection (0x0000cc82 vs 0x0000c082).
+
+  - name: mem_scan
+    config: configs/mem_scan_uvm.json
+    covers: [PB-005, AC-014-S]
+    why: >-
+      Program-buffer memory reads against the Ibex SRAM at 0x00100000.
+      Passes 18/18.
+
+  - name: dmi_error
+    config: configs/dmi_error_uvm.json
+    expect: partial
+    covers: [DTM-002, DTM-010, DTM-011, DTM-017, DTM-018]
+    why: >-
+      DTM-level error handling. Aborts on a dmstatus mismatch after the DM
+      reset (RTL returns 0, the model expects 0x82) -- unexamined on this
+      DUT, and the reason this is recorded as partial rather than pass.
+
+  - name: external_trigger
+    config: configs/external_trigger_uvm.json
+    covers: [HG-001]
+    why: >-
+      dmcs2 (DMI 0x32). This DM reports version 0.13, where no such register
+      exists -- the scenario records what the address actually returns rather
+      than assuming either way.
