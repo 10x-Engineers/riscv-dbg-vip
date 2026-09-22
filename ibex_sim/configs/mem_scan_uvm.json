@@ -1,0 +1,23 @@
+{
+    "_comment": [
+        "Read memory through the program buffer and compare against the ELF.",
+        "",
+        "base_addr is the Ibex demo system's SRAM (MEM_START = 0x00100000, see",
+        "tb_top_ibex.sv), not CVA6's DRAM base -- the same scenario against a",
+        "different memory map. 16 words is enough to exercise the program-buffer",
+        "read path without spending JTAG time on a scan that proves nothing extra.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/mem_scan_uvm.json"
+    ],
+    "scenario": "mem_scan",
+    "transport": "uvm",
+    "mode": "batch",
+    "params": {
+        "base_addr": 1048576,
+        "word_count": 16
+    },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout": 600.0
+    }
+}

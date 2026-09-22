@@ -1,0 +1,22 @@
+{
+    "scenario": "dmi_error",
+    "transport": "uvm",
+    "mode": "batch",
+    "params": {
+        "idcode": "0x11001cdf"
+    },
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout": 300.0
+    },
+    "_comment": [
+        "DTM-level error handling: sticky dmistat, dmireset, dmihardreset, BYPASS.",
+        "",
+        "idcode is this SoC's, not CVA6's: jtag_id_pkg.sv builds 0x11001cdf from",
+        "JTAG_VERSION=1, part number 0x1001 and the lowRISC JEDEC manufacturer id.",
+        "A wrong value here fails TC-DTM-002 for a reason that has nothing to do",
+        "with the DTM.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/dmi_error_uvm.json"
+    ]
+}
