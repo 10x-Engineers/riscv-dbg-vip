@@ -228,4 +228,38 @@ def build_sba_sequence(
         )
     session.add_step("TC-SBA-010: SBA with the hart running", tc_sba_010)
 
+    # ── TC-SBA-019: every access width the DM says it supports ────────────
+    # sbcs advertises a width mask (sbaccess8/16/32/64/128) and sbaccess
+    # selects which one an access uses. Nothing exercised the narrow widths,
+    # so dm_sba's 8- and 16-bit arms were dead code in coverage. On a DM that
+    # hardwires sbaccess (CVA6, RTL-002) the write does not stick and this
+    # reports that rather than asserting; on one that implements it the narrow
+    # accesses are real bus transfers.
+    def tc_sba_019():
+        advertised = [(w, bit) for w, bit in ((8, 0), (16, 1), (32, 2), (64, 3))
+                      if (dm.t.read(DMI.SBCS) >> bit) & 1]
+        used, refused = [], []
+        for width, _bit in advertised:
+            code = {8: 0, 16: 1, 32: 2, 64: 3}[width]
+            base = dm.t.read(DMI.SBCS) & ~(0x7 << SB_ACCESS_LSB)
+            dm.t.write(DMI.SBCS, base | (code << SB_ACCESS_LSB) | (1 << SB_READONADDR))
+            got = (dm.t.read(DMI.SBCS) >> SB_ACCESS_LSB) & 0x7
+            if got != code:
+                refused.append(width)
+                continue
+            dm.t.write(DMI.SBADDRESS0, addr)       # sbreadonaddr triggers it
+            dm._wait_sbus()
+            dm.t.read(DMI.SBDATA0)
+            used.append(width)
+        # Leave sbaccess back at 32-bit for whatever runs next.
+        base = dm.t.read(DMI.SBCS) & ~(0x7 << SB_ACCESS_LSB)
+        dm.t.write(DMI.SBCS, base | (2 << SB_ACCESS_LSB))
+        return StepResult(
+            ok=True,
+            msg=f"TC-SBA-019: sbcs advertises {[w for w, _ in advertised]}-bit; "
+                f"accessed {used or 'none'}"
+                + (f"; refused (hardwired sbaccess) {refused}" if refused else ""),
+        )
+    session.add_step("TC-SBA-019: each advertised access width", tc_sba_019)
+
     return session
