@@ -171,12 +171,11 @@ tests:
 
   - name: dmi_error
     config: configs/dmi_error_uvm.json
-    expect: partial
     covers: [DTM-002, DTM-010, DTM-011, DTM-017, DTM-018]
     why: >-
-      DTM-level error handling. Aborts on a dmstatus mismatch after the DM
-      reset (RTL returns 0, the model expects 0x82) -- unexamined on this
-      DUT, and the reason this is recorded as partial rather than pass.
+      DTM-level error handling: sticky dmistat, dmireset, dmihardreset,
+      BYPASS. Aborted on a dmstatus mismatch until the checker learned that a
+      dtmcs reset invalidates the read it is waiting for; 11/11 since.
 
   - name: external_trigger
     config: configs/external_trigger_uvm.json

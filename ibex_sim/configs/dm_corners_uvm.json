@@ -1,10 +1,21 @@
 {
-    "scenario":  "dm_corners",
+    "scenario": "dm_corners",
     "transport": "uvm",
-    "mode":      "batch",
-    "params": {},
+    "mode": "batch",
+    "params": {
+        "scratch_addr": 1052672
+    },
     "uvm": {
         "socket_path": "/tmp/uvm_bridge.sock",
-        "timeout":     300.0
-    }
+        "timeout": 300.0
+    },
+    "_comment": [
+        "DM corner cases. scratch_addr is the SBA scratch word: Ibex's SRAM",
+        "(MEM_START 0x00100000 + 4 KiB, clear of halt_probe.elf), not CVA6's DRAM.",
+        "An address that decodes to nothing leaves the read data X on this SoC's",
+        "bus, and the DM's response FIFO then trips lowRISC's DataKnown_A",
+        "assertion, ending the run.",
+        "",
+        "  make soc_test_cov CFG_FILE=configs/dm_corners_uvm.json"
+    ]
 }

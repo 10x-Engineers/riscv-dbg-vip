@@ -25,8 +25,9 @@ class jtag_dmi_read_seq extends uvm_sequence #(jtag_txn_c);
 
     //: Phase 1, as its own task: the busy-recovery path has to re-issue it
     //: after a dmireset, because the reset discards the queued read.
-    task issue_read(output jtag_txn_c txn);
+    task issue_read(output jtag_txn_c txn, output bit req_busy);
         uvm_sequence_item rsp_item;
+        jtag_txn_c rsp_txn;
         txn = new("dmi_rd_req");
         txn.phase     = jtag_txn_c::PH_IR_THEN_DR;
         txn.dmi_addr  = addr;
@@ -43,13 +44,22 @@ class jtag_dmi_read_seq extends uvm_sequence #(jtag_txn_c);
         // (Root cause of a real regression found this session: every read
         // came back 0 once this drain was missing -- see the retrospective
         // note at the end of this file before ever removing this again.)
+        //
+        // Its STATUS, though, is not discardable. If the request scan itself
+        // comes back busy the read was never queued, and the NOP capture that
+        // follows returns the PREVIOUS operation's data with status 0 -- a
+        // stale value that looks like a fresh one. Seen as an abstractcs read
+        // returning 0x11111111, a pattern the scenario had written earlier.
         get_response(rsp_item);
+        $cast(rsp_txn, rsp_item);
+        req_busy = (rsp_txn.dmi_status == 2'b11);
     endtask
 
     task body();
         jtag_txn_c txn;
+        bit req_busy;
 
-        issue_read(txn);
+        issue_read(txn, req_busy);
 
         // ── Phase 2: poll with NOP until result is captured ─────────────────
         //
@@ -67,7 +77,9 @@ class jtag_dmi_read_seq extends uvm_sequence #(jtag_txn_c);
         // re-issue the read, because the reset discards it.
         for (int unsigned attempt = 0; attempt < MaxBusyResets + 1; attempt++) begin
             bit captured = 1'b0;
-            for (int unsigned poll = 0; poll < MaxBusyPolls; poll++) begin
+            // A busy request was never queued; polling for its result would
+            // capture the previous operation's data instead.
+            for (int unsigned poll = 0; poll < (req_busy ? 0 : MaxBusyPolls); poll++) begin
                 uvm_sequence_item rsp_item;
                 txn = new("dmi_rd_cap");
                 txn.phase     = jtag_txn_c::PH_IR_THEN_DR;
@@ -138,7 +150,7 @@ class jtag_dmi_read_seq extends uvm_sequence #(jtag_txn_c);
                 finish_item(nop_txn);
                 get_response(rsp_item);
             end
-            issue_read(txn);
+            issue_read(txn, req_busy);
         end
 
         rsp_data = txn.dmi_rdata;

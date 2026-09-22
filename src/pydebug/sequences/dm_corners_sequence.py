@@ -64,6 +64,10 @@ DMC_DMACTIVE  = 0
 #: The RISCV_VIP_MODE memory is 2 MB and decodes addr[20:3], so this aliases
 #: to 0x801FE000 -- well clear of halt_probe.elf, a few words at 0x80000000.
 #: Written before it is read: unwritten memory reads X.
+#: Overridable per DUT: on Ibex this address decodes to nothing, the demo
+#: system's bus leaves the read data X, and the DM's response FIFO trips
+#: lowRISC's own `DataKnown_A` assertion (prim_fifo_sync.sv:151) -- which ends
+#: the simulation before the scenario reaches anything else.
 SCRATCH_ADDR = 0x8FFFE000
 
 #: dm_mem regions, as 64-bit words (dm_mem.sv / debug_rom.sv): the debug ROM
@@ -108,7 +112,8 @@ def _sbcs_read_on_addr() -> int:
     return (1 << SB_READONADDR) | (2 << SB_ACCESS_LSB)
 
 
-def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSession:
+def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
+                              scratch_addr: int = SCRATCH_ADDR) -> DebugSession:
     session = DebugSession(mode=mode, stop_on_error=False)
 
     session.add_step("Activate Debug Module", lambda: dm.activate())
@@ -145,7 +150,6 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSessi
                    "dmstatus reads X for a nonexistent hart -- RTL-008" if errors else
                    "hart 0 released, or hart 1 reported present"),
         )
-    session.add_step("TC-DMC-001: flag poll with a nonexistent hart selected", tc_dmc_001)
 
     # ── TC-DMC-002: SBA into the DM's own memory ──────────────────────────
     def tc_dmc_002():
@@ -267,16 +271,16 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSessi
         dm.t.write(DMI.SBCS, 2 << SB_ACCESS_LSB)      # no read-on-address
         dm.t.write(SBADDRESS1, ONES)
         dm.t.write(SBADDRESS1, 0)
-        dm.t.write(DMI.SBADDRESS0, SCRATCH_ADDR)
+        dm.t.write(DMI.SBADDRESS0, scratch_addr)
         readback = {}
         for pattern in (ONES, 0):
             dm.t.write(DMI.SBCS, 2 << SB_ACCESS_LSB)
-            dm.t.write(DMI.SBADDRESS0, SCRATCH_ADDR)
+            dm.t.write(DMI.SBADDRESS0, scratch_addr)
             dm.t.write(SBDATA1, pattern)
             dm.t.write(DMI.SBDATA0, pattern)          # starts the 64-bit write
             dm._wait_sbus()
             dm.t.write(DMI.SBCS, _sbcs_read_on_addr())
-            readback[pattern] = _sba_read64(SCRATCH_ADDR)
+            readback[pattern] = _sba_read64(scratch_addr)
             if readback[pattern] != (pattern << 32) | pattern:
                 problems.append(f"SBA 64-bit 0x{pattern:08x}{pattern:08x} read back "
                                 f"0x{readback[pattern]:016x}")
@@ -347,7 +351,6 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSessi
                 f"hart 0 still halted={halted}  "
                 + ("OK" if halted else "hart 0 disturbed by another hart's state"),
         )
-    session.add_step("TC-DMC-009: another hart's state slots", tc_dmc_009)
 
     # ── TC-DMC-010: abstract-command program walk ─────────────────────────
     # dm_mem builds each command's program from regno and aarsize, and toggle
@@ -460,5 +463,17 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch") -> DebugSessi
                 + ("OK" if ok else "sbcs inconsistent, not reset by dmactive, or run control lost"),
         )
     session.add_step("TC-DMC-004: DM consistent after ndmreset release", tc_dmc_004)
+
+    # ── The nonexistent-hart steps, last ───────────────────────────────────
+    # Both select a hartsel with no hart behind it, which is RTL-003: the DM
+    # reports allnonexistent=1 AND allrunning=1, the model reports the hart as
+    # not running, and the checker's UVM_ERROR ends the run (quit count 1).
+    # Run first, as they used to be, they aborted the scenario at its second
+    # step and every corner below this line went unexercised -- on Ibex that
+    # alone accounted for the haltsum1-3 and sbbusy blocks showing as
+    # uncovered. A known defect should cost its own steps, not the whole
+    # scenario.
+    session.add_step("TC-DMC-001: flag poll with a nonexistent hart selected", tc_dmc_001)
+    session.add_step("TC-DMC-009: another hart's state slots", tc_dmc_009)
 
     return session
