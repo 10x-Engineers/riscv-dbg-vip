@@ -303,11 +303,11 @@ not exist or cannot respond.
 | HS-004-C | Check | `anyunavail`/`allunavail` reflect the unavailable hart | `debug_module.html#dmstatus` | P1 | Not started | |
 | HS-005-V | Cover | Hart state reported = {running, halted, unavailable, nonexistent, in reset} | `debug_module.html#dmstatus` | P1 | Not started | |
 | HS-006-V | Cover | `hartsel` = {0, max implemented, first nonexistent, all-ones} | `debug_module.html#dmcontrol` | P1 | Not started | |
-| HS-007-S | Stimulate | Select the highest implemented hart index | `debug_module.html#dmcontrol` | P1 | Not started | Coverage: the boundary the DM must still decode |
+| HS-007-S | Stimulate | Select the highest implemented hart index | `debug_module.html#dmcontrol` | P1 | Pass | `hart_array_uvm`. Coverage: the boundary the DM must still decode |
 | HS-007-C | Check | That hart's state is reported; `anynonexistent=0` | `debug_module.html#dmstatus` | P1 | Not started |  |
-| HS-008-C | Check | With no selected hart in a given state, both its `all` and `any` bits read 0 | `debug_module.html#dmstatus` | P1 | Not started | Coverage: the neither cell, unreachable by a test that only checks the asserted case |
+| HS-008-C | Check | With no selected hart in a given state, both its `all` and `any` bits read 0 | `debug_module.html#dmstatus` | P1 | Pass | `hart_array_uvm`. Coverage: the neither cell, unreachable by a test that only checks the asserted case |
 | HS-009-V | Cover | `hartsel` class × reported hart state | `debug_module.html#dmstatus` | P0 | Not started | `x_hartsel_x_state` — carries issue #130 as an illegal cell. A stale mux looks correct on either coverpoint alone |
-| HS-010-V | Cover | `hartsel` class × all/any aggregation | `debug_module.html#dmstatus` | P1 | Not started | `x_hartsel_x_all_any` — `some_not_all` needs several harts selected; excluded here, retained for a multi-hart DUT |
+| HS-010-V | Cover | `hartsel` class × all/any aggregation | `debug_module.html#dmstatus` | P1 | Blocked | `x_hartsel_x_all_any` — `some_not_all` needs several harts selected **at once**, which only the hart array mask can do. Measured on `multihart_sim`: this DM implements no mask (`hasel` and `hawindow` both read back 0 after writing 1), so the bin is unreachable for a demonstrated reason rather than an assumed one |
 
 ## 3.4 Halt
 
@@ -335,7 +335,7 @@ clear `haltreq` → read `dcsr.cause`.
 | HALT-007-A | Assertion | Hart halts within the spec's one-second bound after `haltreq` | `debug_module.html#dmcontrol` | P2 | Not started | Cycle-domain property — SVA, not a directed test |
 | HALT-008-V | Cover | Privilege at halt = {M, S, U} — `dcsr.prv` records each | `Sdext.html#csr-dcsr` | P1 | Not started | |
 | HALT-009-V | Cover | Hart activity at halt = {ordinary insn, `wfi`, taking a trap, in a tight loop, executing a load/store} | `debug_module.html#dmcontrol` | P1 | Not started | |
-| HALT-010-S | Stimulate | Select multiple harts and assert `haltreq` | `debug_module.html#dmstatus` | P1 | N/A | Single-hart DUT — `allhalted` vs `anyhalted` cannot be distinguished |
+| HALT-010-S | Stimulate | Select multiple harts and assert `haltreq` | `debug_module.html#dmstatus` | P1 | Pass | `hart_array_uvm` on `multihart_sim` (dm_top with NrHarts=2 and dummy harts). This DM implements no hart array mask — `hasel` reads back 0 — so the harts are halted one selection at a time and `haltsum0` carries the aggregate: 0x2 for hart 1 alone, 0x3 for both |
 | HALT-011-C | Check | A halt on a hart executing ordinary instructions completes within ~10 cycles | `debug_module.html#dmcontrol` | P2 | Not started | Coverage: the immediate-latency bin. Separating it from the stalled case stops a slow path hiding behind the bound |
 
 ## 3.5 Resume
