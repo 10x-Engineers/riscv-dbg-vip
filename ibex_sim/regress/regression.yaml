@@ -32,7 +32,7 @@ tests:
   # ── Discovery and activation ──────────────────────────────────────────
   - name: discovery
     config: configs/discovery_uvm.json
-    covers: [DIS-001, DIS-002, RST-025]
+    covers: [DIS-001, DIS-002]
     why: Version detection and IDCODE. This DM reports version=2 (0.13), not 3.
 
   - name: dm_activation
@@ -48,7 +48,7 @@ tests:
   # ── Run control ───────────────────────────────────────────────────────
   - name: halt
     config: configs/halt_uvm.json
-    covers: [HALT-001, HALT-002, RC-001]
+    covers: [HALT-001, HALT-002]
     why: >-
       Halt, read dpc/GPRs, and the first sbcs read of the run. Was aborting on
       a MODEL_MISMATCH until dut_configs/ibex.json declared the SBA widths the
@@ -61,7 +61,7 @@ tests:
 
   - name: report_halt_status
     config: configs/report_halt_status_uvm.json
-    covers: [DHS-001]
+    covers: [HALT-006, DIS-007]
     why: haltsum0 tracks the hart's actual run state, in both states.
 
   - name: hart_selection
@@ -78,12 +78,12 @@ tests:
   # ── Reset ─────────────────────────────────────────────────────────────
   - name: reset_ctrl
     config: configs/reset_ctrl_uvm.json
-    covers: [RST-001, RST-002, RST-003, RST-004, RST-005, RST-006]
+    covers: [RST-010, RST-011, RST-060, RST-062]
     why: ndmreset, hartreset discovery, havereset and the keepalive probe.
 
   - name: halt_on_reset
     config: configs/halt_on_reset_uvm.json
-    covers: [HOR-001, HOR-002, HOR-003, HOR-004, HOR-005]
+    covers: [RST-050, RST-051, RST-053]
     why: >-
       hasresethaltreq is 0 on this DM too, so TC-HOR-002..004 report N/A. The
       mutex-bit negative test still runs -- it is a dmcontrol rule, not a
@@ -97,7 +97,7 @@ tests:
 
   - name: csr_access
     config: configs/csr_access_uvm.json
-    covers: [DCSR-001, DCSR-002, DCSR-003, AC-005]
+    covers: [DCSR-010, DCSR-011, AC-005]
     why: The debug CSRs through abstract commands.
 
   - name: program_buffer
@@ -107,13 +107,13 @@ tests:
 
   - name: sw_breakpoint_progbuf
     config: configs/sw_breakpoint_progbuf_uvm.json
-    covers: [PB-004, SB-001]
+    covers: [PB-004, DM-001, DM-003]
     why: A software breakpoint planted and executed through the program buffer.
 
   # ── Single-step, triggers, SBA, external trigger ──────────────────────
   - name: single_step
     config: configs/single_step_uvm.json
-    covers: [SSTEP-001, SSTEP-002, DCSR-001]
+    covers: [SSTEP-001, SSTEP-012, DCSR-010]
     why: dcsr.step, and the re-halt that resume-with-step must produce.
 
   - name: trigger

@@ -114,3 +114,53 @@ def test_declared_features_are_actually_tested(all_collected_items, regressions)
         f"declares them: {claimed_but_untested}. Either add tests or set their "
         f"status to one of {sorted(UNTESTED_OK)}."
     )
+
+
+# ── Traceability: the suites' `covers:` must name something real ─────────────
+#
+# Each regression.yaml entry lists the testplan rows its scenario exercises.
+# Nothing checked that those rows exist, so a renamed or deleted row left a
+# dangling reference that still looked like coverage -- and a reference
+# written from memory (several were, on the Ibex suite) looked exactly the
+# same. The three namespaces below are all legitimate; anything else is a typo.
+
+import re                                                    # noqa: E402
+from pathlib import Path                                     # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+TESTPLAN = ROOT / "testplans" / "riscv_debug_testplan.md"
+SUITES = [ROOT / "cva6_sim" / "regress" / "regression.yaml",
+          ROOT / "ibex_sim" / "regress" / "regression.yaml"]
+
+#: `covers:` may name a testplan row, a native-debug operation from the
+#: testplan's NATIVE-OP section, or an RTL finding a test exists to pin down.
+RTL_FINDING = re.compile(r"^RTL-\d+$")
+NATIVE_OP = re.compile(r"^NATIVE-OP\d$")
+
+
+def _testplan_ids() -> set:
+    """Every row id in the testplan, with and without its -S/-C/-V suffix."""
+    text = TESTPLAN.read_text(encoding="utf-8")
+    rows = set(re.findall(r"^\| ((?:TC-)?[A-Z]+-\d+[A-Z0-9-]*) \|", text, re.M))
+    bases = {re.sub(r"-[SCV]\d*$", "", r) for r in rows}
+    return rows | bases
+
+
+@pytest.mark.feature("packaging")
+def test_every_covers_entry_names_a_real_testplan_row():
+    """A scenario's `covers:` list must trace to something that exists."""
+    yaml = pytest.importorskip("yaml")
+    known = _testplan_ids()
+    dangling = []
+    for suite in SUITES:
+        if not suite.exists():          # a DUT's suite may not be checked out
+            continue
+        for test in yaml.safe_load(suite.read_text(encoding="utf-8"))["tests"]:
+            for covered in test.get("covers", []):
+                if (covered in known or RTL_FINDING.match(covered)
+                        or NATIVE_OP.match(covered)):
+                    continue
+                dangling.append(f"{suite.parent.parent.name}/{test['name']}: {covered}")
+    assert not dangling, (
+        "these `covers:` entries name no testplan row, RTL finding or "
+        "NATIVE-OP:\n  " + "\n  ".join(dangling))

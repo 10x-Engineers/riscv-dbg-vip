@@ -32,7 +32,7 @@ tests:
   # ── Discovery and activation ──────────────────────────────────────────
   - name: discovery
     config: configs/discovery_uvm.json
-    covers: [DIS-001, DIS-002, RST-025]
+    covers: [DIS-001, DIS-002, DTM-002]
     why: Version detection and IDCODE, before anything else is trusted.
 
   - name: dm_activation
@@ -50,7 +50,7 @@ tests:
   # ── Run control ───────────────────────────────────────────────────────
   - name: halt
     config: configs/halt_uvm.json
-    covers: [HALT-001, HALT-002, RC-001]
+    covers: [HALT-001, HALT-002]
     why: >-
       Was partial: aborted on the RTL-002 sbcs mismatch. Passes since the model
       honours a hardwired sbaccess (7f7f384) -- 8/8 in every run since.
@@ -82,7 +82,7 @@ tests:
 
   - name: halt_on_reset
     config: configs/halt_on_reset_uvm.json
-    covers: [RST-053, HALT-013]
+    covers: [RST-050, RST-051, RST-053]
     why: >-
       hasresethaltreq=0 on this DUT (RTL-004), so this exercises the portable
       substitute: haltreq asserted while ndmreset is held.
@@ -218,7 +218,7 @@ tests:
   - name: dm_corners
     config: configs/dm_corners_uvm.json
     covers: [DMC-001, DMC-002, DMC-003, DMC-004, DMC-005, DMC-006, DMC-007, DMC-008,
-             DMC-009, DMC-010]
+             DMC-009]
     expect: fail
     why: >-
       Debug Module code no ordinary flow reaches, found by code coverage: a
