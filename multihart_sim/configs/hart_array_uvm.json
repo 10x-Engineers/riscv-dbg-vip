@@ -1,0 +1,19 @@
+{
+    "_comment": [
+        "Multi-hart halt and resume, and the hart array mask.",
+        "",
+        "Runs against multihart_sim, which is dm_top with NrHarts=2 and dummy",
+        "harts behind it -- the only testbench in this project where dmstatus's",
+        "all*/any* pairs can differ at all.",
+        "",
+        "  make soc_test CFG_FILE=configs/hart_array_uvm.json"
+    ],
+    "scenario": "hart_array",
+    "transport": "uvm",
+    "mode": "batch",
+    "params": {},
+    "uvm": {
+        "socket_path": "/tmp/uvm_bridge.sock",
+        "timeout": 600.0
+    }
+}
