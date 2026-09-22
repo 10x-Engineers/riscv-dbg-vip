@@ -323,7 +323,12 @@ class dm_ref_model;
       // Write-tracked registers whose read-back the spec determines exactly.
       dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: abstractauto = value;
       dm_defines_pkg::DM_ADDR_HAWINDOWSEL:  hawindowsel  = value[14:0];
-      dm_defines_pkg::DM_ADDR_ABSTRACTCS:   relaxedpriv  = value[11];
+      // relaxedpriv is a 1.0 addition (#3.14.6). On a 0.13 DM the bit does
+      // not exist, so a write to it does nothing and it reads 0 -- modelling
+      // it as writable made every abstractcs read after a write-all-ones
+      // scan disagree with the DUT by exactly bit 11.
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS:
+        if (version >= VERSION_1_0) relaxedpriv = value[11];
 
       default: ; // unmodeled address -- ignored, not an error
     endcase

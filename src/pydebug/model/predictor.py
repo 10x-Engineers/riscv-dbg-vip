@@ -402,7 +402,10 @@ class DMPredictor:
         elif addr == ADDR_HAWINDOWSEL:
             self.hawindowsel = value & 0x7FFF
         elif addr == ADDR_ABSTRACTCS:
-            self.relaxedpriv = bool((value >> 11) & 1)
+            # A 1.0 field (#3.14.6): a 0.13 DM has no such bit, so a write
+            # to it does nothing and it reads back 0.
+            if self.version >= DMSTATUS_VERSION_1_0:
+                self.relaxedpriv = bool((value >> 11) & 1)
 
     # ── Abstract command (spec #3.7.1.1): cmd[18]=postexec, cmd[17]=transfer,
     #    cmd[16]=write, cmd[15:0]=regno ──────────────────────────────────────

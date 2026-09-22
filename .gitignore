@@ -91,4 +91,5 @@ ibex_sim/sim_outputs/
 
 # mk/dm_cov.sh output and imc session state (regenerable)
 /out/
+/out_ibex/
 imc.key

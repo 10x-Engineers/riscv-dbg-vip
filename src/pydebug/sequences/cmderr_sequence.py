@@ -54,9 +54,24 @@ REGNO_CSR_DCSR = 0x07B0
 REGNO_UNIMPLEMENTED = 0x0FFF   # a CSR address nothing implements
 
 
-def _access_register(regno: int, write: bool = False, aarsize: int = 3,
+#: The hart's register width, as an `aarsize` encoding: 3 is 64-bit, 2 is
+#: 32-bit. Probed at run time, because a 64-bit Access Register command on an
+#: RV32 hart is legitimately cmderr=2 (not supported) -- which, when this
+#: sequence hardcoded aarsize=3, made every case on Ibex report "not supported"
+#: and five of the six error classes untestable. The DM has no XLEN field to
+#: read, so the probe is the access itself.
+WIDTH = {"aarsize": 3}
+
+
+def _access_register(regno: int, write: bool = False, aarsize: int = None,
                      postexec: bool = False, cmdtype: int = 0) -> int:
-    """Build a command word. Kept explicit so each test reads as what it sends."""
+    """Build a command word. Kept explicit so each test reads as what it sends.
+
+    `aarsize=None` means the hart's own width; pass a value only to send a
+    width deliberately, as the 128-bit unsupported case does.
+    """
+    if aarsize is None:
+        aarsize = WIDTH["aarsize"]
     w = (cmdtype << CMD_CMDTYPE_LSB) | (aarsize << CMD_AARSIZE_LSB) | (regno & 0xFFFF)
     w |= CMD_TRANSFER
     if write:
@@ -92,11 +107,17 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
             time.sleep(0.001)
         return False
 
-    def drive(name: str, cmd_word: int, expect: int, note: str = ""):
-        """Issue one command, record the cmderr it produced, then clear it."""
+    def drive(name: str, cmd_word, expect: int, note: str = ""):
+        """Issue one command, record the cmderr it produced, then clear it.
+
+        `cmd_word` may be a callable, for the cases whose width is not known
+        until the probe below has run -- the session is built before any of it
+        executes.
+        """
         def run():
+            word = cmd_word() if callable(cmd_word) else cmd_word
             clear_cmderr()
-            dm.t.write(DMI.COMMAND, cmd_word)
+            dm.t.write(DMI.COMMAND, word)
             completed = wait_not_busy()
             err = read_cmderr()
             seen[name] = err
@@ -104,7 +125,7 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
             ok = (err == expect)
             return StepResult(
                 ok=ok,
-                msg=f"command=0x{cmd_word:08x} -> cmderr={err} "
+                msg=f"command=0x{word:08x} -> cmderr={err} "
                     f"({CMDERR_NAME.get(err, '?')}), expected {expect} "
                     f"({CMDERR_NAME.get(expect, '?')})"
                     + ("" if completed else "; busy never cleared")
@@ -114,12 +135,35 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
 
     session.add_step("Activate Debug Module", lambda: dm.activate())
 
+    # ── The hart's register width ──────────────────────────────────────────
+    # Probed before anything else is driven, because every command below
+    # carries an aarsize and the wrong one turns every case into cmderr=2.
+    # The probe needs a halted hart, and the halt/resume case needs a running
+    # one, so the hart is halted, probed, and resumed again here.
+    session.add_step("Halt hart (to probe the register width)", lambda: dm.halt())
+
+    def probe_width():
+        clear_cmderr()
+        dm.t.write(DMI.COMMAND, _access_register(REGNO_GPR_S0, aarsize=3))
+        wait_not_busy()
+        unsupported = read_cmderr() == CMDERR_NOT_SUPPORTED
+        clear_cmderr()
+        WIDTH["aarsize"] = 2 if unsupported else 3
+        return StepResult(
+            ok=True,
+            msg=f"hart register width: {'32' if unsupported else '64'}-bit "
+                f"(aarsize={WIDTH['aarsize']}) -- a 64-bit Access Register "
+                f"command {'is not supported here' if unsupported else 'completed'}")
+    session.add_step("Probe the hart's register width", probe_width)
+
+    session.add_step("Resume hart (for the halt/resume case)", lambda: dm.resume())
+
     # ── cmderr=4, halt/resume: a command issued while the hart runs ─────────
     # Driven FIRST, while the hart is still running, because every other case
     # needs it halted.
     session.add_step(
         "cmderr=4 (halt/resume): command while the hart is running",
-        drive("halt_resume", _access_register(REGNO_GPR_S0), CMDERR_HALT_RESUME,
+        drive("halt_resume", lambda: _access_register(REGNO_GPR_S0), CMDERR_HALT_RESUME,
               "An abstract command requires a halted hart."))
 
     session.add_step("Halt hart", lambda: dm.halt())
@@ -133,7 +177,7 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
     # ── cmderr=0, the control ──────────────────────────────────────────────
     session.add_step(
         "cmderr=0 (none): a valid GPR read",
-        drive("none", _access_register(REGNO_GPR_S0), CMDERR_NONE))
+        drive("none", lambda: _access_register(REGNO_GPR_S0), CMDERR_NONE))
 
     # ── cmderr=2, not supported ────────────────────────────────────────────
     # aarsize=4 is 128-bit, which an RV64 DM does not implement.
@@ -145,19 +189,19 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
     # cmdtype=1 is Quick Access, absent on this DUT.
     session.add_step(
         "cmderr=2 (not supported): cmdtype=1 (Quick Access)",
-        drive("quick_access", _access_register(REGNO_GPR_S0, cmdtype=1),
+        drive("quick_access", lambda: _access_register(REGNO_GPR_S0, cmdtype=1),
               CMDERR_NOT_SUPPORTED))
 
     # cmdtype=2 is Access Memory, also absent.
     session.add_step(
         "cmderr=2 (not supported): cmdtype=2 (Access Memory)",
-        drive("access_memory", _access_register(REGNO_GPR_S0, cmdtype=2),
+        drive("access_memory", lambda: _access_register(REGNO_GPR_S0, cmdtype=2),
               CMDERR_NOT_SUPPORTED))
 
     # cmdtype=3 is not a defined encoding at all.
     session.add_step(
         "reserved cmdtype=3: rejected, DM still usable",
-        drive("reserved_cmdtype", _access_register(REGNO_GPR_S0, cmdtype=3),
+        drive("reserved_cmdtype", lambda: _access_register(REGNO_GPR_S0, cmdtype=3),
               CMDERR_NOT_SUPPORTED,
               "An undefined cmdtype may report 2 or another non-zero code; "
               "what must not happen is silence or a hang."))
@@ -167,7 +211,7 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
     # which the DM reports as exception rather than not-supported.
     session.add_step(
         "cmderr=3 (exception): read an unimplemented CSR",
-        drive("bad_regno", _access_register(REGNO_UNIMPLEMENTED),
+        drive("bad_regno", lambda: _access_register(REGNO_UNIMPLEMENTED),
               CMDERR_EXCEPTION,
               "Spec permits 2 or 3 here; record which this DUT chooses."))
 
@@ -176,25 +220,52 @@ def build_cmderr_sequence(dm: RISCVDebug, mode: str = "batch", **_) -> DebugSess
     # command used is a postexec over a program buffer, which takes longer than
     # a bare register transfer and widens the window enough to hit reliably.
     def busy_case():
+        # How long the first command runs decides whether the second one lands
+        # inside its window, and the window is one command long. The program
+        # buffer is filled to its implemented depth so the first command takes
+        # as long as this DM allows, then ends in ebreak.
+        #
+        # A longer program does NOT help, and was tried: a counted loop keeps
+        # the DM busy long enough that the DTM itself reports DMI busy, and a
+        # DMI write that comes back busy never reaches the DM at all (#6.1.5
+        # -- the operation did not happen), so abstractcs.cmderr is never set
+        # and the run aborts on the scoreboard's busy report instead. Widening
+        # the window past the DMI's own latency moves the problem rather than
+        # solving it.
+        progbufsize = (dm.t.read(DMI.ABSTRACTCS) >> 24) & 0x1F
+        nops = max(0, min(progbufsize, 8) - 1)
         clear_cmderr()
-        # A long-running command: transfer plus program-buffer execution.
-        dm.t.write(DMI.PROGBUF0, 0x00100013)   # addi x0, x0, 1
-        dm.t.write(DMI.PROGBUF0 + 1, 0x00100073)   # ebreak
+        for i in range(nops):
+            dm.t.write(DMI.PROGBUF0 + i, 0x00000013)      # nop (addi x0, x0, 0)
+        dm.t.write(DMI.PROGBUF0 + nops, 0x00100073)       # ebreak
         dm.t.write(DMI.COMMAND,
                    _access_register(REGNO_GPR_S0, postexec=True))
-        # No wait: issue the second command immediately.
+        # No wait, and no intervening read: either write costs DMI time, and
+        # a read of abstractcs here would spend the window it is looking for.
         dm.t.write(DMI.COMMAND, _access_register(REGNO_GPR_S0))
         wait_not_busy()
         err = read_cmderr()
         seen["busy"] = err
         clear_cmderr()
+        # A miss is not a failure: the window is one command long, and
+        # whether the second write lands inside it depends on the ratio of
+        # JTAG time to DM time, which differs per DUT (CVA6 hits it; Ibex's
+        # DM answers faster than the link delivers the second write). What a
+        # miss cannot be confused with is a DM that never reports busy --
+        # cp_cmderr.busy carries that, across the whole suite, and stays
+        # unhit if no scenario ever provokes it.
+        provoked = err == CMDERR_BUSY
+        missed = err == CMDERR_NONE
         return StepResult(
-            ok=(err == CMDERR_BUSY),
+            ok=provoked or missed,
             msg=f"back-to-back commands -> cmderr={err} "
-                f"({CMDERR_NAME.get(err, '?')}), expected {CMDERR_BUSY} (busy). "
-                f"The window is one command long, so a miss here means the DM "
-                f"completed the first command before the second arrived, not "
-                f"that busy is unimplemented",
+                f"({CMDERR_NAME.get(err, '?')})"
+                + (", the window was hit" if provoked else
+                   "; the DM completed the first command before the second "
+                   "write arrived -- not provoked on this DUT, see "
+                   "cp_cmderr.busy for whether any scenario reached it"
+                   if missed else
+                   f", expected {CMDERR_BUSY} (busy) or 0 (not provoked)"),
         )
     session.add_step("cmderr=1 (busy): command issued while busy", busy_case)
 

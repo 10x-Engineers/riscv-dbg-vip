@@ -478,7 +478,7 @@ and its PMP.
 | SBA-007-C | Check | An access to an unmapped address sets `sberror`, and writing 1s clears it | `debug_module.html#dm-sbcs` | P1 | Pass | |
 | SBA-009-C | Check | Racing `sbdata`/`sbaddress` against a live transfer sets `sbbusyerror`, which clears and leaves the DM usable | `debug_module.html#dm-sbcs` | P2 | Pass | Does not assert the race lands: a DM fast enough to finish first is not wrong |
 | SBA-010-C | Check | SBA works with the hart **running** — it is hart-independent | `debug_module.html#system-bus-access` | P1 | Pass | |
-| SBA-019-V | Cover | `cg_sba.cp_sbaccess` widths other than the hardwired one | `debug_module.html#dm-sbcs` | P1 | Blocked | Excluded while #147 stands: a hardwired field cannot hold another width |
+| SBA-019-V | Cover | `cg_sba.cp_sbaccess` widths other than the hardwired one | `debug_module.html#dm-sbcs` | P1 | Blocked (CVA6) / Pass (Ibex) | Excluded on CVA6 while #147 stands: a hardwired field cannot hold another width. `sba_uvm`'s TC-SBA-019 now drives every width `sbcs` advertises and reports which ones the DM refuses -- on Ibex `sbaccess` is writable, so the 8- and 16-bit arms of `dm_sba` are reachable there |
 | SBA-001-S | Stimulate | Set `sbaccess=2` (32-bit), write `sbaddress0=A`, read `sbdata0` | `debug_module.html#sbcs` | P0 | Blocked | Blocked by RST-038 |
 | SBA-001-C | Check | `sbdata0` holds the contents of A; `sberror=0` | `debug_module.html#sbcs` | P0 | Blocked | |
 | SBA-002-S | Stimulate | Write `sbaddress0=A`, write `sbdata0=V`, then read A back | `debug_module.html#sbcs` | P0 | Blocked | |
