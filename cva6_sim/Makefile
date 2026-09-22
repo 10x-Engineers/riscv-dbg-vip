@@ -47,6 +47,7 @@ SRC_SV_KIT = \
     $(PYDEBUG_SV_DIR)/agents/dmi/dbg_dmi_pkg.sv \
     $(PYDEBUG_SV_DIR)/env/debug_pkg.sv \
     $(PYDEBUG_SV_DIR)/agents/jtag/jtag_bitbang.sv \
+    $(PYDEBUG_SV_DIR)/assertions/dmi_assertions.sv \
     tb_top_cva6.sv
 
 # Questa-only run flags for this SoC (unused under SIM=xcelium): -novopt keeps
