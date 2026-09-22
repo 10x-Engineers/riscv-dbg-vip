@@ -11,15 +11,53 @@ both.
 
 ## Regression
 
-_Numbers in this section are filled from the run recorded at the bottom of this
-file._
+**22 tests: 20 pass, 1 partial, 1 error — every result matches its declared
+`expect`.** The suite lists every `*_uvm.json` config in `ibex_sim/configs`, so
+a scenario cannot be quietly left out of it.
 
-Two scenarios are recorded as `partial`, both for the same reason: the model
-checker reports RTL-003 (a nonexistent hart reads `allnonexistent=1` **and**
-`allrunning=1`) as a `UVM_ERROR`, and one error ends the run. That defect
-reproduces on both DUTs and is inherited rather than introduced — the two lines
-are character-identical in PR #4's DM and in pulp upstream — and it is filed
-upstream as [`pulp-platform/riscv-dbg#200`](https://github.com/pulp-platform/riscv-dbg/issues/200).
+| Test | Result | Expected | Steps | UVM errors | Covers |
+|---|---|---|---:|---:|---|
+| discovery | pass | pass | 2/2 | 0 | `DIS-001`, `DIS-002`, `RST-025` |
+| dm_activation | pass | pass | 3/3 | 0 | `ACT-001`, `ACT-002`, `ACT-003`, `RAP-040` |
+| read_dmstatus | pass | pass | 1/1 | 0 | `RST-031`, `DIS-001` |
+| halt | pass | pass | 8/8 | 0 | `HALT-001`, `HALT-002`, `RC-001` |
+| run_control | pass | pass | 9/9 | 0 | `HALT-001`, `RES-001`, `RES-002`, `RES-003`, `RES-007-V` |
+| report_halt_status | pass | pass | 4/4 | 0 | `DHS-001` |
+| hart_selection | partial | partial | - | 1 | `HS-001`, `HS-002`, `HS-003` |
+| reset_ctrl | pass | pass | 11/11 | 0 | `RST-001` … `RST-006` |
+| halt_on_reset | pass | pass | 6/6 | 0 | `HOR-001` … `HOR-005` |
+| gpr_write | pass | pass | 4/4 | 0 | `AC-001`, `AC-002`, `AC-004` |
+| csr_access | pass | pass | 5/5 | 0 | `DCSR-001`, `DCSR-002`, `DCSR-003`, `AC-005` |
+| program_buffer | pass | pass | 6/6 | 0 | `PB-001`, `PB-002`, `PB-003`, `AC-010` |
+| sw_breakpoint_progbuf | pass | pass | 3/3 | 0 | `PB-004`, `SB-001` |
+| single_step | pass | pass | 9/9 | 0 | `SSTEP-001`, `SSTEP-002`, `DCSR-001` |
+| trigger | pass | pass | 15/15 | 0 | `TRIG-001`, `TRIG-002`, `TRIG-004`, `TRIG-006` |
+| sba | pass | pass | 11/11 | 0 | `SBA-001` … `SBA-004`, `SBA-019-V` |
+| cmderr | pass | pass | 17/17 | 0 | `AC-022-V` |
+| cmd_busy | pass | pass | 11/11 | 0 | `AC-021-S` |
+| dm_corners | error | error | - | 1 | `DMC-005-S`, `DMC-008-C` |
+| mem_scan | pass | pass | 18/18 | 0 | `PB-005`, `AC-014-S` |
+| dmi_error | pass | pass | 11/11 | 0 | `DTM-002`, `DTM-010`, `DTM-011`, `DTM-017`, `DTM-018` |
+| external_trigger | pass | pass | 3/3 | 0 | `HG-001` |
+
+The two non-passes are known and recorded, not open questions:
+
+- **`hart_selection`** aborts on RTL-003 — a nonexistent hart reads
+  `allnonexistent=1` **and** `allrunning=1`. It reproduces on both DUTs and is
+  inherited rather than introduced (the two lines are character-identical in
+  PR #4's DM and in pulp upstream), and it is filed upstream as
+  [`pulp-platform/riscv-dbg#200`](https://github.com/pulp-platform/riscv-dbg/issues/200).
+  The checker reports it as a `UVM_ERROR`, and one error ends a run.
+- **`dm_corners`** runs 10 of its 12 steps and then ends on an RTL assertion
+  rather than a checker error, which is why it is `error` and not `partial`:
+  TC-DMC-003 starts an SBA read the bus cannot answer, asserts `ndmreset`, and
+  reads `sbdata1` — which comes back X and trips lowRISC's own `DataKnown_A`
+  inside the DM's response FIFO. See `rtl_findings.md`; it is recorded rather
+  than filed, because the X's origin (the DM or the demo system's bus model) is
+  not yet established.
+
+For comparison, the same VIP against CVA6 on the same day: 36 tests, 23 pass,
+12 known RTL failures, 1 partial, every result matching `expect`.
 
 ## What running a second DUT found
 
@@ -41,7 +79,28 @@ DUT's shape.
 
 ## Coverage
 
-_Filled from the recorded run._
+Debug-subsystem code coverage, merged across the 22 runs, with CVA6's
+exclusions applied unchanged:
+
+| Metric | Raw | With exclusions |
+|---|---|---|
+| Block | 94.23% (490/520) | **94.96%** (490/516, 18 excluded) |
+| Expression | 92.65% (63/68) | **92.65%** (63/68, 8 excluded) |
+| Toggle | 45.74% (3627/7929) | **63.91%** (3627/5675, 2254 excluded) |
+| FSM state | 100.00% (30/30) | **100.00%** |
+| FSM transition | 100.00% (43/43) | **100.00%** |
+
+Functional coverage: 153/286 reachable bins (53.5%), with the same 19
+exclusions CVA6 uses. The gap to CVA6's 100% is scenario coverage, not DM
+behaviour: this suite runs 22 scenarios to CVA6's 36, and the ones it does not
+run are the trigger-enabled, native-debug and privilege-stepping scenarios that
+need firmware and core features Ibex's demo system does not provide.
+
+Where this started, for scale: before the nine findings above, the same
+measurement read **76.7% block, 77.9% expression, 31.5% toggle, 76.7% FSM
+state, 60.5% FSM transition**. None of that improvement came from new DM
+stimulus written for Ibex — it came from scenarios that already existed
+finally running to completion on it.
 
 The exclusions are CVA6's, applied unchanged. Rules that no longer match are
 reported by `mk/dm_cov_exclude.py` rather than deleted silently — that report is
