@@ -533,3 +533,17 @@ did not pass each config's `params.elf`, so every scenario ran the default
 table and stepped whatever sat at that address in the wrong one — a 2-byte
 compressed instruction — and passed. Fixed in the Makefile; worth knowing
 because it passed vacuously rather than failing.
+
+**Open question — the Ibex DM can put X on a DMI response.** `dm_corners`'
+TC-DMC-003 starts an SBA read the bus cannot answer and then asserts
+`ndmreset`; reading `sbdata1` in that state returns `0xxxxxxxxx`, which trips
+lowRISC's own `DataKnown_A` assertion *inside the DM's response FIFO*
+(`prim_fifo_sync.sv:151`, `i_dm_csrs.i_fifo`) and ends the simulation. The DM's
+`sbdata_q` is reset to 0 (`dm_csrs.sv:614`) and assigned only from `sbdata_i`,
+so the X arrives from the system bus during the aborted transfer rather than
+from an unreset register. Whether the demo system's bus model is entitled to
+leave read data X when a transfer is cut short by reset — and whether the DM
+should gate what it latches on a completed response — is not yet established,
+so this is recorded, not filed. It reproduces every run on Ibex and is why
+`dm_corners` is `expect: error` in that suite. CVA6 does not show it: its
+interconnect answers the aborted read.
