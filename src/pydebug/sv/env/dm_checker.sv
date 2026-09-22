@@ -225,6 +225,26 @@ class dm_checker extends uvm_component;
           "DTM  (JTAG shift) addr=0x%02h op=%0d wdata=0x%08h  (prev: status=%0d rdata=0x%08h)",
           txn.dmi_addr, txn.dmi_op, txn.dmi_wdata, txn.dmi_status, txn.dmi_rdata),
           UVM_HIGH)
+      // Only JTAG_DMI shifts are DMI accesses. A dtmcs, IDCODE or BYPASS
+      // shift has a different DR length entirely, so its bits decode as
+      // nonsense in the DMI fields -- and feeding that to the pending-read
+      // state machine below makes the checker compare a reply that belongs
+      // to no request. dmireset/dmihardreset additionally invalidate what
+      // the DTM would have returned for an outstanding read (the driver
+      // re-issues it, see jtag_dmi_read_seq.sv), so the pending entry goes
+      // with them. Found as an abstractcs read "returning" 0x11111111, a
+      // pattern the scenario had written to data0 several shifts earlier.
+      if (txn.ir_val != dm_defines_pkg::JTAG_DTMCS &&
+          txn.ir_val != dm_defines_pkg::JTAG_DMI) continue;
+      if (txn.ir_val == dm_defines_pkg::JTAG_DTMCS) begin
+        if (txn.dr_data_in[17:16] != 2'b00) begin
+          `uvm_info("JTAG_DTM", $sformatf(
+              "dtmcs reset (wdata[17:16]=%02b): dropping any pending read",
+              txn.dr_data_in[17:16]), UVM_MEDIUM)
+          pending_valid = 1'b0;
+        end
+        continue;
+      end
       record_dmi_sba(txn);
       // Only real accesses cross the DTM; a nop shift produces no bus request.
       if (txn.dmi_op inside {2'd1, 2'd2}) begin

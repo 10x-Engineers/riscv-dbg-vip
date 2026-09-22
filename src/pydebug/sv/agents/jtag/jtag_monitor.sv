@@ -133,6 +133,13 @@ class jtag_monitor extends uvm_monitor;
         TAP_UPDATE_DR: begin
           if (curr_ir == 5'h11) begin  // JTAG_DMI
             emit_dmi_txn(dr_reg, dr_out_reg, dr_bit);
+          end else if (curr_ir == 5'h10) begin  // JTAG_DTMCS
+            // dtmcs is not a DMI access, but dmireset/dmihardreset change
+            // what the DMI will return next (#6.1.4), and the checker's
+            // one-deep request/response pipeline has to know. Emitting it
+            // keeps the monitor's contract -- report what was observed --
+            // and leaves the interpreting to dm_checker.sv.
+            emit_dtmcs_txn(dr_reg, dr_out_reg, dr_bit);
           end
           dr_reg   = '0;
           dr_bit   = 0;
@@ -163,6 +170,24 @@ class jtag_monitor extends uvm_monitor;
   // only needs to report both halves of what it observed on this shift,
   // faithfully and without trying to interpret them.
   // ---------------------------------------------------------------------------
+  function void emit_dtmcs_txn(logic [63:0] dr_raw, logic [63:0] dr_out_raw, int n_bits);
+    jtag_txn_c txn;
+    txn = jtag_txn_c::type_id::create("mon_dtmcs");
+    txn.dr_data_in  = dr_raw     >> (64 - n_bits);
+    txn.dr_data_out = dr_out_raw >> (64 - n_bits);
+    txn.dr_len      = n_bits;
+    txn.ir_val      = 5'h10;
+    txn.phase       = jtag_txn_c::PH_DR_ONLY;
+    // No DMI fields: a dtmcs shift is 32 bits and decodes as nonsense in
+    // them. Left at their defaults so nothing downstream can mistake this
+    // for an access -- ir_val is what says which it is.
+    txn.dmi_op = 2'b00;
+    `uvm_info("JTAG_MON", $sformatf(
+      "dtmcs shift: wdata=0x%08h rdata=0x%08h", txn.dr_data_in[31:0],
+      txn.dr_data_out[31:0]), UVM_HIGH)
+    analysis_port.write(txn);
+  endfunction
+
   function void emit_dmi_txn(logic [63:0] dr_raw, logic [63:0] dr_out_raw, int n_bits);
     jtag_txn_c txn;
     txn = jtag_txn_c::type_id::create("mon_txn");
