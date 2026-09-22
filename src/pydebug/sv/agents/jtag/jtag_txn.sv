@@ -44,6 +44,19 @@ class jtag_txn_c extends uvm_sequence_item;
   endfunction
 
   // Pack DMI fields into dr_data_in: {addr[6:0], data[31:0], op[1:0]}
+  //
+  // The 41-bit length assumes `dtmcs.abits` == 7, which is what both DUTs'
+  // DTMs implement and what `dmi_jtag_tap` defaults to. It is NOT a spec
+  // constant: #6.1.4 makes abits implementation-defined and a debugger is
+  // meant to read it out of dtmcs before its first DMI scan. On a DTM with a
+  // different abits every scan here would be misaligned by the difference --
+  // addresses and data shifted into the wrong fields, with no error anywhere,
+  // which is the worst shape a bug can take.
+  //
+  // Deliberately not parameterised yet: the length is baked into the monitor's
+  // field slices and the checker's correlation as well, so changing it is a
+  // three-file change that wants its own regression rather than a drive-by.
+  // Reviewed and recorded in #9; revisit when a third DTM appears.
   function void pack_dmi();
     dr_data_in = {26'h0, dmi_addr, dmi_wdata, dmi_op};
     dr_len      = 41;

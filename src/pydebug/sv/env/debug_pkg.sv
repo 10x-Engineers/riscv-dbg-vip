@@ -16,6 +16,12 @@ package debug_pkg;
   // only reports it when nobody asked for it.
   bit dmi_busy_expected;
 
+  // The sequences come first and in no particular order, which is fine only
+  // because none of them references another. That is a real constraint, not an
+  // accident: dmi_read_seq's busy recovery has to write dtmcs.dmireset, and
+  // because jtag_dtmcs_seq is included AFTER it, the read sequence builds that
+  // scan itself rather than starting the class. Move dtmcs_seq.sv above
+  // dmi_read_seq.sv before making the read sequence depend on it.
   `include "../sequences/dmi_read_seq.sv"
   `include "../sequences/dmi_write_seq.sv"
   `include "../sequences/dtmcs_seq.sv"

@@ -36,15 +36,27 @@ the plan.
 | Column | Meaning |
 |---|---|
 | **Pri** | P0 blocks tapeout · P1 compliance · P2 robustness · P3 optional |
-| **Status** | `Not started` · `Pass` · `Fail` · `Blocked` · `N/A` |
+| **Status** | `Not started` · `Pass` · `Fail` · `Blocked` · `N/A`. One of those five words and nothing else — `tests/test_regression_integrity.py` checks it. Where a row's result differs per DUT, write `Pass (CVA6) / Blocked (Ibex)`: the status is per row, the DUT in brackets. |
 | **Remarks** | Result, exception, and the issue it was filed as |
 
 `Reference` anchors resolve under `https://docs.riscv.org/reference/debug/v1.0/`.
 
 ### Status
 
-Run-control, abstract-command, program-buffer and single-step rows carry real
-results from CVA6. Everything else is specified but not run — stated per row.
+468 rows. **168 pass, 19 fail, 39 blocked, 11 N/A, 231 not started** — so roughly half of this plan is specified and not yet run, and saying so here is the point: a reader should not have to tally the column to find that out.
+
+Every `Fail` names the RTL finding it belongs to, and every `Blocked` names what
+blocks it. Run-control, abstract-command, program-buffer, single-step, trigger
+and native-debug rows carry real results from CVA6; the Ibex column of the same
+rows is recorded in `results/ibex_regression_and_coverage.md` rather than
+duplicated here.
+
+Regenerate these counts when the plan changes:
+
+    python3 -c "import re,collections,pathlib; \
+      rows=re.findall(r'^\| (?:TC-)?[A-Z]+-\d+[A-Z0-9-]* \| \w+ \|.*?\| P\d \| ([^|]+)\|', \
+      pathlib.Path('testplans/riscv_debug_testplan.md').read_text(), re.M); \
+      print(collections.Counter(r.strip().split(' (')[0] for r in rows))"
 
 ---
 
@@ -109,7 +121,7 @@ wrong reset value in an unused field surfaces later as an unexplained mismatch.
 | RST-037-C | Check | `progbuf0..7` == reset value | P1 | Not started | |
 | RST-038-S | Stimulate | Read `sbcs` immediately after reset, before any other `sbcs` write | P0 | Not started | Both values recorded so far carry `sbreadonaddr=1`, whose reset is 0 — **neither was a post-reset read** |
 | RST-038-C | Check | `sbcs` == `0x20040808` for this DUT's presets (`sbasize=64`, `sbaccess64=1`), with `sbversion=1`, `sbbusy=0`, `sberror=0`, `sbreadonaddr=0` | P0 | Not started | Computed from the spec's per-field reset column, not observed |
-| RST-038-C2 | Check | `sbcs.sbaccess` == **2** after reset | P0 | **Fail** | Spec gives `sbaccess` a reset of constant `2`, **not** `Preset`, with no exception for a DM that lacks 32-bit support. RTL forces 3 at `dm_csrs.sv:618`: `sbaccess = (BusWidth == 64) ? 3 : 2` |
+| RST-038-C2 | Check | `sbcs.sbaccess` == **2** after reset | P0 | Fail | Spec gives `sbaccess` a reset of constant `2`, **not** `Preset`, with no exception for a DM that lacks 32-bit support. RTL forces 3 at `dm_csrs.sv:618`: `sbaccess = (BusWidth == 64) ? 3 : 2` |
 | RST-039-C | Check | `sbaddress0..3`, `sbdata0..3` == reset value | P1 | Not started | |
 | RST-040-C | Check | `haltsum0..3` == 0 with no hart halted | P2 | Not started | |
 | RST-041-C | Check | `dmcs2` == reset value | P2 | Pass | `external_trigger_uvm` |
@@ -182,8 +194,8 @@ Reference: `debug_module.html`
 | RAP-006-S | Stimulate | Set `abstractcs.cmderr` via a failing command, then write 1s to it | P1 | Not started | |
 | RAP-006-C | Check | `cmderr` clears only on a write of 1s, not on a write of 0s | P1 | Not started | |
 | RAP-007-C | Check | Fields the spec permits an implementation to tie (`hartsel` high bits, `hartarraymask`, `dcsr` bits marked hardwireable) read their fixed value regardless of what is written | P1 | Not started | The spec grants tying **explicitly** where it means to; this row covers only those |
-| RAP-007-C2 | Check | `sbcs.sbaccess` is writable — write each value 0..4 and read it back | P1 | **Fail** | `sbaccess` is declared **`R/W`**, not `WARL` and not `R`. RTL clobbers it: `dm_csrs.sv:513` applies the DMI write, then line 618 unconditionally overwrites `sbaccess` later in the same `always_comb`, so no debugger write can ever stick. **No clause anywhere in the spec permits tying this field** |
-| RAP-007-C3 | Check | Writing an unsupported size to `sbaccess`, then starting a bus access, sets `sberror=4` | P1 | **Fail** | Spec: "If `sbaccess` has an unsupported value when the DM starts a bus access, the access is not performed and `sberror` is set to 4." Hardwiring makes this specified error path **unreachable** — the clause presupposes the field can hold an unsupported value |
+| RAP-007-C2 | Check | `sbcs.sbaccess` is writable — write each value 0..4 and read it back | P1 | Fail | `sbaccess` is declared **`R/W`**, not `WARL` and not `R`. RTL clobbers it: `dm_csrs.sv:513` applies the DMI write, then line 618 unconditionally overwrites `sbaccess` later in the same `always_comb`, so no debugger write can ever stick. **No clause anywhere in the spec permits tying this field** |
+| RAP-007-C3 | Check | Writing an unsupported size to `sbaccess`, then starting a bus access, sets `sberror=4` | P1 | Fail | Spec: "If `sbaccess` has an unsupported value when the DM starts a bus access, the access is not performed and `sberror` is set to 4." Hardwiring makes this specified error path **unreachable** — the clause presupposes the field can hold an unsupported value |
 | RAP-008-C | Check | Every reserved bit in every DM register reads 0 | P1 | Not started | |
 | RAP-009-S | Stimulate | Read and write every unimplemented DMI address in range | P1 | Not started | |
 | RAP-009-C | Check | Reads return 0, writes are ignored, no error is raised, no hang | P1 | Not started | |
@@ -293,11 +305,11 @@ not exist or cannot respond.
 
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
-| HS-001-S | Stimulate | Write `dmcontrol.hartsel=0` (a hart that exists) | `debug_module.html#dmcontrol` | P0 | **Fail** | `hart_selection_uvm` aborts: RTL `0x0080cc83` vs model `0x0080c083` |
-| HS-001-C | Check | `dmstatus` reports that hart's state; `anynonexistent=0` | `debug_module.html#dmstatus` | P0 | **Fail** | |
-| HS-002-S | Stimulate | Write `dmcontrol.hartsel` to an index with no hart | `debug_module.html#dmcontrol` | P1 | **Fail** | |
+| HS-001-S | Stimulate | Write `dmcontrol.hartsel=0` (a hart that exists) | `debug_module.html#dmcontrol` | P0 | Fail | `hart_selection_uvm` aborts: RTL `0x0080cc83` vs model `0x0080c083` |
+| HS-001-C | Check | `dmstatus` reports that hart's state; `anynonexistent=0` | `debug_module.html#dmstatus` | P0 | Fail | |
+| HS-002-S | Stimulate | Write `dmcontrol.hartsel` to an index with no hart | `debug_module.html#dmcontrol` | P1 | Fail | |
 | HS-002-C | Check | `anynonexistent=1`, `allnonexistent=1` | `debug_module.html#dmstatus` | P1 | Not started | |
-| HS-002-C2 | Check | `allrunning=0` and `anyrunning=0` — a hart that does not exist is not running | `debug_module.html#dmstatus` | P1 | **Fail** | RTL reports `allrunning=1`/`anyrunning=1`. Spec violation, reproduces on **both** DUTs — issue #130 |
+| HS-002-C2 | Check | `allrunning=0` and `anyrunning=0` — a hart that does not exist is not running | `debug_module.html#dmstatus` | P1 | Fail | RTL reports `allrunning=1`/`anyrunning=1`. Spec violation, reproduces on **both** DUTs — issue #130 |
 | HS-003-C | Check | `hartsel` is unchanged by halt, resume and abstract commands | `debug_module.html#dmcontrol` | P1 | Not started | |
 | HS-004-S | Stimulate | Hold a hart in reset, then read `dmstatus` | `debug_module.html#dmstatus` | P1 | Not started | |
 | HS-004-C | Check | `anyunavail`/`allunavail` reflect the unavailable hart | `debug_module.html#dmstatus` | P1 | Not started | |

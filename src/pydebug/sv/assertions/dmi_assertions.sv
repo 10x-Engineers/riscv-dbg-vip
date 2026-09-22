@@ -118,6 +118,19 @@ module dmi_assertions (
 
   // Right-aligned view of the current scan, valid at Update-DR.
   wire [1:0] dmi_op_in      = dr_in[1:0];
+
+  // dr_in is filled LSB-first by shifting DOWN from the top
+  // (`dr_in <= {tdi, dr_in[W-1:1]}`), so after an n-bit scan the word occupies
+  // bits [W-1 : W-n] and bit b of it sits at dr_in[W-n+b] -- NOT at dr_in[b].
+  // That is invisible for a DMI scan, where n == W and the two coincide, and
+  // wrong for every shorter scan. dtmcs is 32 bits against DMI's 41, so
+  // `dr_in[DTMCS_DMIRESET_BIT]` read bit 16 of a word whose bit 16 is at 25:
+  // the dmireset write was never recognised, the sticky status never cleared
+  // in this checker, and a_sticky_status_persists then failed on every
+  // subsequent scan. Found the first time this file was actually bound into a
+  // testbench (#14) -- eight failures in dmi_error, none of them the DUT's.
+  wire [DMI_DR_WIDTH-1:0] dr_in_aligned =
+      (dr_bits == 0) ? '0 : (dr_in >> (DMI_DR_WIDTH - dr_bits));
   wire [1:0] dmi_status_out = dr_out[1:0];
 
   wire at_update_dr  = (state == TAP_UPDATE_DR);
@@ -180,7 +193,8 @@ module dmi_assertions (
           // #6.1.4 dtmhardreset: "returning all registers and internal state to their
           // reset value" — which necessarily includes the sticky status.
           if (is_dtmcs_ir && (dr_bits != 0)) begin
-            if (dr_in[DTMCS_DMIRESET_BIT] || dr_in[DTMCS_DTMHARDRESET_BIT]) begin
+            if (dr_in_aligned[DTMCS_DMIRESET_BIT] ||
+                dr_in_aligned[DTMCS_DTMHARDRESET_BIT]) begin
               sticky_valid  <= 1'b0;
               sticky_status <= '0;
             end
@@ -269,7 +283,8 @@ module dmi_assertions (
   // flight, which lives in the sequence, not at the pins. So the honest pin-level
   // statement is: prove the clear path was exercised.
   c_dmireset_clears_sticky: cover property (
-    dtmcs_update && (dr_in[DTMCS_DMIRESET_BIT] || dr_in[DTMCS_DTMHARDRESET_BIT]) && sticky_valid
+    dtmcs_update && (dr_in_aligned[DTMCS_DMIRESET_BIT] ||
+                     dr_in_aligned[DTMCS_DTMHARDRESET_BIT]) && sticky_valid
   );
 
   // ── 3. No overlapping in-flight DR shift ───────────────────────────────────

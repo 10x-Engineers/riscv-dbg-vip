@@ -81,14 +81,14 @@ Because the two lists are cut differently, they don't line up one-to-one — one
 | 1 | All hart registers R/W | Abstract GPR read/write; Abstract access to non-GPR registers (CSRs) | Covered |
 | 2 | Memory access (hart POV / system bus / both) | Memory access from hart's point of view; Direct System Bus Access | Covered |
 | 3 | RV32/RV64/RV128 support | — (cross-cutting: `aarsize`/`aamsize`/`sbaccess` width fields on every mechanism, not one row) | Cross-cutting, not a single row |
-| 4 | Any hart independently debugged | Halt / resume individual hart; Report hart halt status | Partially covered — `TC-RC-*` backs "Halt/resume," but "Report hart halt status" (`haltsum0-3`) has zero TC-IDs (see Feature-Level Verification Detail below) |
+| 4 | Any hart independently debugged | Halt / resume individual hart; Report hart halt status | Covered — `TC-RC-*` backs "Halt/resume"; "Report hart halt status" now has rows and results too: `DMC-008` reads `haltsum1-3` (Fail, RTL-007) and the multi-hart scenario reads `haltsum0` with one and then both harts halted (0x2, then 0x3) |
 | 5 | Debugger self-discovery | Discover DM/implementation info | Covered |
 | 6 | Debug from first instruction | Reset signal / debug from first instruction; Halt-on-reset | Covered — has TC-IDs (`TC-RST-*`, `TC-HOR-*`) |
 | 7 | Halt on software breakpoint (`ebreak`) | — | **Gap**: no CAT2 row yet for Sdext `ebreak`-in-M-mode halt behavior — see the new Sdext/Trigger-Module native-debugging catalog below for the native (`ebreakm=0`) side of this |
 | 8 | Hardware single-step | Hardware single-step | Covered |
 | 9 | Transport independence | Underlying-every-row DTM note; verification level 5 (cross-platform) | Covered structurally, not a register mechanism |
 | 10 | No microarchitecture knowledge needed | — (design principle; proven behaviorally by reusing identical stimulus across Ibex/CVA6, level 5) | Proven by construction, not a row |
-| 11 | Arbitrary hart-subset halt/resume (Optional) | Multi-hart halt/resume/reset | Covered |
+| 11 | Arbitrary hart-subset halt/resume (Optional) | Multi-hart halt/resume/reset | **Partially covered — and the gap is the DM's, not the plan's.** Measured on `multihart_sim` (dm_top with NrHarts=2): this DM implements no hart array mask — `hasel` and `hawindow` both read back 0 after writing 1, which is the spec's own discovery method (#3.14.2) — so an *arbitrary subset* cannot be selected at all. Halting and resuming several harts works, one selection at a time, and `haltsum0` carries the aggregate. `some_not_all` in `x_hartsel_x_all_any` is therefore unreachable on this DM |
 | 12 | Arbitrary instructions on halted hart (Optional) | Program Buffer | Covered |
 | 13 | Register access without halting (Optional) | — | **Gap**: no CAT2 row yet for non-halting register access |
 | 14 | Short instruction sequence on a running hart, low overhead (Optional) | — | **Gap**: distinct from Program Buffer's halted-hart case; no CAT2 row yet |
@@ -1294,13 +1294,13 @@ Built by walking `testplans/riscv_debug_testplan.md`'s CAT1/CAT2/CAT3 rows (the 
 | External trigger source (`tmexttrigger`, external) | EXT-TRIG-OP7 | ❌ open — **new row** | ❌ none | ❌ none | — |
 | Context-scoped hardware breakpoint | EXT-TRIG-OP8 | ❌ open — **new row** | ❌ none | ❌ none | — |
 | Trigger chaining | EXT-TRIG-OP9 | ❌ open — **new row** | ❌ none | ❌ none | — |
-| `ebreak` native breakpoint exception | NATIVE-OP1 | ❌ open — **new row**, native side of feature 7's gap | ❌ none (needs the Native trap/privileged-CSR model) | ❌ none | — |
-| Trigger-based native breakpoint/watchpoint (`action=0`) | NATIVE-OP2 | ❌ open — **new row** | ❌ none | ❌ none | — |
-| Native single-step via `icount` | NATIVE-OP3 | ❌ open — **new row**, replaces the old "Hardware single-step" placeholder for the native path (the `dcsr.step` external path is a separate, still-open gap — see note below) | ❌ none | ❌ none | — |
-| Reentrancy protection during a native trap handler | NATIVE-OP4 | ❌ open — **new row** | ❌ none | ❌ none | — |
-| Multi-trigger disambiguation (native) | NATIVE-OP5 | ❌ open — **new row** | ❌ none | ❌ none | — |
+| `ebreak` native breakpoint exception | NATIVE-OP1 | ❌ open — **new row**, native side of feature 7's gap | ✅ `model/registers.py` (dcsr/dpc/dscratch, Sdext 4.9) | ❌ none — the one native operation with no firmware program yet | — |
+| Trigger-based native breakpoint/watchpoint (`action=0`) | NATIVE-OP2 | ✅ NATIVE-OP rows in the testplan | ✅ `model/native_trigger.py` | ✅ `native_etrigger`, `native_itrigger`, `act_sdtrig_mcontrol6` | RTL-015 (#164), RTL-016 (#165) |
+| Native single-step via `icount` | NATIVE-OP3 | ✅ | ✅ `model/native_trigger.py` (icount counts only in enabled modes) | ✅ `native_icount`, `act_sdtrig_icount` | RTL-014 (#163). Replaces the old "Hardware single-step" placeholder for the native path (the `dcsr.step` external path is a separate, still-open gap — see note below) | ❌ none | ❌ none | — |
+| Reentrancy protection during a native trap handler | NATIVE-OP4 | ✅ | ✅ `native_trigger.py`'s `Reentrancy` (MIE gate / tcontrol / neither) | ✅ `native_reentrancy` | RTL-017 (#166) — CVA6 implements neither protection |
+| Multi-trigger disambiguation (native) | NATIVE-OP5 | ✅ | ✅ `registers.py` `MCONTROL6` hit0/hit1 | ✅ `native_hit` (passes; also S-mode) | — |
 | Context-scoped native trigger | NATIVE-OP6 | ❌ open — **new row** | ❌ none | ❌ none | — |
-| Debug-Mode-CSR isolation boundary (negative test) | NATIVE-OP7 | ❌ open — **new row** | ❌ none | ❌ none | — |
+| Debug-Mode-CSR isolation boundary (negative test) | NATIVE-OP7 | ✅ | ✅ `registers.py` `CSR_REGISTERS` | ✅ `native_dbgcsr` (passes) | — |
 | *(gap: `dcsr.step` external single-step — feature 8's other half, not yet cataloged as its own Debug Module operation)* | n/a | ❌ no row yet | ❌ none | ❌ none | — |
 
 **Highest-leverage next action, updated**: the Reset/Run-Control cluster (OP2/OP3/OP7/OP8/OP9) now has model+stimulus+a Python-mock-clean regression, and one CVA6 data point each for `run_control` (root-caused blocker, not fixed) and `dm_activation` (clean). Per the phased approach, the next highest-leverage work is (a) run the three CVA6 scenarios this session left unexecuted (`reset_ctrl`, `halt_on_reset`, `hart_selection` — predicted clean, not yet confirmed) and the Ibex baseline, and (b) start the **next** vertical slice at OP4/OP5/OP6 (hart selection/discovery), since `hart_selection_sequence.py` already exists as a partial start and this is the next unclaimed cluster in spec order. Separately, this session's clause parses surfaced **21 new CAT2 rows with no testplan entry at all** (Debug Module: OP1/OP11/OP14/OP20; Trigger Module external: EXT-TRIG-OP1–OP9; Sdext/Trigger-Module native: NATIVE-OP1–OP7; plus the still-open feature 7/13/14 gaps and the `dcsr.step` external-single-step gap) — these need to be added to `testplans/riscv_debug_testplan.md` itself the next time `riscv-debug-testplan` walks the table. This strategy document can name every gap; only the testplan skill mints TC-IDs for them. Given the user's stated intent to close this strategy document and move to the testplan next, that testplan pass is the immediate next step once this document is reviewed and finalized.

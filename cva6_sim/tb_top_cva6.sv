@@ -117,6 +117,25 @@ module tb_top_soc;
 `endif
     );
 
+    // ── Protocol-tier SVA on the JTAG pins ─────────────────────────────────
+    // dmi_assertions has shipped since the VIP kit was written and was never
+    // bound, so 357 lines of protocol checking ran nowhere -- including
+    // a_dmi_scan_length, which is the one check that would catch a DMI scan
+    // of the wrong width, the most common bring-up bug on a new DTM.
+    //
+    // The MUXED pins, not jtag_vif's: tb muxes the UVM driver against the
+    // OpenOCD adapter, and binding to jtag_vif would check nothing whenever
+    // +JTAG_MASTER=openocd is used -- exactly the runs where a
+    // non-conformant TAP walk is most likely. TDO is the DUT's output and
+    // reaches jtag_vif.tdo on both paths.
+    bind tb_top_soc dmi_assertions u_dmi_assertions (
+        .tck    (muxed_tck),
+        .tdi    (muxed_tdi),
+        .tms    (muxed_tms),
+        .trst_n (muxed_trstn),
+        .tdo    (jtag_vif.tdo)
+    );
+
     // ── AXI taps ───────────────────────────────────────────────────────────
     // Two buses matter for debug:
     //   dm_sba   -- dut.slave[1], the Debug Module's System Bus Access master
