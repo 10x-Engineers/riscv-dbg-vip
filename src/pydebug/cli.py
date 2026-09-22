@@ -164,6 +164,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.trigger_sequence",
         "builder": "build_trigger_sequence",
     },
+    "reset_values": {
+        "module": "pydebug.sequences.reset_values_sequence",
+        "builder": "build_reset_values_sequence",
+    },
 }
 
 

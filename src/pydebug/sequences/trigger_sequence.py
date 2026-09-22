@@ -196,7 +196,7 @@ def _try(dm, fn, default=0):
         return fn() or 0
     except Exception:  # noqa: BLE001
         try:
-            dm.t.write(0x16, 0x7 << 8)          # abstractcs.cmderr, W1C
+            dm.clear_cmderr()
         except Exception:  # noqa: BLE001
             pass
         return default

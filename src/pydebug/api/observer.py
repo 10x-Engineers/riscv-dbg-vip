@@ -100,6 +100,28 @@ class ObservingTransport(DebugTransport):
 
     # ── Pass-through introspection ────────────────────────────────────────────
 
+    def __getattr__(self, name: str):
+        """Delegate anything this wrapper does not define to the transport.
+
+        The four core operations above are the whole of `DebugTransport`, but
+        several transports carry capabilities beyond it -- `dtmcs()`,
+        `dmi_scan()` and `tms_walk()` reach the JTAG DTM, which has no DMI
+        address -- and four sequences use them, two of them behind
+        `hasattr(dm.t, ...)`. Without this, wrapping a transport would make
+        those capabilities vanish: `dmi_error` would raise AttributeError and
+        `reset_values` would quietly report N/A for a check it could have run,
+        which is the worse of the two. The wrapper claims to be transparent, so
+        it has to be transparent for those too.
+
+        Only reached for attributes normal lookup did not find, so it cannot
+        shadow `read`/`write`/`connected`. The `_delegate` guard keeps it from
+        recursing if it is consulted before `__init__` has run (e.g. during
+        unpickling).
+        """
+        if name == "_delegate":
+            raise AttributeError(name)
+        return getattr(self._delegate, name)
+
     @property
     def delegate(self) -> DebugTransport:
         """The wrapped transport, for tests that need the concrete backend."""

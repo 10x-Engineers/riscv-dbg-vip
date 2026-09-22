@@ -555,6 +555,30 @@ class RISCVDebug:
         self.t.write(DMI.COMMAND, cmd)
         self._wait_abstractcs()
 
+    def read_cmderr(self) -> int:
+        """abstractcs.cmderr (#3.14.6): why the last abstract command failed.
+
+        0 means no error; any other value is sticky, so this reports the FIRST
+        failure since it was last cleared, not necessarily the last command's.
+        """
+        return (self.read_abstractcs() >> 8) & 0x7
+
+    def clear_cmderr(self) -> None:
+        """Clear abstractcs.cmderr (#3.14.6: W1C -- write ones, not zeros).
+
+        Every abstract command is refused while cmderr is set, and the DM
+        reports the OLD error rather than what the new command would have
+        done. A caller that has handled a failed command must call this before
+        issuing another, or every later command fails with the first one's
+        error and every later read returns a stale value.
+
+        `_wait_abstractcs()` deliberately does not call this itself: two
+        testplan rows (AC-021, DMC-005) exist to observe that cmderr really is
+        sticky, and a command layer that silently cleared it would make that
+        unobservable.
+        """
+        self.t.write(DMI.ABSTRACTCS, 0x7 << 8)
+
     def read_abstractcs(self) -> int:
         """
         Raw abstractcs (DMI 0x16) word.
@@ -721,7 +745,13 @@ class RISCVDebug:
             time.sleep(self.POLL_INTERVAL)
 
     def _wait_abstractcs(self, timeout: float = DEFAULT_TIMEOUT) -> None:
-        """Wait until abstract command is no longer busy; raise on error."""
+        """Wait until abstract command is no longer busy; raise on error.
+
+        The raise leaves cmderr set, because it is sticky and clearing it here
+        would hide it from the rows that check exactly that. A caller that
+        catches this must call `clear_cmderr()` before the next command, or
+        the DM refuses every one of them with this error.
+        """
         def check(v):
             busy  = bool((v >> 12) & 1)
             error = (v >> 8) & 0x7

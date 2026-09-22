@@ -32,7 +32,6 @@ from typing import List, Optional, Tuple
 from ..api.riscv_dm import DMI
 from ..api.transport import DebugTransport
 from .predictor import DMPredictor
-from .registers import register_at
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +68,12 @@ class ModelBackedMockTransport(DebugTransport):
         self.predictor.on_write(addr, data)
 
     def read(self, addr: int) -> int:
-        if register_at(addr) is not None:
+        # Ask the predictor, not the register map: `registers.py` now defines
+        # every DMI register, but the predictor models a read of some of them
+        # only once the DUT config has been declared (hartinfo, abstractcs,
+        # abstractauto, ...). has_model() is the same question dm_ref_model.sv
+        # asks, and _canned() answers the rest.
+        if self.predictor.has_model(addr):
             value = self.predictor.expect(addr)
         else:
             value = self._canned(addr)

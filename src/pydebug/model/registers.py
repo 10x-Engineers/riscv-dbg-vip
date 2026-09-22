@@ -11,8 +11,18 @@ machine-readable register definitions (riscv/riscv-debug-spec, xml/dm_registers.
 rather than transcribed by hand, so they cannot drift from the spec text.
 
 Spec references are to the RISC-V Debug Specification:
-    #3.14.1  dmstatus   (Debug Module Status,  DMI 0x11)
-    #3.14.2  dmcontrol  (Debug Module Control, DMI 0x10)
+    #3.14.1  dmstatus     (Debug Module Status,  DMI 0x11)
+    #3.14.2  dmcontrol    (Debug Module Control, DMI 0x10)
+    #3.14.3  dmcs2        (halt/resume groups and external triggers, DMI 0x32)
+    #3.14.4  hawindowsel  (hart array window,    DMI 0x14)
+    #3.14.5  hawindow     (hart array mask,      DMI 0x15)
+    #3.14.6  abstractcs   (abstract control/status, DMI 0x16)
+    #3.14.7  command      (abstract command,     DMI 0x17)
+    #3.14.8  abstractauto (autoexec,             DMI 0x18)
+    #3.14.9  data/progbuf (DMI 0x04-0x0f, 0x20-0x2f)
+    #3.14.10 haltsum0-3   (DMI 0x40, 0x13, 0x34, 0x35)
+    #3.14.11 hartinfo     (DMI 0x12)
+and to Sdext (chapter 4) and Sdtrig (chapter 5) for the hart-side CSRs.
 """
 
 from dataclasses import dataclass
@@ -27,10 +37,15 @@ from typing import Dict, Optional, Tuple
 # WARL  — Write Any, Read Legal. Writes of unsupported values are not required
 #         to stick; read back to discover what the implementation supports.
 # WARZ  — Write Any, Read Zero. Writes act; reads always return 0.
+# W1C   — write-1-to-clear. Writing ones clears the field; writing zeros leaves
+#         it alone. abstractcs.cmderr is the one of these, and it is sticky
+#         until cleared, so forgetting to clear it makes every later command
+#         fail with the first command's error.
 
 ACCESS_R = "R"
 ACCESS_RW = "R/W"
 ACCESS_W1 = "W1"
+ACCESS_W1C = "W1C"
 ACCESS_WARL = "WARL"
 ACCESS_WARZ = "WARZ"
 
@@ -235,6 +250,280 @@ def with_hartsel(dmcontrol_word: int, hartsel: int) -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# The abstract-command, program-buffer, hart-array and halt-group registers
+#
+# dmcontrol/dmstatus above are the run-control core. These are the rest of the
+# DMI map the testplan exercises: the abstract-command engine (#3.14.6-#3.14.8),
+# the program buffer (#3.14.9), the hart array mask (#3.14.4-#3.14.5), the halt
+# summaries (#3.14.10) and dmcs2 (#3.14.3), which carries both halt/resume
+# groups and the external-trigger selection.
+#
+# Bit positions are the spec's, cross-checked field for field against the DUT's
+# own `dm_pkg.sv` packed structs (abstractcs_t, command_t, abstractauto_t,
+# ac_ar_cmd_t, hartinfo_t) so that a disagreement between spec and RTL shows up
+# here as a review question rather than as a silent mismatch at run time.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── hartinfo — DMI 0x12 (#3.14.11) ────────────────────────────────────────────
+#
+# Read-only, and entirely implementation-defined: it tells a debugger where the
+# selected hart keeps its `data` registers and how many dscratch registers it
+# may borrow. Every field is "Preset", so none has an architectural reset value.
+
+HARTINFO = Register(
+    name="hartinfo",
+    address=0x12,
+    spec="#3.14.11",
+    fields=(
+        Field("nscratch", 20, 4, ACCESS_R, "#3.14.11 nscratch"),
+        Field("dataaccess", 16, 1, ACCESS_R, "#3.14.11 dataaccess"),
+        Field("datasize", 12, 4, ACCESS_R, "#3.14.11 datasize"),
+        Field("dataaddr", 0, 12, ACCESS_R, "#3.14.11 dataaddr"),
+    ),
+)
+
+
+# ── hawindowsel / hawindow — DMI 0x14, 0x15 (#3.14.4, #3.14.5) ────────────────
+#
+# The hart array mask, in 32-hart windows: hawindowsel picks the window,
+# hawindow is that window's bitmask. Together with dmcontrol.hasel they select
+# more than one hart at a time, which is what makes dmstatus's all*/any* pairs
+# differ. A single-hart DM implements neither, so a debugger discovers them by
+# writing and reading back.
+
+HAWINDOWSEL = Register(
+    name="hawindowsel",
+    address=0x14,
+    spec="#3.14.4",
+    fields=(Field("hawindowsel", 0, 15, ACCESS_WARL, "#3.14.4 hawindowsel", reset=0),),
+)
+
+HAWINDOW = Register(
+    name="hawindow",
+    address=0x15,
+    spec="#3.14.5",
+    fields=(Field("maskdata", 0, 32, ACCESS_WARL, "#3.14.5 maskdata", reset=0),),
+)
+
+#: Harts per hawindow window (#3.14.5: hawindow is 32 bits wide).
+HARTS_PER_HAWINDOW = 32
+
+
+def hawindow_of(hart: int) -> Tuple[int, int]:
+    """The (hawindowsel, bit index) that select `hart` in the hart array."""
+    return divmod(hart, HARTS_PER_HAWINDOW)
+
+
+# ── abstractcs — DMI 0x16 (#3.14.6) ───────────────────────────────────────────
+#
+# cmderr is W1C: a debugger clears it by writing all ones to the field, not by
+# writing zero. It is also sticky -- until it is cleared, every further command
+# is refused with the SAME error, which is why a sequence that forgets to clear
+# it sees every later read return stale data (see trigger_sequence's `_try`).
+
+ABSTRACTCS = Register(
+    name="abstractcs",
+    address=0x16,
+    spec="#3.14.6",
+    fields=(
+        Field("progbufsize", 24, 5, ACCESS_R, "#3.14.6 progbufsize"),
+        Field("busy", 12, 1, ACCESS_R, "#3.14.6 busy", reset=0),
+        Field("relaxedpriv", 11, 1, ACCESS_WARL, "#3.14.6 relaxedpriv"),
+        Field("cmderr", 8, 3, ACCESS_W1C, "#3.14.6 cmderr", reset=0),
+        Field("datacount", 0, 4, ACCESS_R, "#3.14.6 datacount"),
+    ),
+)
+
+#: abstractcs.cmderr encodings (#3.14.6 cmderr). `none` is the only value that
+#: lets a further command start.
+CMDERR_NONE = 0
+CMDERR_BUSY = 1          # a command was written while another was running
+CMDERR_NOT_SUPPORTED = 2  # the command, or its arguments, are unsupported
+CMDERR_EXCEPTION = 3      # the command's own instructions took an exception
+CMDERR_HALT_RESUME = 4    # the hart was not halted, or was resuming
+CMDERR_BUS = 5            # a bus error while executing the command
+CMDERR_OTHER = 7
+
+#: The value a debugger writes to abstractcs.cmderr to clear it (W1C).
+CMDERR_CLEAR = 7
+
+
+# ── command — DMI 0x17 (#3.14.7) ──────────────────────────────────────────────
+#
+# One register with three meanings: cmdtype selects which, and `control` is
+# decoded per type. Writing it starts the command; the DM reports the outcome
+# in abstractcs.cmderr.
+
+COMMAND = Register(
+    name="command",
+    address=0x17,
+    spec="#3.14.7",
+    fields=(
+        Field("cmdtype", 24, 8, ACCESS_WARL, "#3.14.7 cmdtype"),
+        Field("control", 0, 24, ACCESS_WARL, "#3.14.7 control"),
+    ),
+)
+
+#: command.cmdtype encodings (#3.14.7 cmdtype).
+CMDTYPE_ACCESS_REGISTER = 0
+CMDTYPE_QUICK_ACCESS = 1
+CMDTYPE_ACCESS_MEMORY = 2
+
+#: Access Register (#3.14.7.1). `control` decoded as a register in its own
+#: right, so a caller can encode/decode a command word field by field rather
+#: than with shift arithmetic. Its bits are the full 32-bit command word's, so
+#: COMMAND.encode(cmdtype=...) | ACCESS_REGISTER.encode(...) is one word.
+ACCESS_REGISTER = Register(
+    name="command.access_register",
+    address=0x17,
+    spec="#3.14.7.1",
+    fields=(
+        Field("aarsize", 20, 3, ACCESS_WARL, "#3.14.7.1 aarsize"),
+        Field("aarpostincrement", 19, 1, ACCESS_WARL, "#3.14.7.1 aarpostincrement"),
+        Field("postexec", 18, 1, ACCESS_WARL, "#3.14.7.1 postexec"),
+        Field("transfer", 17, 1, ACCESS_WARL, "#3.14.7.1 transfer"),
+        Field("write", 16, 1, ACCESS_WARL, "#3.14.7.1 write"),
+        Field("regno", 0, 16, ACCESS_WARL, "#3.14.7.1 regno"),
+    ),
+)
+
+#: Access Memory (#3.14.7.3). The address and data travel in the `data`
+#: registers, not in the command word.
+ACCESS_MEMORY = Register(
+    name="command.access_memory",
+    address=0x17,
+    spec="#3.14.7.3",
+    fields=(
+        Field("aamvirtual", 23, 1, ACCESS_WARL, "#3.14.7.3 aamvirtual"),
+        Field("aamsize", 20, 3, ACCESS_WARL, "#3.14.7.3 aamsize"),
+        Field("aampostincrement", 19, 1, ACCESS_WARL, "#3.14.7.3 aampostincrement"),
+        Field("write", 16, 1, ACCESS_WARL, "#3.14.7.3 write"),
+        Field("target_specific", 14, 2, ACCESS_WARL, "#3.14.7.3 target-specific"),
+    ),
+)
+
+#: aarsize/aamsize encodings: the access is 8 << size bits wide (#3.14.7.1).
+AASIZE_32 = 2
+AASIZE_64 = 3
+AASIZE_128 = 4
+
+#: regno ranges an Access Register command addresses (#3.14.7.1 regno).
+REGNO_CSR_BASE = 0x0000
+REGNO_GPR_BASE = 0x1000
+REGNO_FPR_BASE = 0x1020
+
+
+def regno_of_gpr(index: int) -> int:
+    """regno for GPR x`index` (#3.14.7.1: 0x1000 + index)."""
+    return REGNO_GPR_BASE + index
+
+
+def regno_of_csr(number: int) -> int:
+    """regno for CSR `number` (#3.14.7.1: the CSR number itself)."""
+    return REGNO_CSR_BASE + number
+
+
+# ── abstractauto — DMI 0x18 (#3.14.8) ─────────────────────────────────────────
+#
+# Re-executes the last command automatically when a `data` or `progbuf`
+# register is accessed, which is how a debugger reads a block of memory without
+# a DMI write per word. Optional: a DM that does not implement a bit reads it
+# back as 0, so a debugger writes all ones to discover what is supported.
+
+ABSTRACTAUTO = Register(
+    name="abstractauto",
+    address=0x18,
+    spec="#3.14.8",
+    fields=(
+        Field("autoexecprogbuf", 16, 16, ACCESS_WARL, "#3.14.8 autoexecprogbuf", reset=0),
+        Field("autoexecdata", 0, 12, ACCESS_WARL, "#3.14.8 autoexecdata", reset=0),
+    ),
+)
+
+
+# ── dmcs2 — DMI 0x32 (#3.14.3) ────────────────────────────────────────────────
+#
+# Two features in one register, told apart by hgselect: halt/resume groups
+# (hgselect=0) and the external triggers (hgselect=1). grouptype picks halt
+# groups from resume groups; group 0 means "no group", which is the reset state
+# and the only one a DM without halt groups implements.
+#
+# v1.0 only -- there is no DMI 0x32 in 0.13, so a read of it there is a
+# nonexistent-register access, not a dmcs2 of zero.
+
+DMCS2 = Register(
+    name="dmcs2",
+    address=0x32,
+    spec="#3.14.3",
+    fields=(
+        Field("grouptype", 11, 1, ACCESS_WARL, "#3.14.3 grouptype", reset=0),
+        Field("dmexttrigger", 7, 4, ACCESS_WARL, "#3.14.3 dmexttrigger", reset=0),
+        Field("group", 2, 5, ACCESS_WARL, "#3.14.3 group", reset=0),
+        Field("hgwrite", 1, 1, ACCESS_W1, "#3.14.3 hgwrite"),
+        Field("hgselect", 0, 1, ACCESS_WARL, "#3.14.3 hgselect", reset=0),
+    ),
+)
+
+#: dmcs2.grouptype encodings (#3.14.3 grouptype).
+GROUPTYPE_HALT = 0
+GROUPTYPE_RESUME = 1
+
+#: group 0 is "not in any group" (#3.14.3 group), and the reset value.
+GROUP_NONE = 0
+
+
+# ── haltsum0-3 — DMI 0x40, 0x13, 0x34, 0x35 (#3.14.10) ────────────────────────
+#
+# A four-level tree: each bit of haltsum0 is one hart, each bit of haltsum1 is
+# 32 harts, and so on. Only haltsum0 is meaningful on a single-hart DM, and the
+# address order is not the level order -- haltsum1 sits at 0x13, below
+# haltsum0 at 0x40.
+
+HALTSUM0 = Register(name="haltsum0", address=0x40, spec="#3.14.10",
+                    fields=(Field("haltsum0", 0, 32, ACCESS_R, "#3.14.10 haltsum0"),))
+HALTSUM1 = Register(name="haltsum1", address=0x13, spec="#3.14.10",
+                    fields=(Field("haltsum1", 0, 32, ACCESS_R, "#3.14.10 haltsum1"),))
+HALTSUM2 = Register(name="haltsum2", address=0x34, spec="#3.14.10",
+                    fields=(Field("haltsum2", 0, 32, ACCESS_R, "#3.14.10 haltsum2"),))
+HALTSUM3 = Register(name="haltsum3", address=0x35, spec="#3.14.10",
+                    fields=(Field("haltsum3", 0, 32, ACCESS_R, "#3.14.10 haltsum3"),))
+
+#: Harts covered by one bit at each level of the haltsum tree (#3.14.10).
+HALTSUM_LEVELS = (HALTSUM0, HALTSUM1, HALTSUM2, HALTSUM3)
+
+
+def haltsum_bit(hart: int, level: int = 0) -> int:
+    """The bit index in haltsum`level` that covers `hart` (#3.14.10)."""
+    return (hart >> (5 * level)) & 0x1F if level else hart & 0x1F
+
+
+# ── data0-11 and progbuf0-15 — DMI 0x04-0x0F, 0x20-0x2F (#3.14.9) ─────────────
+#
+# Arrays rather than named registers: their count is discovered from
+# abstractcs.datacount and abstractcs.progbufsize, and accessing one beyond
+# that count is an access to a nonexistent register.
+
+DATA0, DATA11 = 0x04, 0x0F
+PROGBUF0, PROGBUF15 = 0x20, 0x2F
+NEXTDM = 0x1D
+AUTHDATA = 0x30
+CONFSTRPTR0 = 0x19
+
+
+def data_address(index: int) -> int:
+    """DMI address of data`index` (#3.14.9: data0 at 0x04)."""
+    if not 0 <= index <= DATA11 - DATA0:
+        raise ValueError(f"data{index} does not exist (data0-data11 only)")
+    return DATA0 + index
+
+
+def progbuf_address(index: int) -> int:
+    """DMI address of progbuf`index` (#3.14.9: progbuf0 at 0x20)."""
+    if not 0 <= index <= PROGBUF15 - PROGBUF0:
+        raise ValueError(f"progbuf{index} does not exist (progbuf0-progbuf15 only)")
+    return PROGBUF0 + index
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Hart-side debug CSRs (Sdext ch.4) and the Trigger Module (Sdtrig ch.5)
 #
 # These live in the hart's CSR space, not in DMI space: a debugger reaches them
@@ -436,10 +725,16 @@ def tdata1_dmode(word: int, xlen: int = 64) -> int:
     return (word >> (lsb - 1)) & 1
 
 
-#: Registers this model knows about, keyed by DMI address.
+#: Every DMI register this model defines, keyed by DMI address. Being here says
+#: the register's fields are known, NOT that a read of it can be predicted --
+#: that is `predictor.has_model()`, which is a narrower set and depends on the
+#: declared DUT configuration.
 REGISTERS: Dict[int, Register] = {
-    DMCONTROL.address: DMCONTROL,
-    DMSTATUS.address: DMSTATUS,
+    r.address: r
+    for r in (
+        DMCONTROL, DMSTATUS, HARTINFO, HALTSUM1, HAWINDOWSEL, HAWINDOW,
+        ABSTRACTCS, COMMAND, ABSTRACTAUTO, DMCS2, HALTSUM2, HALTSUM3, HALTSUM0,
+    )
 }
 
 

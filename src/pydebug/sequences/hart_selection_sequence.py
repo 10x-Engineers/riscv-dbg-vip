@@ -79,11 +79,12 @@ def build_hart_selection_sequence(
         word = dm.read_dmstatus()
         observed_any = anynonexistent(word)
         observed_all = allnonexistent(word)
-        p = _predictor(dm)
-        if p is not None:
-            # The model knows num_harts; a real DUT's actual hart count is not
-            # otherwise discoverable from this sequence alone, so only assert
-            # the expected value when a golden model is attached.
+        # Only assert against a golden model: it knows num_harts, so
+        # "hartsel is beyond the last hart" is a fact there. A real DUT's hart
+        # count is not discoverable from this sequence alone, so the same
+        # assertion against real hardware would be asserting a guess -- the
+        # read is reported instead.
+        if _predictor(dm) is not None:
             ok = observed_any and observed_all
         else:
             ok = True  # informational only against a real transport

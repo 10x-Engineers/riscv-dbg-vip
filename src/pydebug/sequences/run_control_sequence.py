@@ -8,11 +8,13 @@ Implements the Halt/Resume individual hart CAT2 feature (Ch.3 op 2, spec #3.5),
 Traces to: TC-RC-001, TC-RC-002, TC-RC-003, TC-RC-004, TC-RC-005, TC-RC-006,
 TC-RC-007
 
-Every check compares the observed dmstatus word against `DMPredictor.expect()`
-when the attached transport carries one (`ModelBackedMockTransport`); against a
-real simulator/hardware transport (no `.predictor` attribute) the same steps
-still run and still check the architectural relationship the TC-ID asks for —
-they just cannot cross-check against the golden model on top of that.
+Where a golden model is attached (`ModelBackedMockTransport` carries a
+`.predictor`), a check requires the *fields it names* to hold in the predicted
+word as well as the observed one, so model and DUT cannot disagree about them
+unnoticed. It is not a whole-word comparison -- that belongs to
+`dm_checker.sv`, which does it for every DMI read in simulation. Against a real
+simulator or hardware transport (no `.predictor`), the same steps run and check
+the architectural relationship the TC-ID asks for, without the model on top.
 
 Usage:
     from pydebug.sequences.run_control_sequence import build_run_control_sequence
