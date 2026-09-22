@@ -148,6 +148,7 @@ class dm_checker extends uvm_component;
 
   function void build_phase(uvm_phase phase);
     string dut_config_path;
+    int unsigned nharts_cfg;
     dut_config_reader cfg;
     super.build_phase(phase);
     dmi_export = new("dmi_export", this);
@@ -170,11 +171,18 @@ class dm_checker extends uvm_component;
     // (e.g. multi-hart configuration) beyond what the config file covers.
     if (!uvm_config_db#(string)::get(this, "", "dut_config_path", dut_config_path))
       dut_config_path = "../src/pydebug/dut_configs/ibex.json";
+    // How many harts the DM was built with. Hardcoded to 1 until
+    // multihart_sim existed, which made the model call every hart but the
+    // first nonexistent -- and a nonexistent hart is reported very
+    // differently from a running one, so every dmstatus read disagreed.
+    // Same key the covergroups read.
+    if (!uvm_config_db#(int unsigned)::get(this, "", "num_harts", nharts_cfg))
+      nharts_cfg = 1;
     cfg   = new(dut_config_path);
     model = new();
     // One call carrying the whole declared configuration, rather than a
     // positional list that stopped being reviewable around its tenth entry.
-    model.set_config(read_cfg(cfg, 1));
+    model.set_config(read_cfg(cfg, nharts_cfg));
     // +DM_MODEL_TRACE=<file>: record the model's inputs and predictions for
     // mk/model_crosscheck.py (see dm_ref_model.sv).
     if ($value$plusargs("DM_MODEL_TRACE=%s", trace_path)) begin
