@@ -1,38 +1,47 @@
 # cva6-debug-vip — regression report
 
-Generated 2026-09-18, one `--coverage` build of all 36 tests
-(`python3 mk/run_regression.py --coverage`). Every result matches its declared
-`expect`: 22 pass, 13 known failures, 1 partial. Merged coverage from the same
-run: functional 263/263 reachable bins (100%), debug-subsystem code coverage
-100% on block, expression, toggle and FSM.
+Generated 2026-09-24, one `--coverage` build of all 36 tests
+(`make -C cva6_sim regress_cov`; riscv-dbg-vip `cbd7666`, CVA6-fork `4faa739`,
+riscv-dbg `6051a09`). Every result matches its declared `expect`: 23 pass,
+12 known failures, 1 partial. One known failure changed inside: `dm_corners`
+fails 4 steps where `regression.yaml` documents 3; the new one, TC-DMC-009,
+times out waiting for `sbcs.sbbusy=0` and is not yet triaged.
+
+Merged coverage from the same run (`mk/dm_cov.sh`, 25/25 DM instances, no
+dropped exclusions): functional 279/287 reachable bins (97.21%; 279/306 raw,
+91.18%), the 8 unhit all in `cg_native_trigger` (RTL-014/015/016).
+Debug-subsystem code coverage with exclusions: block, expression and FSM
+100%, toggle 99.98% (8514/8516: `dm_mem` `halted_d_aligned[1]` and
+`resuming_d_aligned[1]`, the slot of the nonexistent hart 1, which the
+2026-09-18 run did toggle).
 
 | Test | Result | Expected | Steps | UVM errors | Covers |
 |---|---|---|---:|---:|---|
-| discovery | pass | pass | 2/2 | 0 | `DIS-001`, `DIS-002`, `RST-025` |
+| discovery | pass | pass | 2/2 | 0 | `DIS-001`, `DIS-002`, `DTM-002` |
 | dm_activation | pass | pass | 3/3 | 0 | `ACT-001`, `ACT-002`, `ACT-003`, `RAP-040` |
 | read_dmstatus | pass | pass | 1/1 | 0 | `RST-031`, `DIS-001` |
-| halt | pass | pass | 8/8 | 0 | `HALT-001`, `HALT-002`, `RC-001` |
+| halt | pass | pass | 8/8 | 0 | `HALT-001`, `HALT-002` |
 | run_control | pass | pass | 9/9 | 0 | `HALT-001`, `RES-001`, `RES-002`, `RES-003` |
 | report_halt_status | pass | pass | 4/4 | 0 | `HALT-006`, `DIS-007` |
 | hart_selection | partial | partial | - | 1 | `HS-001`, `HS-002` |
 | reset_ctrl | pass | pass | 11/11 | 0 | `RST-010`, `RST-011`, `RST-060`, `RST-062` |
-| halt_on_reset | pass | pass | 6/6 | 0 | `RST-053`, `HALT-013` |
+| halt_on_reset | pass | pass | 6/6 | 0 | `RST-050`, `RST-051`, `RST-053` |
 | gpr_write | pass | pass | 4/4 | 0 | `AC-001`, `AC-002`, `RAP-025` |
-| csr_access | fail | fail | 3/4 | 1 | `AC-004`, `RAP-020`, `RAP-023` |
-| cmderr | pass | pass | 14/14 | 0 | `AC-005`, `AC-006`, `AC-007`, `AC-008` |
+| csr_access | pass | pass | 5/5 | 0 | `AC-004`, `RAP-020`, `RAP-023` |
+| cmderr | pass | pass | 17/17 | 0 | `AC-005`, `AC-006`, `AC-007`, `AC-008` |
 | program_buffer | pass | pass | 6/6 | 0 | `PB-001`, `PB-002`, `PB-004`, `AC-010` |
 | sw_breakpoint_progbuf | pass | pass | 3/3 | 0 | `PB-005`, `DM-001`, `DM-003` |
 | single_step | pass | pass | 9/9 | 0 | `SSTEP-001`, `SSTEP-012`, `SSTEP-013` |
 | step_stall | pass | pass | 9/9 | 0 | `SSTEP-004`, `RTL-001` |
 | step_classes | pass | pass | 9/9 | 0 | `SSTEP-014-V`, `SSTEP-019`, `SSTEP-015` |
-| priv_irq | fail | fail | 6/10 | 1 | `DM-011-V`, `SSTEP-006`, `SSTEP-007`, `SSTEP-018-V` |
+| priv_irq | fail | fail | 7/10 | 1 | `DM-011-V`, `SSTEP-006`, `SSTEP-007`, `SSTEP-018-V` |
 | trigger | fail | fail | 14/15 | 1 | `TRIG-001`, `TRIG-002`, `TRIG-006` |
 | external_trigger | pass | pass | 3/3 | 0 | `HG-003`, `RST-041` |
-| sba | pass | pass | 10/10 | 0 | `SBA-001`, `SBA-002` |
+| sba | pass | pass | 11/11 | 0 | `SBA-001`, `SBA-002` |
 | mem_scan | pass | pass | 18/18 | 0 | `PB-002`, `PB-003` |
 | cmd_busy | pass | pass | 11/11 | 0 | `AC-020`, `AC-021`, `AC-022`, `AC-023` |
 | dmi_error | fail | fail | 10/11 | 1 | `DTM-002`, `DTM-010`, `DTM-011`, `DTM-012` |
-| dm_corners | fail | fail | 9/12 | 1 | `DMC-001`, `DMC-002`, `DMC-003`, `DMC-004` |
+| dm_corners | fail | fail | 8/12 | 1 | `DMC-001`, `DMC-002`, `DMC-003`, `DMC-004` |
 | debug_entry | fail | fail | 12/13 | 1 | `DCSR-010`, `DCSR-011`, `DCSR-012`, `DCSR-013` |
 | step_matrix | fail | fail | 12/13 | 1 | `SSTEP-006`, `SSTEP-007`, `SSTEP-008`, `SSTEP-009` |
 | act_sdtrig_access | pass | pass | 5/5 | 0 | `NATIVE-OP2`, `TRIG-001` |
@@ -56,6 +65,7 @@ coverpoint credit only the higher. A true merge needs `imc`.
 | `cg_abstract_cmd` | 83.33% |
 | `cg_debug_entry` | 47.00% |
 | `cg_hart_mode` | 100.00% |
+| `cg_native_trigger` | 48.33% |
 | `cg_sba` | 25.00% |
 | `cg_step_external` | 51.49% |
 | `cp_cause` | 50.00% |
@@ -64,6 +74,10 @@ coverpoint credit only the higher. A true merge needs `imc`.
 | `cp_dpc_origin` | 75.00% |
 | `cp_haltreq_guard` | 100.00% |
 | `cp_mode_transition` | 100.00% |
+| `cp_native_prv` | 66.67% |
+| `cp_native_reentrancy` | 33.33% |
+| `cp_native_tval` | 100.00% |
+| `cp_native_type` | 25.00% |
 | `cp_prv` | 33.33% |
 | `cp_prv_at_step` | 33.33% |
 | `cp_sbaccess` | 33.33% |
@@ -75,3 +89,4 @@ coverpoint credit only the higher. A true merge needs `imc`.
 | `x_class_x_consecutive` | 62.50% |
 | `x_class_x_prv` | 31.25% |
 | `x_class_x_stepie` | 20.83% |
+| `x_type_x_prv` | 16.67% |
