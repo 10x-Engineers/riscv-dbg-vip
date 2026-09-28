@@ -13,7 +13,7 @@
 PYTEST ?= python3 -m pytest
 TESTS  ?= tests
 
-.PHONY: help smoke static test regress coverage clean
+.PHONY: help smoke static test regress coverage clean submodules
 
 help:
 	@echo "Regression tiers:"
@@ -21,6 +21,7 @@ help:
 	@echo "  make static   Every test. Maximum coverage. The sign-off tier."
 	@echo ""
 	@echo "Other:"
+	@echo "  make submodules  Put every submodule at its pinned commit (run after every pull)."
 	@echo "  make regress  Run smoke, then static."
 	@echo "  make coverage Static tier with the functional-coverage report printed."
 	@echo ""
@@ -47,6 +48,10 @@ regress: smoke static
 ## coverage — static tier, showing the functional coverage report.
 coverage:
 	$(PYTEST) $(TESTS) -v -s -k "coverage"
+
+## submodules — sync URLs and check out every pinned submodule commit, recursively.
+submodules:
+	@mk/sync_submodules.sh
 
 clean:
 	rm -rf .pytest_cache

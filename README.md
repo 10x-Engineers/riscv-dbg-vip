@@ -18,6 +18,7 @@ cva6_sim/                   — worked example: pydebug <-> CVA6-fork
 ibex_sim/                   — worked example: pydebug <-> ibex-demo-system
 mk/simulator.mk             — Questa/Xcelium selection shared by both (SIM=...)
 mk/run_regression.py        — regression driver (verdicts + merged coverage)
+mk/sync_submodules.sh       — put every submodule at its pinned commit (`make submodules`)
 mk/dm_cov.sh                — merge coverage and report, scoped to the DM
 mk/dm_cov_exclude.py        — code-coverage exclusions, one stated reason per rule
 mk/dm_abstract_cmd_bits.py  — proves which abstract-command bits can never vary
@@ -29,6 +30,23 @@ CVA6-fork/                  — submodule, 10x-Engineers/CVA6-fork
 ibex-demo-system/           — submodule, 10x-Engineers/ibex-demo-system
 INTEGRATION_GUIDE.md         — integrate a new SoC / run sim tests / run emulation
 ```
+
+## Getting the submodules
+
+The RTL comes from submodules, and each is pinned to one commit:
+`CVA6-fork` by this repo, and the Debug Module (`CVA6-fork/corev_apu/riscv-dbg`)
+by `CVA6-fork`. After cloning, and after **every** `git pull`, run:
+
+```bash
+make submodules            # or: mk/sync_submodules.sh [--pull]
+```
+
+It refreshes submodule URLs (`git submodule sync`), checks out every pin
+(`git submodule update --init --recursive`), and prints the commits and
+remotes, exiting non-zero if anything is not at its pin. A plain `git pull`
+leaves submodules at their old commits, and a clone made before CVA6-fork moved
+the DM to the 10x fork keeps fetching it from pulp-platform. Never use
+`git submodule update --remote`: it ignores the pins.
 
 ## Installation
 
