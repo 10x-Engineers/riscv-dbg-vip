@@ -62,8 +62,10 @@ ifeq ($(SIM),questa)
 # vsim is on PATH. Never a hardcoded install path — that only works on one
 # machine.
 QUESTA_BIN  := $(shell command -v vsim 2>/dev/null)
-QUESTA_HOME ?= $(if $(MODEL_TECH),$(abspath $(MODEL_TECH)/..),\
-                 $(if $(QUESTA_BIN),$(abspath $(dir $(QUESTA_BIN))/..)))
+# $(strip) matters: make turns the backslash-newline into a space, which
+# would lead the second branch and yield -I" /path/include" (no svdpi.h).
+QUESTA_HOME ?= $(strip $(if $(MODEL_TECH),$(abspath $(MODEL_TECH)/..),\
+                 $(if $(QUESTA_BIN),$(abspath $(dir $(QUESTA_BIN))/..))))
 # Left empty rather than guessed when Questa is absent, so sim_info reports the
 # header as MISSING instead of printing a nonsense path like '//include'.
 DPI_INC     ?= $(if $(QUESTA_HOME),$(QUESTA_HOME)/include)
