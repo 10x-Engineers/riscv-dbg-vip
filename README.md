@@ -825,7 +825,7 @@ it.
 | ID | Finding | Status |
 |---|---|---|
 | RTL-001 | Single-step over `wfi` deadlocks the hart | filed, `openhwgroup/cva6#3549` (duplicate of `#3497`; PR `#3525` open) |
-| RTL-002 | `sbcs.sbaccess` hardwired, and its spec reset value lost | filed — [10x-Engineers/riscv-dbg PR #4](https://github.com/10x-Engineers/riscv-dbg/pull/4#issuecomment-5677436187); blocks all SBA coverage |
+| RTL-002 | `sbcs.sbaccess` hardwired, and its spec reset value lost | filed — [#147](https://github.com/10x-Engineers/riscv-dbg-vip/issues/147); blocks all SBA coverage |
 | RTL-003 | `allrunning`/`anyrunning` asserted for a nonexistent hart | already filed upstream by a third party — [pulp-platform/riscv-dbg#200](https://github.com/pulp-platform/riscv-dbg/issues/200); internal `#130` |
 | RTL-004 | Halt-on-reset not implemented | not a defect — optional feature; also upstream [#187](https://github.com/pulp-platform/riscv-dbg/issues/187) |
 | RTL-005 | `setkeepalive`/`clrkeepalive` cleared before they are tested | filed, [#148](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148) |

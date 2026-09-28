@@ -48,8 +48,8 @@ so a regression of this is a coverage failure rather than a timeout.
 
 ## RTL-002 — `sbcs.sbaccess` hardwired, and its reset value lost
 
-**Status:** filed · [`10x-Engineers/riscv-dbg` PR #4 review comment](https://github.com/10x-Engineers/riscv-dbg/pull/4#issuecomment-5677436187)
-(issues are disabled on that repository, and the code is that PR's)
+**Status:** filed · [`#147`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/147)
+(filed in this repository: issues are disabled on `10x-Engineers/riscv-dbg`, whose PR #4 has the code)
 **Component:** `riscv-dbg` `src/dm_csrs.sv:618`
 **Severity:** medium — blocks all System Bus Access verification
 
