@@ -43,7 +43,7 @@ the plan.
 
 ### Status
 
-468 rows. **168 pass, 19 fail, 39 blocked, 11 N/A, 231 not started** — so roughly half of this plan is specified and not yet run, and saying so here is the point: a reader should not have to tally the column to find that out.
+468 rows. **174 pass, 22 fail, 11 blocked, 11 N/A, 250 not started** (updated 2026-09-30 against the regression on `master` at the pins) — so roughly half of this plan is specified and not yet run, and saying so here is the point: a reader should not have to tally the column to find that out.
 
 Every `Fail` names the RTL finding it belongs to, and every `Blocked` names what
 blocks it. Run-control, abstract-command, program-buffer, single-step, trigger
@@ -121,7 +121,7 @@ wrong reset value in an unused field surfaces later as an unexplained mismatch.
 | RST-037-C | Check | `progbuf0..7` == reset value | P1 | Not started | |
 | RST-038-S | Stimulate | Read `sbcs` immediately after reset, before any other `sbcs` write | P0 | Not started | Both values recorded so far carry `sbreadonaddr=1`, whose reset is 0 — **neither was a post-reset read** |
 | RST-038-C | Check | `sbcs` == `0x20040808` for this DUT's presets (`sbasize=64`, `sbaccess64=1`), with `sbversion=1`, `sbbusy=0`, `sberror=0`, `sbreadonaddr=0` | P0 | Not started | Computed from the spec's per-field reset column, not observed |
-| RST-038-C2 | Check | `sbcs.sbaccess` == **2** after reset | P0 | Fail | Spec gives `sbaccess` a reset of constant `2`, **not** `Preset`, with no exception for a DM that lacks 32-bit support. RTL forces 3 at `dm_csrs.sv:618`: `sbaccess = (BusWidth == 64) ? 3 : 2` |
+| RST-038-C2 | Check | `sbcs.sbaccess` == **2** after reset | P0 | Fail | Spec gives `sbaccess` a reset of constant `2`, **not** `Preset`, with no exception for a DM that lacks 32-bit support. RTL forces 3 at `dm_csrs.sv:618`: `sbaccess = (BusWidth == 64) ? 3 : 2` — Fix proposed: riscv-dbg#9 (#147). |
 | RST-039-C | Check | `sbaddress0..3`, `sbdata0..3` == reset value | P1 | Not started | |
 | RST-040-C | Check | `haltsum0..3` == 0 with no hart halted | P2 | Not started | |
 | RST-041-C | Check | `dmcs2` == reset value | P2 | Pass | `external_trigger_uvm` |
@@ -137,8 +137,8 @@ The interesting failures are resets that land mid-transaction.
 |---|---|---|---|---|---|
 | RST-050-S | Stimulate | Start an abstract command; assert `ndmreset` while `abstractcs.busy=1` | P1 | Not started | Classic hang source |
 | RST-050-C | Check | After reset release, `abstractcs.busy=0` and a new command completes normally | P1 | Not started | |
-| RST-051-S | Stimulate | Start an SBA transfer; assert `ndmreset` while `sbcs.sbbusy=1` | P2 | Blocked | Blocked by the `sbaccess` mismatch, RST-038-C2 |
-| RST-051-C | Check | `sbbusy` clears; a subsequent SBA access succeeds | P2 | Blocked | |
+| RST-051-S | Stimulate | Start an SBA transfer; assert `ndmreset` while `sbcs.sbbusy=1` | P2 | Not started | Blocker (RST-038) gone. Needs triage: dm_corners TC-DMC-004 shows sbbusy STILL 1 after ndmreset release (transfer lost with the crossbar reset), which contradicts RST-051-C. halt_on_reset (its covers:) does no SBA. |
+| RST-051-C | Check | `sbbusy` clears; a subsequent SBA access succeeds | P2 | Not started | Blocker (RST-038) gone. Needs triage: dm_corners TC-DMC-004 shows sbbusy STILL 1 after ndmreset release (transfer lost with the crossbar reset), which contradicts RST-051-C. halt_on_reset (its covers:) does no SBA. |
 | RST-052-S | Stimulate | Assert reset between a DMI request and its response | P2 | Not started | |
 | RST-052-C | Check | DTM returns to idle; no stuck busy | P2 | Not started | |
 | RST-053-S | Stimulate | Assert `ndmreset`, write `dmcontrol.haltreq=1` while held, release reset | P1 | Pass | The portable substitute for halt-on-reset when `hasresethaltreq=0` |
@@ -194,8 +194,8 @@ Reference: `debug_module.html`
 | RAP-006-S | Stimulate | Set `abstractcs.cmderr` via a failing command, then write 1s to it | P1 | Not started | |
 | RAP-006-C | Check | `cmderr` clears only on a write of 1s, not on a write of 0s | P1 | Not started | |
 | RAP-007-C | Check | Fields the spec permits an implementation to tie (`hartsel` high bits, `hartarraymask`, `dcsr` bits marked hardwireable) read their fixed value regardless of what is written | P1 | Not started | The spec grants tying **explicitly** where it means to; this row covers only those |
-| RAP-007-C2 | Check | `sbcs.sbaccess` is writable — write each value 0..4 and read it back | P1 | Fail | `sbaccess` is declared **`R/W`**, not `WARL` and not `R`. RTL clobbers it: `dm_csrs.sv:513` applies the DMI write, then line 618 unconditionally overwrites `sbaccess` later in the same `always_comb`, so no debugger write can ever stick. **No clause anywhere in the spec permits tying this field** |
-| RAP-007-C3 | Check | Writing an unsupported size to `sbaccess`, then starting a bus access, sets `sberror=4` | P1 | Fail | Spec: "If `sbaccess` has an unsupported value when the DM starts a bus access, the access is not performed and `sberror` is set to 4." Hardwiring makes this specified error path **unreachable** — the clause presupposes the field can hold an unsupported value |
+| RAP-007-C2 | Check | `sbcs.sbaccess` is writable — write each value 0..4 and read it back | P1 | Fail | `sbaccess` is declared **`R/W`**, not `WARL` and not `R`. RTL clobbers it: `dm_csrs.sv:513` applies the DMI write, then line 618 unconditionally overwrites `sbaccess` later in the same `always_comb`, so no debugger write can ever stick. **No clause anywhere in the spec permits tying this field** — Fix proposed: riscv-dbg#9 (#147). |
+| RAP-007-C3 | Check | Writing an unsupported size to `sbaccess`, then starting a bus access, sets `sberror=4` | P1 | Fail | Spec: "If `sbaccess` has an unsupported value when the DM starts a bus access, the access is not performed and `sberror` is set to 4." Hardwiring makes this specified error path **unreachable** — the clause presupposes the field can hold an unsupported value — Fix proposed: riscv-dbg#9 (#147). |
 | RAP-008-C | Check | Every reserved bit in every DM register reads 0 | P1 | Not started | |
 | RAP-009-S | Stimulate | Read and write every unimplemented DMI address in range | P1 | Not started | |
 | RAP-009-C | Check | Reads return 0, writes are ignored, no error is raised, no hang | P1 | Not started | |
@@ -220,10 +220,10 @@ access and what the permission is *from there*.
 | RAP-025-S | Stimulate | Debugger writes `data0`; then runs an Access Register read of a GPR | `debug_module.html#data0` | P1 | Pass | `gpr_write_uvm` |
 | RAP-025-C | Check | `data0` now holds the GPR value — the abstract command overwrote the debugger's value | `debug_module.html#data0` | P1 | Pass | |
 | RAP-026-C | Check | Where `hartinfo.dataaccess=1`, the hart reading `dataaddr` sees the same value as DMI reading `data0` | `debug_module.html#hartinfo` | P2 | Not started | Two views of one storage |
-| RAP-027-S | Stimulate | Read physical address A by SBA; read the same A by a program-buffer load | `debug_module.html#sbcs` | P1 | Blocked | Blocked by RST-038 |
-| RAP-027-C | Check | Values agree, or differ only where the hart's MMU/PMP explains it | `debug_module.html#sbcs` | P1 | Blocked | |
-| RAP-028-S | Stimulate | Configure PMP to deny the hart access to A; read A by SBA | `debug_module.html#sbcs` | P1 | Blocked | |
-| RAP-028-C | Check | SBA read succeeds — it bypasses hart privilege and translation | `debug_module.html#sbcs` | P1 | Blocked | |
+| RAP-027-S | Stimulate | Read physical address A by SBA; read the same A by a program-buffer load | `debug_module.html#sbcs` | P1 | Not started | Blocked by RST-038 — Blocker (RST-038) gone: the model honours the hardwired sbaccess. No step drives this yet. |
+| RAP-027-C | Check | Values agree, or differ only where the hart's MMU/PMP explains it | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone: the model honours the hardwired sbaccess. No step drives this yet. |
+| RAP-028-S | Stimulate | Configure PMP to deny the hart access to A; read A by SBA | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone: the model honours the hardwired sbaccess. No step drives this yet. |
+| RAP-028-C | Check | SBA read succeeds — it bypasses hart privilege and translation | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone: the model honours the hardwired sbaccess. No step drives this yet. |
 | RAP-029-C | Check | Hart cannot reach DM registers as memory, except the Debug ROM and the `data` window | `debug_module.html` | P2 | Not started | |
 | RAP-030-S | Stimulate | Hart stores to a Debug ROM address | `debug_module.html` | P2 | Not started | |
 | RAP-030-C | Check | ROM contents unchanged; the park loop still functions | `debug_module.html` | P2 | Not started | |
@@ -237,8 +237,8 @@ access and what the permission is *from there*.
 | RAP-041-C | Check | `dmstatus.version` is readable before activation and before authentication | `debug_module.html#dmstatus` | P0 | Pass | The only reliable version discriminator |
 | RAP-042-S | Stimulate | Write `command` while `abstractcs.busy=1` | `debug_module.html#abstractcs` | P0 | Not started | |
 | RAP-042-C | Check | `cmderr=1` (busy); the in-flight command completes unaffected | `debug_module.html#abstractcs` | P0 | Not started | |
-| RAP-043-S | Stimulate | Write `sbaddress0` while `sbcs.sbbusy=1` | `debug_module.html#sbcs` | P1 | Blocked | |
-| RAP-043-C | Check | `sbcs.sbbusyerror=1`; the in-flight transfer is unaffected | `debug_module.html#sbcs` | P1 | Blocked | |
+| RAP-043-S | Stimulate | Write `sbaddress0` while `sbcs.sbbusy=1` | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone: the model honours the hardwired sbaccess. No step drives this yet. |
+| RAP-043-C | Check | `sbcs.sbbusyerror=1`; the in-flight transfer is unaffected | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone: the model honours the hardwired sbaccess. No step drives this yet. |
 | RAP-044-C | Check | With `authenticated=0`, only `dmstatus`, `dmcontrol` and `authdata` are accessible | `debug_module.html#authdata` | P3 | N/A | Authentication not implemented — recorded, not silently skipped |
 | RAP-045-V | Cover | Gating state = {`dmactive=0`, `ndmreset=1`, `busy=1`, `sbbusy=1`, `authenticated=0`} | `debug_module.html` | P1 | Not started | |
 | RAP-046-V | Cover | Interface × register class | `debug_module.html` | P1 | Not started | `x_interface_x_register` — which interfaces reach which storage at all |
@@ -305,11 +305,11 @@ not exist or cannot respond.
 
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
-| HS-001-S | Stimulate | Write `dmcontrol.hartsel=0` (a hart that exists) | `debug_module.html#dmcontrol` | P0 | Fail | `hart_selection_uvm` aborts: RTL `0x0080cc83` vs model `0x0080c083` |
-| HS-001-C | Check | `dmstatus` reports that hart's state; `anynonexistent=0` | `debug_module.html#dmstatus` | P0 | Fail | |
-| HS-002-S | Stimulate | Write `dmcontrol.hartsel` to an index with no hart | `debug_module.html#dmcontrol` | P1 | Fail | |
+| HS-001-S | Stimulate | Write `dmcontrol.hartsel=0` (a hart that exists) | `debug_module.html#dmcontrol` | P0 | Fail | `hart_selection_uvm` aborts: RTL `0x0080cc83` vs model `0x0080c083` — RTL-003 is tracked upstream as pulp-platform/riscv-dbg#200 (#130 closed as its duplicate). Fix proposed in the fork: riscv-dbg#5. |
+| HS-001-C | Check | `dmstatus` reports that hart's state; `anynonexistent=0` | `debug_module.html#dmstatus` | P0 | Fail | RTL-003 is tracked upstream as pulp-platform/riscv-dbg#200 (#130 closed as its duplicate). Fix proposed in the fork: riscv-dbg#5. |
+| HS-002-S | Stimulate | Write `dmcontrol.hartsel` to an index with no hart | `debug_module.html#dmcontrol` | P1 | Fail | RTL-003 is tracked upstream as pulp-platform/riscv-dbg#200 (#130 closed as its duplicate). Fix proposed in the fork: riscv-dbg#5. |
 | HS-002-C | Check | `anynonexistent=1`, `allnonexistent=1` | `debug_module.html#dmstatus` | P1 | Not started | |
-| HS-002-C2 | Check | `allrunning=0` and `anyrunning=0` — a hart that does not exist is not running | `debug_module.html#dmstatus` | P1 | Fail | RTL reports `allrunning=1`/`anyrunning=1`. Spec violation, reproduces on **both** DUTs — issue #130 |
+| HS-002-C2 | Check | `allrunning=0` and `anyrunning=0` — a hart that does not exist is not running | `debug_module.html#dmstatus` | P1 | Fail | RTL reports `allrunning=1`/`anyrunning=1`. Spec violation, reproduces on **both** DUTs — issue #130 — RTL-003 is tracked upstream as pulp-platform/riscv-dbg#200 (#130 closed as its duplicate). Fix proposed in the fork: riscv-dbg#5. |
 | HS-003-C | Check | `hartsel` is unchanged by halt, resume and abstract commands | `debug_module.html#dmcontrol` | P1 | Not started | |
 | HS-004-S | Stimulate | Hold a hart in reset, then read `dmstatus` | `debug_module.html#dmstatus` | P1 | Not started | |
 | HS-004-C | Check | `anyunavail`/`allunavail` reflect the unavailable hart | `debug_module.html#dmstatus` | P1 | Not started | |
@@ -476,50 +476,51 @@ abstract commands cannot express.
 **Intent.** Reach memory with no working CPU — independent of the hart, its MMU
 and its PMP.
 
-> **Blocked.** The reference model predicts `sbaccess=2` (the spec's reset
-> constant) while the RTL forces 3, so fail-fast aborts these scenarios before
-> their verdict. The mismatch is now understood (RST-038-C2, RAP-007-C2) and is
-> an RTL defect, not a model defect — but until the comparison is reconciled the
-> rows below stay unrun. Specified, not skipped.
+> **No longer blocked as a whole.** The model now predicts the DUT's hardwired
+> `sbaccess` (declared in `dut_configs/cva6.json`), so `sba_uvm` runs to its
+> verdict (11/11). What stays blocked is what the hardwire itself prevents —
+> choosing a width (SBA-001, SBA-006, the width coverage rows) — on RTL-002
+> (#147, fix proposed in riscv-dbg#9). This DUT also never raises `sberror` on
+> an unmapped access (SBA-008-C), so the error-path rows cannot pass here yet.
 
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
 | SBA-004-S | Stimulate | Set `sbautoincrement`, write a 4-word burst, read `sbaddress0` back | `debug_module.html#dm-sbcs` | P1 | Pass | `sba_uvm`. Stride is read back from `sbcs`, never assumed: this DUT hardwires `sbaccess`, so a test that assumes its own write stuck computes the wrong stride |
 | SBA-005-S | Stimulate | Set `sbreadondata` and stream successive words by reading `sbdata0` | `debug_module.html#dm-sbcs` | P1 | Pass | Trigger is the data READ, not the address write |
 | SBA-006-C | Check | `sbaddress1`/`sbdata1` decode when `sbasize`>32 | `debug_module.html#dm-sbaddress1` | P2 | Pass | |
-| SBA-007-C | Check | An access to an unmapped address sets `sberror`, and writing 1s clears it | `debug_module.html#dm-sbcs` | P1 | Pass | |
+| SBA-007-C | Check | An access to an unmapped address sets `sberror`, and writing 1s clears it | `debug_module.html#dm-sbcs` | P1 | Fail | Passed vacuously: TC-SBA-007 checks only that sberror clears, never that it was set. The fork's dm_top/dm_sba have no bus-error input, so an unmapped access reports sberror=0. |
 | SBA-009-C | Check | Racing `sbdata`/`sbaddress` against a live transfer sets `sbbusyerror`, which clears and leaves the DM usable | `debug_module.html#dm-sbcs` | P2 | Pass | Does not assert the race lands: a DM fast enough to finish first is not wrong |
 | SBA-010-C | Check | SBA works with the hart **running** — it is hart-independent | `debug_module.html#system-bus-access` | P1 | Pass | |
 | SBA-019-V | Cover | `cg_sba.cp_sbaccess` widths other than the hardwired one | `debug_module.html#dm-sbcs` | P1 | Blocked (CVA6) / Pass (Ibex) | Excluded on CVA6 while #147 stands: a hardwired field cannot hold another width. `sba_uvm`'s TC-SBA-019 now drives every width `sbcs` advertises and reports which ones the DM refuses -- on Ibex `sbaccess` is writable, so the 8- and 16-bit arms of `dm_sba` are reachable there |
-| SBA-001-S | Stimulate | Set `sbaccess=2` (32-bit), write `sbaddress0=A`, read `sbdata0` | `debug_module.html#sbcs` | P0 | Blocked | Blocked by RST-038 |
-| SBA-001-C | Check | `sbdata0` holds the contents of A; `sberror=0` | `debug_module.html#sbcs` | P0 | Blocked | |
-| SBA-002-S | Stimulate | Write `sbaddress0=A`, write `sbdata0=V`, then read A back | `debug_module.html#sbcs` | P0 | Blocked | |
-| SBA-002-C | Check | A holds V | `debug_module.html#sbcs` | P0 | Blocked | |
-| SBA-003-S | Stimulate | Set `sbreadonaddr=1`, write `sbaddress0` | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-003-C | Check | A read is triggered by the address write alone | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-004-S | Stimulate | Set `sbreadondata=1`, read `sbdata0` repeatedly | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-004-C | Check | Each read triggers the next bus read | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-005-S | Stimulate | Set `sbautoincrement=1`, perform four reads | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-005-C | Check | `sbaddress0` advances by the access size each time | `debug_module.html#sbcs` | P1 | Blocked | Block transfers depend on this |
-| SBA-006-S | Stimulate | Set `sbaccess` to an unsupported size | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-006-C | Check | `sberror=4` (unsupported size) | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-007-S | Stimulate | Write a misaligned `sbaddress0` for the selected size | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-007-C | Check | `sberror=3` (alignment) | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-008-S | Stimulate | Target an unmapped physical address | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-008-C | Check | `sberror=2` (bus error) | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-009-C | Check | `sberror` is sticky and clears only on a write of 1s | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-010-S | Stimulate | Perform SBA reads while the hart is running | `debug_module.html#sbcs` | P1 | Blocked | The main reason SBA exists |
-| SBA-010-C | Check | Hart continues undisturbed; `dmstatus.allrunning=1` throughout | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-011-V | Cover | `sbaccess` = {8, 16, 32, 64, 128, unsupported}; `sberror` = {0,1,2,3,4,7} | `debug_module.html#sbcs` | P1 | Blocked | |
-| SBA-012-C | Check | A bus that never responds sets `sberror=1` (timeout) rather than hanging the DM | `debug_module.html#sbcs` | P1 | Blocked | Coverage: the timeout bin, distinct from a bus error |
-| SBA-013-C | Check | If `sberror=7` (other) is reported, the condition is investigated and classified | `debug_module.html#sbcs` | P2 | Blocked |  |
-| SBA-014-S | Stimulate | With `sbreadonaddr=0` and `sbreadondata=0`, write `sbaddress0` then explicitly access `sbdata0` | `debug_module.html#sbcs` | P1 | Blocked | Coverage: manual mode — the baseline the triggered modes are compared against |
-| SBA-014-C | Check | No access occurs until the explicit data access | `debug_module.html#sbcs` | P1 | Blocked |  |
-| SBA-015-S | Stimulate | Access an address in the body of mapped RAM, and the last mapped address | `debug_module.html#sbcs` | P1 | Blocked | Coverage: `ram_body` and `ram_top`; SBA-001 only used the base |
-| SBA-015-C | Check | Both succeed with `sberror=0`; one past `ram_top` gives `sberror=2` | `debug_module.html#sbcs` | P1 | Blocked |  |
-| SBA-016-V | Cover | Access size × alignment | `debug_module.html#sbcs` | P1 | Blocked | `x_size_x_alignment` — address 4 is aligned for 32-bit and misaligned for 64-bit; this is where `sberror=3` arises |
-| SBA-017-V | Cover | Trigger mode × `sberror` | `debug_module.html#sbcs` | P1 | Blocked | `x_mode_x_error` — with autoincrement the address has already advanced, so the debugger must tell which word failed |
-| SBA-018-V | Cover | Access size × address region | `debug_module.html#sbcs` | P1 | Blocked | `x_size_x_region` — a wide access near the top of memory straddles the boundary where a narrow one does not |
+| SBA-001-S | Stimulate | Set `sbaccess=2` (32-bit), write `sbaddress0=A`, read `sbdata0` | `debug_module.html#sbcs` | P0 | Blocked | Blocked by RTL-002 (#147): sbaccess is hardwired to 3, so a 32-bit access cannot be selected. Fix proposed: riscv-dbg#9. |
+| SBA-001-C | Check | `sbdata0` holds the contents of A; `sberror=0` | `debug_module.html#sbcs` | P0 | Blocked | See SBA-001-S (#147). |
+| SBA-002-S | Stimulate | Write `sbaddress0=A`, write `sbdata0=V`, then read A back | `debug_module.html#sbcs` | P0 | Pass | sba TC-SBA-002/003. |
+| SBA-002-C | Check | A holds V | `debug_module.html#sbcs` | P0 | Pass | sba TC-SBA-002/003. |
+| SBA-003-S | Stimulate | Set `sbreadonaddr=1`, write `sbaddress0` | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-002/003 reads via sbreadonaddr. |
+| SBA-003-C | Check | A read is triggered by the address write alone | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-002/003. |
+| SBA-004-S | Stimulate | Set `sbreadondata=1`, read `sbdata0` repeatedly | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-005. |
+| SBA-004-C | Check | Each read triggers the next bus read | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-005. |
+| SBA-005-S | Stimulate | Set `sbautoincrement=1`, perform four reads | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone. No step does autoincrement READS; TC-SBA-004 autoincrements writes. |
+| SBA-005-C | Check | `sbaddress0` advances by the access size each time | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone. No step does autoincrement READS; TC-SBA-004 autoincrements writes. |
+| SBA-006-S | Stimulate | Set `sbaccess` to an unsupported size | `debug_module.html#sbcs` | P1 | Blocked | Blocked by RTL-002 (#147): hardwired sbaccess cannot hold an unsupported size. Fix proposed: riscv-dbg#9 (also reports sberror=4). |
+| SBA-006-C | Check | `sberror=4` (unsupported size) | `debug_module.html#sbcs` | P1 | Blocked | See SBA-006-S (#147). |
+| SBA-007-S | Stimulate | Write a misaligned `sbaddress0` for the selected size | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone; no step drives a misaligned address. Note: dm_sba has no alignment check (upstream has one). |
+| SBA-007-C | Check | `sberror=3` (alignment) | `debug_module.html#sbcs` | P1 | Not started | See SBA-007-S. |
+| SBA-008-S | Stimulate | Target an unmapped physical address | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-007 targets the unmapped 0xf0000000. |
+| SBA-008-C | Check | `sberror=2` (bus error) | `debug_module.html#sbcs` | P1 | Fail | sberror stays 0 on an unmapped access: dm_top/dm_sba have no bus-error input (pulp upstream has master_r_err_i). No issue filed yet. |
+| SBA-009-C | Check | `sberror` is sticky and clears only on a write of 1s | `debug_module.html#sbcs` | P1 | Blocked | No access on this DUT raises sberror (SBA-008-C), so stickiness cannot be observed. |
+| SBA-010-S | Stimulate | Perform SBA reads while the hart is running | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-010. |
+| SBA-010-C | Check | Hart continues undisturbed; `dmstatus.allrunning=1` throughout | `debug_module.html#sbcs` | P1 | Not started | TC-SBA-010 reads with the hart running but does not check dmstatus.allrunning throughout. |
+| SBA-011-V | Cover | `sbaccess` = {8, 16, 32, 64, 128, unsupported}; `sberror` = {0,1,2,3,4,7} | `debug_module.html#sbcs` | P1 | Blocked | Blocked by RTL-002 (#147): one hardwired width. Fix proposed: riscv-dbg#9. |
+| SBA-012-C | Check | A bus that never responds sets `sberror=1` (timeout) rather than hanging the DM | `debug_module.html#sbcs` | P1 | Not started | Coverage: the timeout bin, distinct from a bus error — Blocker (RST-038) gone; no step drives this yet. |
+| SBA-013-C | Check | If `sberror=7` (other) is reported, the condition is investigated and classified | `debug_module.html#sbcs` | P2 | Not started | Blocker (RST-038) gone; no step drives this yet. |
+| SBA-014-S | Stimulate | With `sbreadonaddr=0` and `sbreadondata=0`, write `sbaddress0` then explicitly access `sbdata0` | `debug_module.html#sbcs` | P1 | Not started | Coverage: manual mode — the baseline the triggered modes are compared against — Blocker (RST-038) gone; no step drives this yet. |
+| SBA-014-C | Check | No access occurs until the explicit data access | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone; no step drives this yet. |
+| SBA-015-S | Stimulate | Access an address in the body of mapped RAM, and the last mapped address | `debug_module.html#sbcs` | P1 | Not started | Coverage: `ram_body` and `ram_top`; SBA-001 only used the base — Blocker (RST-038) gone; no step drives this yet. |
+| SBA-015-C | Check | Both succeed with `sberror=0`; one past `ram_top` gives `sberror=2` | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone; no step drives this yet. |
+| SBA-016-V | Cover | Access size × alignment | `debug_module.html#sbcs` | P1 | Blocked | `x_size_x_alignment` — address 4 is aligned for 32-bit and misaligned for 64-bit; this is where `sberror=3` arises — Blocked by RTL-002 (#147): one hardwired width. Fix proposed: riscv-dbg#9. |
+| SBA-017-V | Cover | Trigger mode × `sberror` | `debug_module.html#sbcs` | P1 | Blocked | `x_mode_x_error` — with autoincrement the address has already advanced, so the debugger must tell which word failed — Needs sberror values, which this DUT never raises (SBA-008-C). |
+| SBA-018-V | Cover | Access size × address region | `debug_module.html#sbcs` | P1 | Blocked | `x_size_x_region` — a wide access near the top of memory straddles the boundary where a narrow one does not — Blocked by RTL-002 (#147): one hardwired width. Fix proposed: riscv-dbg#9. |
 
 ## 3.9 Single-step — external, via `dcsr.step`
 
@@ -751,8 +752,8 @@ untested area in this plan.
 | DTM-010-C | Check | `dtmcs.version`=1 and `abits`>=7 | `dtm.html#dtmcs` | P0 | Pass | Observed 0x00001071 |
 | DTM-011-S | Stimulate | Issue back-to-back DMI accesses with no idle cycles, then write `dtmcs.dmireset` | `dtm.html#dtmcs` | P1 | Pass | |
 | DTM-011-C | Check | `dtmcs.dmistat` reads 0 after `dmireset`, and the DMI still responds | `dtm.html#dtmcs` | P1 | Pass | Does NOT assert that busy was provoked: a DM that keeps up with JTAG is not wrong |
-| DTM-012-S | Stimulate | Provoke a sticky busy (as DTM-015), then write only `dtmcs.dmihardreset` | `dtm.html#dtmcs` | P1 | Fail | Previously written with no error pending, which a DTM ignoring the bit also passes |
-| DTM-012-C | Check | `dtmcs.dmistat`=0 afterwards, and `dmcontrol.dmactive` still 1 — the DM is not on the TAP | `dtm.html#dtmcs` | P1 | Fail | **RTL-009** — `dmistat` stays 3 |
+| DTM-012-S | Stimulate | Provoke a sticky busy (as DTM-015), then write only `dtmcs.dmihardreset` | `dtm.html#dtmcs` | P1 | Fail | Previously written with no error pending, which a DTM ignoring the bit also passes — RTL-009 is tracked upstream as pulp-platform/riscv-dbg#87, fixed there by #123 (#152 closed as its duplicate). |
+| DTM-012-C | Check | `dtmcs.dmistat`=0 afterwards, and `dmcontrol.dmactive` still 1 — the DM is not on the TAP | `dtm.html#dtmcs` | P1 | Fail | **RTL-009** — `dmistat` stays 3 — RTL-009 is tracked upstream as pulp-platform/riscv-dbg#87, fixed there by #123 (#152 closed as its duplicate). |
 | DTM-013-C | Check | A read of an unimplemented DMI address returns 0 and leaves the DMI usable | `dtm.html` | P2 | Pass | Reaches the DM's `default:` decode arm |
 | DTM-014-S | Stimulate | Drive Test-Logic-Reset with five TMS=1 clocks, then re-read `dtmcs` and `dmcontrol` | `dtm.html` | P1 | Pass | The transport's "TAP reset" was an IR scan of BYPASS and never reached Test-Logic-Reset; fixed |
 | DTM-014-C | Check | `dmactive` survives a transport reset | `dtm.html` | P1 | Pass | |
@@ -793,7 +794,7 @@ transfer (DMC-003) leaves SBA busy until power-on reset, so it runs last.
 | ID | Type | Action / Check / Cover | Reference | Pri | Status | Remarks |
 |---|---|---|---|---|---|---|
 | DMC-001-S | Stimulate | With hart 0 halted, select `hartsel`=1 (no such hart) for several DMI round-trips, then reselect 0 | `debug_module.html#dm-dmcontrol` | P2 | Pass | The parked hart's flag poll misses — a `dm_mem` arm a single-hart flow never takes |
-| DMC-001-C | Check | `dmstatus` reads cleanly with `allnonexistent`=1 while selected; hart 0 is still halted afterwards | `debug_module.html#dm-dmstatus` | P2 | Fail | **RTL-008** — bits [13:10] read X. The flag-poll arm is still covered |
+| DMC-001-C | Check | `dmstatus` reads cleanly with `allnonexistent`=1 while selected; hart 0 is still halted afterwards | `debug_module.html#dm-dmstatus` | P2 | Fail | **RTL-008** — bits [13:10] read X. The flag-poll arm is still covered — Fix proposed: riscv-dbg#5 (#151). |
 | DMC-002-S | Stimulate | Over SBA: write an undecoded DM address (0x0), read hart 0's and another hart's flag word, read `whereto` idle and while `resumereq` is outstanding | `debug_module.html#system-bus-access` | P2 | Pass | The testharness maps the DM's own memory on the bus SBA uses |
 | DMC-002-C | Check | Both flag words read 0 with nothing pending; `whereto` with a resume pending is `jal` to the resume entry (0x5040006f) | `debug_module.html` | P2 | Pass | An idle `whereto` returns dm_mem's previous read, which is undefined, so it is not checked |
 | DMC-003-S | Stimulate | Assert `ndmreset`, start an SBA read, then write `sbcs`, read `sbdata1`, write `sbaddress1` and `sbdata1` | `debug_module.html#dm-sbcs` | P1 | Pass | `ndmreset` resets the crossbar but not the DM's bus master, so the transfer stays busy. A JTAG scan otherwise outlasts any transfer, so no access had ever met `sbbusy`=1 |
@@ -803,10 +804,10 @@ transfer (DMC-003) leaves SBA busy until power-on reset, so it runs last.
 | DMC-005-C | Check | `relaxedpriv` reads 1; `abstractauto` reads 0x00ff0003 (WARL to 8 progbuf, 2 data bits); the DM stays usable | `debug_module.html#dm-abstractauto` | P2 | Pass | |
 | DMC-006-S | Stimulate | 64-bit SBA write/read of all-ones and all-zeros at an address with bits [27:14] set; toggle `sbaddress1`; read every `dm_mem` region (ROM, abstract slots, Program Buffer filled both ways, data) as 64-bit words; 64-bit (`aarsize`=3) GPR round-trips | `debug_module.html#system-bus-access` | P2 | Pass | Every earlier access used 32-bit values, leaving the upper half of every bus untoggled |
 | DMC-006-C | Check | Every 64-bit round-trip returns what was written; every ROM word matches `debug_rom.sv`; the Program Buffer and data words read back what was written | `debug_module.html#system-bus-access` | P2 | Pass | The abstract-command slots are read but not checked: their content is the last command's program |
-| DMC-007-C | Check | After writing all-ones to `sbcs`, reserved bits [28:23] read 0 | `debug_module.html#dm-sbcs` | P2 | Fail | **RTL-006** — they read back 0x3f. The model masks `sbcs` to predicted fields, so nothing else checks them |
-| DMC-008-C | Check | `haltsum1`, `haltsum2` and `haltsum3` on a single-hart DM: never X; bit 0 is 0 (register absent) or hart 0's halt status (present), other bits 0 | `debug_module.html#dm-haltsum1` | P2 | Fail | **RTL-007** — bit 0 reads X |
+| DMC-007-C | Check | After writing all-ones to `sbcs`, reserved bits [28:23] read 0 | `debug_module.html#dm-sbcs` | P2 | Fail | **RTL-006** — they read back 0x3f. The model masks `sbcs` to predicted fields, so nothing else checks them — Fix proposed: riscv-dbg#6 (#149). |
+| DMC-008-C | Check | `haltsum1`, `haltsum2` and `haltsum3` on a single-hart DM: never X; bit 0 is 0 (register absent) or hart 0's halt status (present), other bits 0 | `debug_module.html#dm-haltsum1` | P2 | Fail | **RTL-007** — bit 0 reads X — Fix proposed: riscv-dbg#7 (#150). This check was corrected to the spec in #178. |
 | DMC-009-S | Stimulate | Over SBA, write hart id 1 to `dm_mem`'s halted then resuming word; select hart 1 and raise `resumereq` | `debug_module.html` | P2 | Pass | dm_mem indexes its per-hart state by the id written, so the padded second slot is reachable |
-| DMC-009-C | Check | Hart 0 is still halted | `debug_module.html` | P2 | Pass | |
+| DMC-009-C | Check | Hart 0 is still halted | `debug_module.html` | P2 | Fail | Fails since the 2026-09-24 regression; not yet triaged. |
 
 ---
 
