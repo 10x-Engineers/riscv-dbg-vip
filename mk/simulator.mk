@@ -62,31 +62,55 @@ ifeq ($(SIM),questa)
 # vsim is on PATH. Never a hardcoded install path — that only works on one
 # machine.
 QUESTA_BIN  := $(shell command -v vsim 2>/dev/null)
-QUESTA_HOME ?= $(if $(MODEL_TECH),$(abspath $(MODEL_TECH)/..),\
-                 $(if $(QUESTA_BIN),$(abspath $(dir $(QUESTA_BIN))/..)))
+# $(strip) matters: make turns the backslash-newline into a space, which
+# would lead the second branch and yield -I" /path/include" (no svdpi.h).
+QUESTA_HOME ?= $(strip $(if $(MODEL_TECH),$(abspath $(MODEL_TECH)/..),\
+                 $(if $(QUESTA_BIN),$(abspath $(dir $(QUESTA_BIN))/..))))
 # Left empty rather than guessed when Questa is absent, so sim_info reports the
 # header as MISSING instead of printing a nonsense path like '//include'.
 DPI_INC     ?= $(if $(QUESTA_HOME),$(QUESTA_HOME)/include)
 
+# The kit is written against UVM 1.2 (uvm_default_report_server and friends).
+# Questa auto-links whatever its modelsim.ini names, which is UVM 1.1d on
+# 2021.x installs -- the kit then fails to parse ("near uvm_default_report_server:
+# syntax error"). Name 1.2 explicitly, as the Xcelium branch does with CDNS-1.2.
+# Empty (auto-link unchanged) on an install without a precompiled uvm-1.2.
+QUESTA_UVM_LIB ?= $(wildcard $(QUESTA_HOME)/uvm-1.2)
+QUESTA_UVM_SRC ?= $(wildcard $(QUESTA_HOME)/verilog_src/uvm-1.2/src)
+QUESTA_UVM     = $(if $(QUESTA_UVM_LIB),-L $(QUESTA_UVM_LIB))
+QUESTA_UVM_INC = $(if $(QUESTA_UVM_SRC),+incdir+$(QUESTA_UVM_SRC))
+
+# vsim-12003 ("written by continuous and procedural assignments") is a static
+# check that CVA6's trigger_module trips with SdtrigSupportTextra=0: a generate
+# block `assign`s textra*_tdata3_{d,q} to '0, and the procedural writes sit
+# under `if (CVA6Cfg.SdtrigSupportTextra && ...)`, a constant false, so they
+# never execute. Xcelium does not flag it. Suppressed by ID only.
+QUESTA_VSIM_FLAGS ?= -suppress 12003
+
 VSIM_BATCH ?= env -u DISPLAY vsim -batch
 VSIM_EXTRA ?=
 
+# -mfcu: one compilation unit for the whole command line, as xrun does, so a
+# `define in one file (dbg_axi_pkg.sv's DBG_AXI_*_W) is visible in later ones
+# (tb_top). vlog's default is one unit per file, where those macros vanish.
+QUESTA_VLOG_FLAGS ?= -mfcu
+
 SIM_PRE_COMPILE      = vlib work
-SIM_COMPILE          = vlog -sv -timescale 1ns/1ps $(SIM_KIT_INCDIRS)
+SIM_COMPILE          = vlog -sv -timescale 1ns/1ps $(QUESTA_VLOG_FLAGS) $(QUESTA_UVM) $(QUESTA_UVM_INC) $(SIM_KIT_INCDIRS)
 SIM_COMPILE_POST     =
 
 SIM_PRE_COMPILE_COV  = vlib $(COV_LIB)
 # +cover=<spec> must be given at vlog time: a runtime-only -coverage against an
 # uninstrumented library silently produces no UCDB (vsim-8634).
-SIM_COMPILE_COV      = vlog -sv -timescale 1ns/1ps +cover=sbceft -work $(COV_LIB) $(SIM_KIT_INCDIRS)
+SIM_COMPILE_COV      = vlog -sv -timescale 1ns/1ps $(QUESTA_VLOG_FLAGS) +cover=sbceft -work $(COV_LIB) $(QUESTA_UVM) $(QUESTA_UVM_INC) $(SIM_KIT_INCDIRS)
 SIM_COMPILE_COV_POST =
 
-SIM_RUN = $(VSIM_BATCH) $(VSIM_EXTRA) -do "run -all; quit -f" \
+SIM_RUN = $(VSIM_BATCH) $(VSIM_EXTRA) $(QUESTA_VSIM_FLAGS) $(QUESTA_UVM) -do "run -all; quit -f" \
           -dpioutoftheblue 1 -sv_lib $(DPI_LIB_NAME) work.$(TB_TOP)
 
 # `onfinish stop` before `run -all` is required: the UVM $finish otherwise exits
 # the batch process before the trailing `coverage save` ever runs.
-SIM_RUN_COV = $(VSIM_BATCH) $(VSIM_EXTRA) -coverage \
+SIM_RUN_COV = $(VSIM_BATCH) $(VSIM_EXTRA) $(QUESTA_VSIM_FLAGS) $(QUESTA_UVM) -coverage \
           -do "onfinish stop; run -all; coverage save $(COV_DIR)/$(UCDB_NAME).ucdb; quit -f" \
           -dpioutoftheblue 1 -sv_lib $(DPI_LIB_NAME) $(COV_LIB).$(TB_TOP)
 
