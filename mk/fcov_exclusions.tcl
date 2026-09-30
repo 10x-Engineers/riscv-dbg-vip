@@ -49,3 +49,29 @@ set why "RTL-012: CVA6 reports a firing trigger as dcsr.cause=3 (csr_regfile.sv:
 exclude -inst $I -coverbin cg_debug_entry.cp_cause.trigger                          -comment $why
 exclude -inst $I -coverbin cg_debug_entry.x_cause_x_prv.trigger?*                   -comment $why
 exclude -inst $I -coverbin cg_debug_entry.x_cause_x_dpc.trigger?trap_handler_entry  -comment $why
+
+# ── Abstract-command outcome: cmderr "bus" (5) and "other" (7) ─────────────
+# dm_mem.sv assigns cmderror_o only HaltResume, NotSupported and Exception
+# (lines 154, 198, 203) and dm_csrs.sv only Busy; CmdErrorBus and
+# CmdErrorOther are declared in dm_pkg.sv:176 and never driven.
+set why "cmderr 5/7 never assigned (dm_mem.sv:154,198,203; dm_csrs.sv Busy only; dm_pkg.sv:176)"
+exclude -inst $I -coverbin cg_cmd_outcome.cp_outcome.bus                           -comment $why
+exclude -inst $I -coverbin cg_cmd_outcome.cp_outcome.other                         -comment $why
+exclude -inst $I -coverbin cg_cmd_outcome.x_cmdtype_x_cmderr.access_register?other -comment $why
+foreach f {transfer_only postexec_only transfer_postexec} {
+    exclude -inst $I -coverbin cg_cmd_outcome.x_flags_x_cmderr.$f?other -comment $why
+}
+
+# ── Selected-hart state: unavailable and nonexistent ───────────────────────
+# ariane_testharness.sv:295 ties dm_top's unavailable_i to '0, so no hart is
+# ever unavailable (testplan HS-004, deferred as out of design scope).
+set why "unavailable_i tied to '0 (ariane_testharness.sv:295)"
+exclude -inst $I -coverbin cg_hartsel_state.cp_state.unavailable            -comment $why
+exclude -inst $I -coverbin cg_hartsel_state.x_sel_x_state.zero?unavailable  -comment $why
+# RTL-003: a nonexistent hart also reports allrunning/anyrunning=1 (dmstatus
+# 0x0080cc83 in hart_selection), so the state reads as nonexistent+running
+# and lands in the ignored "overlap" bin, never in "nonexistent". Remove these
+# two lines when RTL-003 is fixed.
+set why "RTL-003: a nonexistent hart also reports allrunning=1, so the state is never nonexistent alone"
+exclude -inst $I -coverbin cg_hartsel_state.cp_state.nonexistent                 -comment $why
+exclude -inst $I -coverbin cg_hartsel_state.x_sel_x_state.nonexistent?nonexistent -comment $why
