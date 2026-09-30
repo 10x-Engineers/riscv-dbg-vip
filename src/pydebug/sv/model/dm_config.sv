@@ -18,16 +18,23 @@
 typedef struct {
     // ── Optional features ───────────────────────────────────────────────────
     // The spec makes these optional; an implementation may omit any of them.
-    // Setting one false removes the corresponding registers from the model
-    // entirely -- has_model() stops claiming them, so nothing is predicted and
-    // nothing is compared. That is the supported way to describe a DM that
-    // does not implement a feature, and the supported way to park one whose
-    // checking is still under development.
+    // Setting one false declares the feature absent: its registers are then
+    // unimplemented, and the spec says "Debug Module DMI Registers that are
+    // unimplemented ... return 0 when read", so the model predicts 0 for them
+    // and every read is compared.
     bit          sba_enable;             // sbcs, sbaddress*, sbdata* (0x38-0x3F)
     bit          abstractauto_enable;    // abstractauto (0x18)
     bit          hartarray_enable;       // hawindowsel, hawindow (0x14, 0x15)
     bit          authentication_enable;  // authdata (0x30)
     bit          haltgroups_enable;      // dmcs2 (0x32), v1.0 only
+
+    // ── Optional read behaviour ─────────────────────────────────────────────
+    // progbuf0-15: "It may also be possible for the debugger to read from the
+    // program buffer ... If reading is not supported, then all reads return 0."
+    bit          progbuf_readable;
+    // haltsum1-3 "might not be present" below 33/1025/32769 harts; absent,
+    // they read 0. Present, bit 0 summarises the halted state of the group.
+    bit          haltsum_groups_present;
 
     // ── Topology ────────────────────────────────────────────────────────────
     int unsigned num_harts;

@@ -17,12 +17,16 @@ model by replaying a simulation's model-input trace (`mk/model_crosscheck.py`):
 
 - dmcontrol/dmstatus run control (halt, resume, reset, halt-on-reset) --
   spec #3.5 Run Control, #3.2 Reset, #3.14.1 dmstatus, #3.14.2 dmcontrol.
-- Registers the spec fully determines once the implementation is declared
-  (`set_config()`): hartinfo, abstractcs (static fields), command, abstractauto,
-  sbcs (static and R/W fields), haltsum0, hawindowsel, nextdm.
-- Abstract-command (data0/command) and System Bus Access (sbaddress0/sbdata0)
-  self-consistency shadows: values this same DMI traffic wrote, read back. Not
-  a model of a DUT's initial register or memory content.
+- Every other DMI register, once the implementation is declared
+  (`set_config()`): hartinfo, abstractcs, command, abstractauto, sbcs,
+  haltsum0-3, hawindowsel/hawindow, nextdm, confstrptr0-3, data0-11,
+  progbuf0-15, sbaddress0-3, sbdata0-3, authdata, dmcs2, custom*. An optional
+  feature declared absent, and every address the register table does not list,
+  read 0 ("unimplemented or not mentioned ... return 0 when read").
+- Abstract-command (data0/data1/command, abstractauto replay) and System Bus
+  Access (sbaddress0/1, sbdata0/1) self-consistency shadows: values this same
+  DMI traffic wrote, read back. Not a model of a DUT's register or memory
+  content; a word the model cannot know is left unclaimed by has_model().
 - Hardware single-step: a resume with dcsr.step=1 (as last written through an
   abstract command) re-halts (riscv-dbg-vip#119).
 """
@@ -57,6 +61,12 @@ ADDR_SBCS = 0x38
 ADDR_SBADDRESS0 = 0x39
 ADDR_SBDATA0 = 0x3C
 ADDR_HALTSUM0 = 0x40
+ADDR_HALTSUM1, ADDR_HALTSUM2, ADDR_HALTSUM3 = 0x13, 0x34, 0x35
+ADDR_HAWINDOW = 0x15
+ADDR_AUTHDATA = 0x30
+ADDR_DMCS2 = 0x32
+ADDR_SBADDRESS1, ADDR_SBADDRESS2, ADDR_SBADDRESS3 = 0x3A, 0x3B, 0x37
+ADDR_SBDATA1, ADDR_SBDATA2, ADDR_SBDATA3 = 0x3D, 0x3E, 0x3F
 
 #: regno of GPR x0 (hardwired 0 by the base ISA) and of dcsr (spec #4.8).
 GPR_X0_REGNO = 0x1000
@@ -87,6 +97,8 @@ class DeclaredConfig:
     hartarray_enable: bool = False
     authentication_enable: bool = False
     haltgroups_enable: bool = False
+    progbuf_readable: bool = False
+    haltsum_groups_present: bool = False
     num_harts: int = 1
     version: int = DMSTATUS_VERSION_0_13
     authenticated: bool = False
@@ -254,6 +266,18 @@ class DMPredictor:
         self.sbdata0_pending_valid = False
         self.sbdata0_pending_value = 0
 
+        # Every other DMI register (mirror of dm_ref_model.sv).
+        self.data_q = [0] * 12            # data1..11; data0 is data0_pending_*
+        self.data_known = [True] * 12
+        self.staged_data1 = 0
+        self.shadow_hi: Dict[int, int] = {}
+        self.progbuf_q = [0] * 16
+        self.last_command = 0
+        self.sbaddress1 = 0
+        self.sbdata1 = 0
+        self.sbdata1_known = True
+        self.hawindow: Dict[int, int] = {}
+
         #: The RTL's abstractcs.busy as last observed by the checker (#3.7.1).
         self.observed_cmdbusy = False
 
@@ -300,6 +324,23 @@ class DMPredictor:
         self.sbautoincrement = False
         self.sbreadondata = False
         self.relaxedpriv = self.cfg.relaxedpriv_reset
+        # data*, progbuf*, sbaddress*, sbdata* reset to 0; the hart and memory
+        # shadows are not DM state and survive a DM reset.
+        self.staged_data0 = 0
+        self.staged_data1 = 0
+        self.data0_pending_valid = True
+        self.data0_pending_value = 0
+        self.data_q = [0] * 12
+        self.data_known = [True] * 12
+        self.progbuf_q = [0] * 16
+        self.last_command = 0
+        self.sbaddress0 = 0
+        self.sbaddress1 = 0
+        self.sbdata0_pending_valid = True
+        self.sbdata0_pending_value = 0
+        self.sbdata1 = 0
+        self.sbdata1_known = True
+        self.hawindow = {}
 
     def reset_dm(self, power_on: bool = False) -> None:
         """Take the DM to its reset state (dmactive=0 or power-up).
@@ -385,10 +426,18 @@ class DMPredictor:
             # Dropped, as the DM drops it. cmderr is tracked front-door by the
             # checker, not invented here.
             return
-        if addr == DMCONTROL.address:
+        if self._is_data(addr) or self._is_progbuf(addr):
+            self._write_buffer(addr, value)
+        elif addr == DMCONTROL.address:
             self._write_dmcontrol(value)
-        elif addr == ADDR_DATA0:
-            self.staged_data0 = value
+        elif addr == ADDR_SBADDRESS1:
+            self.sbaddress1 = value
+        elif addr == ADDR_SBDATA1:
+            self.sbdata1 = value
+            self.sbdata1_known = True
+        elif addr == ADDR_HAWINDOW:
+            if self.cfg.hartarray_enable:
+                self.hawindow[self.hawindowsel] = value & self._hawindow_implemented(self.hawindowsel)
         elif addr == ADDR_COMMAND:
             self._write_command(value)
         elif addr == ADDR_SBCS:
@@ -410,12 +459,85 @@ class DMPredictor:
     # ── Abstract command (spec #3.7.1.1): cmd[18]=postexec, cmd[17]=transfer,
     #    cmd[16]=write, cmd[15:0]=regno ──────────────────────────────────────
 
+    @staticmethod
+    def _is_data(addr: int) -> bool:
+        return ADDR_DATA0 <= addr <= ADDR_DATA11
+
+    @staticmethod
+    def _is_progbuf(addr: int) -> bool:
+        return ADDR_PROGBUF0 <= addr <= ADDR_PROGBUF15
+
+    def _autoexec_armed(self, addr: int) -> bool:
+        """abstractauto: an access to an armed data/progbuf word re-runs
+        command -- only while not busy (busy gives cmderr=1 instead)."""
+        if not self.cfg.abstractauto_enable or self.observed_cmdbusy:
+            return False
+        if self._is_data(addr):
+            return bool((self.abstractauto >> (addr - ADDR_DATA0)) & 1)
+        return bool((self.abstractauto >> (16 + addr - ADDR_PROGBUF0)) & 1)
+
+    def _write_buffer(self, addr: int, value: int) -> None:
+        if self._is_data(addr):
+            i = addr - ADDR_DATA0
+            if i >= self.cfg.datacount:
+                return
+            if i == 0:
+                self.staged_data0 = value
+                self.data0_pending_valid = True
+                self.data0_pending_value = value
+            else:
+                self.data_q[i] = value
+                self.data_known[i] = True
+                if i == 1:
+                    self.staged_data1 = value
+        else:
+            i = addr - ADDR_PROGBUF0
+            if i >= self.cfg.progbufsize:
+                return
+            self.progbuf_q[i] = value
+        if self._autoexec_armed(addr):
+            self._execute_command(self.last_command)
+
+    def _hawindow_implemented(self, sel: int) -> int:
+        m = 0
+        for h in range(32 * sel, min(self.num_harts, 32 * (sel + 1))):
+            m |= 1 << (h - 32 * sel)
+        return m
+
+    def observe_read(self, addr: int) -> None:
+        """Side effects of a DMI read, applied after it is compared and whether
+        or not it was (mirror of dm_ref_model.sv observe_read())."""
+        if addr == ADDR_SBDATA0:
+            self._sbdata0_read_effects()
+        if ((self._is_data(addr) and addr - ADDR_DATA0 < self.cfg.datacount)
+                or (self._is_progbuf(addr) and addr - ADDR_PROGBUF0 < self.cfg.progbufsize)):
+            if self._autoexec_armed(addr):
+                self._execute_command(self.last_command)
+
     def _write_command(self, value: int) -> None:
+        self.last_command = value
+        self._execute_command(value)
+
+    def _execute_command(self, value: int) -> None:
         postexec = (value >> 18) & 1
         transfer = (value >> 17) & 1
         write = (value >> 16) & 1
         regno = value & 0xFFFF
+        aarsize = (value >> 20) & 0x7
+        if (value >> 24) & 0xFF or aarsize > 3:
+            return
         if transfer:
+            if aarsize == 3:
+                if write:
+                    self.shadow_hi[regno] = self.staged_data1
+                elif regno == GPR_X0_REGNO:
+                    self.data_q[1], self.data_known[1] = 0, True
+                elif regno in self.shadow_hi and _reads_back_as_written(regno):
+                    self.data_q[1], self.data_known[1] = self.shadow_hi[regno], True
+                else:
+                    self.data_known[1] = False
+            elif write:
+                self.shadow_hi.pop(regno, None)
             if write:
                 self.shadow_regs[regno] = self.staged_data0
             elif regno == GPR_X0_REGNO:
@@ -429,6 +551,7 @@ class DMPredictor:
         if postexec:
             # The Program Buffer may change any register (#110).
             self.shadow_regs.clear()
+            self.shadow_hi.clear()
 
     # ── System Bus Access (spec #3.10) ────────────────────────────────────────
 
@@ -441,10 +564,15 @@ class DMPredictor:
         self.sbreadondata = bool((value >> 15) & 1)
 
     def _sba_autoincrement(self) -> None:
-        if self.sbautoincrement:
-            self.sbaddress0 = (self.sbaddress0 + (1 << self.sbaccess)) & MASK32
+        if not self.sbautoincrement:
+            return
+        a = ((self.sbaddress1 << 32) | self.sbaddress0) + (1 << self.sbaccess)
+        self.sbaddress0 = a & MASK32
+        if self.cfg.sbasize > 32:
+            self.sbaddress1 = (a >> 32) & MASK32
 
     def _sba_arm_read(self, address: int) -> None:
+        self.sbdata1_known = False
         if address in self.shadow_mem:
             self.sbdata0_pending_valid = True
             self.sbdata0_pending_value = self.shadow_mem[address]
@@ -464,6 +592,9 @@ class DMPredictor:
     def observe_sbdata0_read(self) -> None:
         """#3.10: with sbreadondata set, reading sbdata0 starts the next read,
         at the address sbaddress0 holds now; only then does it autoincrement."""
+        self._sbdata0_read_effects()
+
+    def _sbdata0_read_effects(self) -> None:
         if self.sbreadondata:
             self._sba_arm_read(self.sbaddress0)
             self._sba_autoincrement()
@@ -581,6 +712,7 @@ class DMPredictor:
                 h.resume_ack = True
                 # A resumed hart runs code the shadow cannot follow (#110, #113).
                 self.shadow_regs.clear()
+                self.shadow_hi.clear()
 
     def _apply_ndmreset(self, asserted: bool) -> None:
         """ndmreset resets every hart and the rest of the platform (#3.2)."""
@@ -675,70 +807,128 @@ class DMPredictor:
         """
         if addr in (DMCONTROL.address, DMSTATUS.address):
             return True
+        if not self.cfg_valid:
+            return False
+        # Every other address is claimed, except values this model cannot
+        # know: a data word a command or the hart just overwrote, a bus word
+        # read from memory it never wrote, and the registers of an optional
+        # feature the DUT declares but this model does not simulate.
         if addr == ADDR_DATA0:
             return self.data0_pending_valid
+        if self._is_data(addr) and addr - ADDR_DATA0 < self.cfg.datacount:
+            return self.data_known[addr - ADDR_DATA0]
+        c = self.cfg
         if addr == ADDR_SBDATA0:
-            return self.cfg.sba_enable and self.sbdata0_pending_valid
-        if addr in (ADDR_HARTINFO, ADDR_HALTSUM0, ADDR_COMMAND, ADDR_NEXTDM, ADDR_ABSTRACTCS):
-            return self.cfg_valid
-        if addr == ADDR_ABSTRACTAUTO:
-            return self.cfg_valid and self.cfg.abstractauto_enable
-        if addr == ADDR_HAWINDOWSEL:
-            return self.cfg_valid and self.cfg.hartarray_enable
-        if addr == ADDR_SBCS:
-            return self.cfg_valid and self.cfg.sba_enable
-        return False
+            return not c.sba_enable or self.sbdata0_pending_valid
+        if addr == ADDR_SBDATA1:
+            return not self._sba_wider_than_32() or self.sbdata1_known
+        if addr in (ADDR_SBDATA2, ADDR_SBDATA3):
+            return not (c.sba_enable and c.sbaccess128)
+        if addr == ADDR_SBADDRESS2:
+            return not (c.sba_enable and c.sbasize > 64)
+        if addr == ADDR_SBADDRESS3:
+            return not (c.sba_enable and c.sbasize > 96)
+        if addr == ADDR_AUTHDATA:
+            return not c.authentication_enable
+        if addr == ADDR_DMCS2:
+            return not c.haltgroups_enable
+        return True
+
+    def _sba_wider_than_32(self) -> bool:
+        return self.cfg.sba_enable and (self.cfg.sbaccess64 or self.cfg.sbaccess128)
+
+    def _expect_haltsum(self, n: int) -> int:
+        """haltsum1-3: bit j summarises a block of 32**n harts; haltsum1 and 2
+        only within the block hartsel's upper bits select."""
+        if not self.cfg.haltsum_groups_present:
+            return 0
+        lo, word = 5 * n, 0
+        for h in range(min(self.num_harts, len(self.harts))):
+            if not self.harts[h].halted:
+                continue
+            if n < 3 and (h >> (lo + 5)) != (self.hartsel >> (lo + 5)):
+                continue
+            word |= 1 << ((h >> lo) & 31)
+        return word
 
     def predict(self, addr: int) -> int:
-        """The predicted read value; 0 for an address has_model() rejects."""
+        """The predicted read value; 0 for every unimplemented register."""
+        c = self.cfg
+        if self._is_data(addr):
+            i = addr - ADDR_DATA0
+            if i >= c.datacount:
+                return 0
+            return self.data0_pending_value if i == 0 else self.data_q[i]
+        if self._is_progbuf(addr):
+            i = addr - ADDR_PROGBUF0
+            # "If reading is not supported, then all reads return 0."
+            return self.progbuf_q[i] if i < c.progbufsize and c.progbuf_readable else 0
         if addr == DMCONTROL.address:
             return self._expect_dmcontrol()
         if addr == DMSTATUS.address:
             return self._expect_dmstatus()
-        if addr == ADDR_DATA0:
-            return self.data0_pending_value
-        if addr == ADDR_SBDATA0:
-            return self.sbdata0_pending_value
         if addr == ADDR_HARTINFO:
-            c = self.cfg
             return ((c.nscratch & 0xF) << 20 | int(c.dataaccess) << 16
                     | (c.datasize & 0xF) << 12 | (c.dataaddr & 0xFFF))
         if addr == ADDR_ABSTRACTCS:
-            return ((self.cfg.progbufsize & 0x1F) << 24 | int(self.relaxedpriv) << 11
-                    | (self.cfg.datacount & 0xF))
+            return ((c.progbufsize & 0x1F) << 24 | int(self.relaxedpriv) << 11
+                    | (c.datacount & 0xF))
         if addr == ADDR_COMMAND:
             return 0  # cmdtype and control are WARZ
         if addr == ADDR_ABSTRACTAUTO:
-            progbuf = (self.abstractauto >> 16) & ((1 << self.cfg.progbufsize) - 1)
-            data = (self.abstractauto & 0xFFF) & ((1 << self.cfg.datacount) - 1)
+            if not c.abstractauto_enable:
+                return 0
+            progbuf = (self.abstractauto >> 16) & ((1 << c.progbufsize) - 1)
+            data = (self.abstractauto & 0xFFF) & ((1 << c.datacount) - 1)
             return (progbuf << 16 | data) & MASK32
+        if addr == ADDR_HALTSUM0:
+            word = 0
+            for i in range(min(self.num_harts, 32, len(self.harts))):
+                if self.harts[i].halted:
+                    word |= 1 << i
+            return word
+        if addr == ADDR_HALTSUM1:
+            return self._expect_haltsum(1)
+        if addr == ADDR_HALTSUM2:
+            return self._expect_haltsum(2)
+        if addr == ADDR_HALTSUM3:
+            return self._expect_haltsum(3)
+        if addr == ADDR_HAWINDOWSEL:
+            return self.hawindowsel & 0x7FFF if c.hartarray_enable else 0
+        if addr == ADDR_HAWINDOW:
+            return self.hawindow.get(self.hawindowsel, 0) if c.hartarray_enable else 0
+        if addr == ADDR_NEXTDM:
+            return c.nextdm & MASK32
         if addr == ADDR_SBCS:
-            c = self.cfg
+            if not c.sba_enable:
+                return 0
             return ((c.sbversion & 0x7) << 29 | int(self.sbreadonaddr) << 20
                     | (self.sbaccess & 0x7) << 17 | int(self.sbautoincrement) << 16
                     | int(self.sbreadondata) << 15 | (c.sbasize & 0x7F) << 5
                     | int(c.sbaccess128) << 4 | int(c.sbaccess64) << 3
                     | int(c.sbaccess32) << 2 | int(c.sbaccess16) << 1 | int(c.sbaccess8))
-        if addr == ADDR_HALTSUM0:
-            word = 0
-            for i in range(min(self.num_harts, 32)):
-                if i < len(self.harts) and self.harts[i].halted:
-                    word |= 1 << i
-            return word
-        if addr == ADDR_HAWINDOWSEL:
-            return self.hawindowsel & 0x7FFF
-        if addr == ADDR_NEXTDM:
-            return self.cfg.nextdm & MASK32
+        if addr == ADDR_SBADDRESS0:
+            return self.sbaddress0 if c.sba_enable else 0
+        if addr == ADDR_SBADDRESS1:
+            return self.sbaddress1 if c.sba_enable and c.sbasize > 32 else 0
+        if addr == ADDR_SBDATA0:
+            return self.sbdata0_pending_value if c.sba_enable else 0
+        if addr == ADDR_SBDATA1:
+            return self.sbdata1 if self._sba_wider_than_32() else 0
+        # confstrptr0-3 (confstrptrvalid=0), authdata/dmcs2 declared absent,
+        # custom*, and every address the register table does not list:
+        # "unimplemented or not mentioned ... return 0 when read".
         return 0
 
     @staticmethod
     def predict_mask(addr: int) -> int:
         """The bits predict() claims. abstractcs busy/cmderr and sbcs
-        sbbusyerror/sbbusy/sberror are dynamic and left to the front door."""
+        sbbusyerror/sbbusy/sberror are dynamic and left to the front door;
+        reserved bits are predicted 0."""
         if addr == ADDR_ABSTRACTCS:
-            return 0x1F00_080F
+            return 0xFFFF_E8FF
         if addr == ADDR_SBCS:
-            return 0xE01F_8FFF
+            return 0xFF9F_8FFF
         return MASK32
 
     def expect(self, addr: int) -> int:

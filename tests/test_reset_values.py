@@ -49,34 +49,25 @@ def _step(results, tc_id):
     return matches[0]
 
 
-#: The two checks the mock cannot satisfy, and why. `data0` and `sbdata0` are
-#: not modelled by the predictor, so ModelBackedMockTransport answers them from
-#: its canned table with deliberate sentinels (0xdeadbeef, 0xcafe0000) that
-#: exist precisely so a test cannot mistake them for modelled values. On the DUT
-#: these registers do read 0 after a DM reset; here they must not, and saying so
-#: is better than weakening the check until the mock passes it.
-MOCK_SENTINEL_CHECKS = {"RST-036-C", "RST-039-C"}
-
-
 @pytest.mark.smoke
 def test_every_check_runs_and_passes_against_the_declared_config(results):
     """Every RST-03x/04x check produces a result, and the model — built from the
-    same declaration — satisfies all of them bar the two the mock answers with
-    sentinels."""
+    same declaration — satisfies all of them."""
     ids = [r.msg.split(":")[0] for r in results if r.msg.startswith("RST-")]
     assert ids == ["RST-030-C", "RST-032-C", "RST-033-C", "RST-034-C",
                    "RST-035-C", "RST-036-C", "RST-037-C", "RST-038-C",
                    "RST-039-C", "RST-040-C", "RST-042-C", "RST-043-C"]
     failed = {r.msg.split(":")[0] for r in results if not r.ok}
-    assert failed == MOCK_SENTINEL_CHECKS, (
+    assert not failed, (
         "unexpected failures: " + "\n".join(r.msg for r in results if not r.ok))
 
 
-def test_the_sentinel_failures_name_the_register_that_was_not_zero(results):
-    """A failing reset check must say which register and what it read, or it
-    cannot be acted on."""
-    assert "data0=0xdeadbeef" in _step(results, "RST-036-C").msg
-    assert "sbdata0=0xcafe0000" in _step(results, "RST-039-C").msg
+def test_data_and_sba_words_read_zero_after_reset(results):
+    """RST-036/039: the model now predicts data0..11 and sbaddress/sbdata after
+    a DM reset (0), so the mock answers them from the model rather than from
+    its canned sentinels."""
+    assert "all zero" in _step(results, "RST-036-C").msg
+    assert "all zero" in _step(results, "RST-039-C").msg
 
 
 def test_dmcontrol_reports_only_dmactive_set(results):

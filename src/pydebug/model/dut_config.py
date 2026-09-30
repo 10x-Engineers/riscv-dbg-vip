@@ -86,6 +86,7 @@ class DutConfig:
 
         flags = ("sba_enable", "abstractauto_enable", "hartarray_enable",
                  "authentication_enable", "haltgroups_enable", "relaxedpriv_reset",
+                 "progbuf_readable", "haltsum_groups_present",
                  "dataaccess", "sbaccess_writable", "sbaccess128", "sbaccess64",
                  "sbaccess32", "sbaccess16", "sbaccess8")
         numbers = ("progbufsize", "datacount", "nscratch", "datasize", "dataaddr",

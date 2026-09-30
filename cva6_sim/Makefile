@@ -219,7 +219,7 @@ soc_test_cov: soc_compile_cov
 	     +UVM_TESTNAME=debug_test \
 	     +PYTHON_SEQ="$(PYTHON_SEQ)" \
 	     +DM_MODEL_TRACE=$(COV_DIR)/$(UCDB_NAME).model_trace \
-	     $(ELF_PLUSARGS) \
+	     $(ELF_PLUSARGS) $(PLUSARGS) \
 	     +UVM_VERBOSITY=UVM_MEDIUM 2>&1 | tee $(COV_DIR)/$(UCDB_NAME).log
 
 # A scenario that needs its own program declares it as params.elf in its config.

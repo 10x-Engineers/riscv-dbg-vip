@@ -104,6 +104,8 @@ def replay(trace: Path) -> Result:
             model.sync_observed_hart_signals(int(args[0], 16))
         elif kind == "O":
             model.observe_sbdata0_read()
+        elif kind == "A":
+            model.observe_read(int(args[0], 16))
         elif kind in ("R", "V"):
             res.inputs -= 1
             addr, rtl = int(args[0], 16), int(args[1], 16)

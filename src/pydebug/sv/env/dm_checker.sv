@@ -126,6 +126,8 @@ class dm_checker extends uvm_component;
     c.hartarray_enable      = r.get_bool("hartarray_enable");
     c.authentication_enable = r.get_bool("authentication_enable");
     c.haltgroups_enable     = r.get_bool("haltgroups_enable");
+    c.progbuf_readable      = r.get_bool("progbuf_readable");
+    c.haltsum_groups_present = r.get_bool("haltsum_groups_present");
     c.progbufsize        = r.get_int("progbufsize");
     c.datacount          = r.get_int("datacount");
     c.relaxedpriv_reset  = r.get_bool("relaxedpriv_reset");
@@ -450,14 +452,13 @@ class dm_checker extends uvm_component;
       model.trace_read(addr, actual, "V");
     end
 
-    if (!model.has_model(addr)) return; // nothing checkable for this address
-
     // Compare only the bits the model claims to predict. predict_mask()
     // excludes genuinely dynamic state -- abstractcs.busy is set while an
     // abstract command is in flight, and an untimed model cannot know when
     // that is. Masking here rather than in the caller keeps the front door and
     // the backdoor honest about the same set of bits.
-    if ((actual & model.predict_mask(addr)) !== (model.predict(addr) & model.predict_mask(addr))) begin
+    if (model.has_model(addr) &&
+        (actual & model.predict_mask(addr)) !== (model.predict(addr) & model.predict_mask(addr))) begin
       total_mismatches++;
       `uvm_error("MODEL_MISMATCH",
         $sformatf(
@@ -465,12 +466,14 @@ class dm_checker extends uvm_component;
           addr, actual, model.predict(addr), model.predict_mask(addr)))
     end
 
-    // #3.10: with sbreadondata set, the act of READING sbdata0 starts the next
-    // system bus read. That side effect is driven by the read itself, so it
-    // has to be applied here -- after the comparison, or this read would be
-    // checked against the value the NEXT one will return.
-    if (addr == dm_defines_pkg::DM_ADDR_SBDATA0)
-      model.observe_sbdata0_read();
+    // Side effects of the read itself, applied after the comparison (or this
+    // read would be checked against the value the NEXT one will return) and
+    // whether or not the value was compared -- the DM performs them either
+    // way. #3.10: with sbreadondata set, reading sbdata0 starts the next bus
+    // read; abstractauto: reading an armed data/progbuf word re-runs command.
+    // (This used to be skipped whenever sbdata0 had no prediction, which left
+    // the model one bus read behind the DM from then on.)
+    model.observe_read(addr);
   endfunction
 
   // ── Model vs RTL, by backdoor ───────────────────────────────────────────
@@ -481,8 +484,9 @@ class dm_checker extends uvm_component;
   // Scope is limited by the model, deliberately, and the limits are worth
   // stating because they bound what this check is worth:
   //
-  //   * has_model() gates the address. predict() returns 0 for anything it
-  //     does not implement -- today abstractcs, sbcs, command, abstractauto --
+  //   * has_model() gates the address. It claims every register except a
+  //     value the model cannot know (a data word the hart just wrote, a bus
+  //     word from memory it never wrote, a declared-but-unsimulated feature),
   //     so comparing those would report the model's own silence as a DUT bug.
   //   * Within an address, only the bits the model computes are compared.
   //     expect_dmcontrol() models dmactive/ndmreset/hasel/hartreset/hartsel

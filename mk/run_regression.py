@@ -85,6 +85,10 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
     cmd = ["make", target, f"CFG_FILE={cfg}"]
     if elf:
         cmd.append(f"ELF={elf}")
+    # Per-test simulator plusargs (regression.yaml `plusargs:`), e.g. to let a
+    # scenario that probes known defects run past the first UVM error.
+    if test.get("plusargs"):
+        cmd.append("PLUSARGS=" + " ".join(test["plusargs"]))
 
     started = time.time()
     # Own process group, so a timeout can kill the whole tree. `make` spawns

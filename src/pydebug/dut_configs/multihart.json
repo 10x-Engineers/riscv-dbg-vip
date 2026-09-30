@@ -29,11 +29,14 @@
     "sbaccess32": false,
     "sbaccess16": false,
     "sbaccess8": false,
-    "_features_note": "Optional features. Set one false and the model stops claiming the corresponding registers: nothing is predicted and nothing is compared. Use this to describe a DM that does not implement a feature.",
+    "_features_note": "Optional features. Set one false to declare the feature absent: its registers are then unimplemented, which the spec says read 0, so the model predicts 0 and still compares every read.",
     "sba_enable": false,
     "abstractauto_enable": true,
     "hartarray_enable": true,
     "authentication_enable": false,
     "haltgroups_enable": true,
+    "_read_behaviour_note": "progbuf_readable: whether progbuf0-15 read back what was written (the spec allows reads to return 0). haltsum_groups_present: whether haltsum1-3 exist (optional below 33 harts; absent they read 0). Both taken from this DM's DMI read decode.",
+    "progbuf_readable": false,
+    "haltsum_groups_present": true,
     "_multihart_note": "The only declared difference from cva6.json is the hart count and what follows from it. The DM is the same RTL; the harts behind it are dbg_dummy_hart, which implement the debug-ROM run-control handshake and nothing else -- no register file, so no abstract command can succeed here."
 }
