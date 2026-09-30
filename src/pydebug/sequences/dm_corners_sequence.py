@@ -113,8 +113,9 @@ ONES = 0xFFFFFFFF
 SBCS_ZERO0 = 0x1F800000
 
 
-def _sbcs_read_on_addr() -> int:
-    return (1 << SB_READONADDR) | (2 << SB_ACCESS_LSB)
+def _sbcs_read_on_addr(sbaccess: int = 2) -> int:
+    """sbcs value for a read-on-address access of 2**sbaccess bytes (2 = 32-bit)."""
+    return (1 << SB_READONADDR) | (sbaccess << SB_ACCESS_LSB)
 
 
 def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
@@ -293,18 +294,21 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
                 msg="TC-DMC-006: N/A -- sbcs advertises no 64-bit access, so "
                     "there are no sbdata1/sbaddress1 halves to exercise")
         problems = []
-        dm.t.write(DMI.SBCS, 2 << SB_ACCESS_LSB)      # no read-on-address
+        # sbaccess=3: a 64-bit access. It has to be asked for -- sbaccess is R/W
+        # and resets to 2 (32-bit); an earlier DM hardwired it to 3 (RTL-002),
+        # which is the only reason a 2 here ever moved 64 bits.
+        dm.t.write(DMI.SBCS, 3 << SB_ACCESS_LSB)      # no read-on-address
         dm.t.write(SBADDRESS1, ONES)
         dm.t.write(SBADDRESS1, 0)
         dm.t.write(DMI.SBADDRESS0, scratch_addr)
         readback = {}
         for pattern in (ONES, 0):
-            dm.t.write(DMI.SBCS, 2 << SB_ACCESS_LSB)
+            dm.t.write(DMI.SBCS, 3 << SB_ACCESS_LSB)
             dm.t.write(DMI.SBADDRESS0, scratch_addr)
             dm.t.write(SBDATA1, pattern)
             dm.t.write(DMI.SBDATA0, pattern)          # starts the 64-bit write
             dm._wait_sbus()
-            dm.t.write(DMI.SBCS, _sbcs_read_on_addr())
+            dm.t.write(DMI.SBCS, _sbcs_read_on_addr(3))
             readback[pattern] = _sba_read64(scratch_addr)
             if readback[pattern] != (pattern << 32) | pattern:
                 problems.append(f"SBA 64-bit 0x{pattern:08x}{pattern:08x} read back "
