@@ -30,7 +30,7 @@ Traces to: TC-DMC-001 (flag poll with a nonexistent hart selected),
 TC-DMC-002 (SBA into the DM's own memory), TC-DMC-003 (DMI access while
 sbbusy), TC-DMC-004 (DM consistent after release), TC-DMC-005 (every
 writable register bit), TC-DMC-006 (64-bit bus and data-path halves),
-TC-DMC-007 (sbcs reserved bits read 0), TC-DMC-008 (haltsum1-3 read 0),
+TC-DMC-007 (sbcs reserved bits read 0), TC-DMC-008 (haltsum1-3 defined: 0, or hart 0's group status),
 TC-DMC-009 (another hart's state slots), TC-DMC-010 (abstract-command
 program walk).
 """
@@ -247,25 +247,34 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
         )
     session.add_step("TC-DMC-007: sbcs reserved bits read 0", tc_dmc_007)
 
-    # ── TC-DMC-008: haltsum1-3 read 0 on a single-hart DM ─────────────────
-    # They summarise groups of 32 harts, so with one hart every bit is 0; the
-    # decode answers them regardless. Each is read on its own so one X does
-    # not hide the others. Fails today: RTL-007 (bit 0 reads X).
+    # ── TC-DMC-008: haltsum1-3 are defined on a single-hart DM ────────────
+    # Spec (dm_registers, haltsum1): "The LSB reflects the halt status of harts
+    # {hartsel[19:10],10'h0} through {hartsel[19:10],10'h1f}", and the register
+    # "might not be present if fewer than 33 harts are connected". So with one
+    # hart, bit 0 of each is either 0 (register absent) or hart 0's halt
+    # status (present), every other bit is 0, and X is never legal. haltsum0
+    # gives hart 0's status at the same point. Each is read on its own so one
+    # X does not hide the others. RTL-007 was bit 0 reading X.
     def tc_dmc_008():
-        seen = {}
+        hart0_halted = dm.t.read(DMI.HALTSUM0) & 1
+        seen, ok = {}, True
         for name, addr in (("haltsum1", HALTSUM1), ("haltsum2", HALTSUM2),
                            ("haltsum3", HALTSUM3)):
             try:
-                seen[name] = f"0x{dm.t.read(addr):08x}"
+                v = dm.t.read(addr)
+                seen[name] = f"0x{v:08x}"
+                ok &= v in (0, hart0_halted)
             except Exception as e:           # noqa: BLE001 - X is reported, not raised
                 seen[name] = f"unknown ({e})"
-        ok = all(v == "0x00000000" for v in seen.values())
+                ok = False
         return StepResult(
             ok=ok,
-            msg="TC-DMC-008: " + "; ".join(f"{k}={v}" for k, v in seen.items())
-                + ("  OK" if ok else "  expected 0 -- RTL-007"),
+            msg=f"TC-DMC-008: hart 0 halted={hart0_halted}; "
+                + "; ".join(f"{k}={v}" for k, v in seen.items())
+                + ("  OK" if ok else
+                   f"  expected 0 or {hart0_halted} (bit 0 = hart 0's group) -- RTL-007"),
         )
-    session.add_step("TC-DMC-008: haltsum1-3 read 0", tc_dmc_008)
+    session.add_step("TC-DMC-008: haltsum1-3 defined on a single-hart DM", tc_dmc_008)
 
     # ── TC-DMC-006: the 64-bit halves of the system bus and the data path ─
     # sbasize is 64, so sbaddress1 and sbdata1 exist and the bus carries
