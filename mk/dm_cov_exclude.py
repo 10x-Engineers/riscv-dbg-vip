@@ -41,6 +41,10 @@ _ABSTRACT_CMD_CONSTANT = _abstract_cmd_constant_bits()
 #:   inst  regex on the instance path
 #:   kind  regex on the block kind ("true part of", "implicit else", ...)
 #:   case  regex on the source of the enclosing `case` item
+#:   not_arm  regex the nearest enclosing if/else arm must NOT match. Two
+#:         `case` statements can have textually identical items (axi_adapter's
+#:         single-request and burst write arms both have
+#:         `2'b10: state_d = WAIT_LAST_W_READY;`); only the arm tells them apart
 RULES = [
     # ── The DM's bus bridges (generic IP, used in one narrow way) ─────────
     ("dm-slave-single-beat-only",
@@ -63,7 +67,11 @@ RULES = [
      "access at a time (ariane_testharness.sv:352-360), so every burst and "
      "critical-word path of this generic cache adapter is unreachable",
      "a DM that issues bursts",
-     {"inst": r"i_dm_axi_master$"}),
+     # The single-request write arms (axi_adapter.sv:185-191) share their
+     # `2'bxx:` text with the burst arms; they are reachable -- 2'b11 was hit
+     # on 2026-09-24 and missed on 2026-09-30, by bus timing alone -- so a zero
+     # there is a stimulus hole, not burst code.
+     {"inst": r"i_dm_axi_master$", "not_arm": r"type_i == ariane_pkg::SINGLE_REQ"}),
 
     ("dm-master-no-amo",
      r"amo_[qi]|AMO_|ATOP_|amo_returns_data",
@@ -81,7 +89,7 @@ RULES = [
      {"inst": r"i_dm_axi_master$"}),
 
     ("dm-master-bus-never-backpressures",
-     r"axi_resp_i\.(aw_ready|w_ready)|WAIT_AW_READY: begin",
+     r"axi_resp_i\.(aw_ready|w_ready)|WAIT_AW_READY: begin|state_d = WAIT_AW_READY;",
      "TESTBENCH LIMIT: the AXI crossbar accepts the DM master's AW and W in "
      "the cycle they are offered in every run so far, so the adapter's "
      "wait-for-ready states are never entered",
@@ -645,19 +653,23 @@ def parse_fsm(report: Path):
 
 
 def parse(report: Path):
-    """Yield (instance, block_index, source, kind, case_item) per uncovered block."""
+    """Yield (instance, block_index, source, kind, case_item, arm) per uncovered
+    block. `arm` is the source of the nearest preceding true/false-part block,
+    i.e. the if/else branch the block sits in."""
     for name, body in _sections(report):
         sec = re.search(r"Block Detail Report.*?(?=Expression Detail|Toggle Detail|\Z)",
                         body, re.S)
         if not sec:
             continue
-        case_item = ""
+        case_item = arm = ""
         for hit, idx, _line, kind, _org, src in re.findall(
                 r"^(\d+)\s+(\d+)\s+(\d+)\s+(\S.*?)\s{2,}(\d+)\s+(.*)$", sec.group(0), re.M):
             if kind == "a case item of":
                 case_item = src.strip()
             if hit == "0":
-                yield name, idx, src.strip(), kind, case_item
+                yield name, idx, src.strip(), kind, case_item, arm
+            if kind in ("true part of", "false part of"):
+                arm = src.strip()
 
 
 def parse_exprs(report: Path):
@@ -692,13 +704,14 @@ def _imc_toggle_name(sig: str) -> str:
     return f'"{base}"{idx}' if "." in base else sig
 
 
-def _rule_matches(rule, inst, src, kind, case_item) -> bool:
+def _rule_matches(rule, inst, src, kind, case_item, arm="") -> bool:
     _name, pat, _why, _when, *extra = rule
     f = extra[0] if extra else {}
     return (re.search(pat, src) is not None
             and re.search(f.get("inst", ""), inst) is not None
             and re.search(f.get("kind", ""), kind) is not None
-            and re.search(f.get("case", ""), case_item) is not None)
+            and re.search(f.get("case", ""), case_item) is not None
+            and not ("not_arm" in f and re.search(f["not_arm"], arm)))
 
 
 def main() -> int:
@@ -714,9 +727,9 @@ def main() -> int:
 
     matched: dict[str, list] = {r[0]: [] for r in RULES}
     unmatched = []
-    for inst, idx, src, kind, case_item in rows:
+    for inst, idx, src, kind, case_item, arm in rows:
         for r in RULES:
-            if _rule_matches(r, inst, src, kind, case_item):
+            if _rule_matches(r, inst, src, kind, case_item, arm):
                 matched[r[0]].append((inst, idx, src))
                 break
         else:

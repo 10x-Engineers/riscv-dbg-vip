@@ -159,6 +159,16 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     localparam logic [15:0] REGNO_FPR_LO = 16'h1020;  // f0=0x1020 .. f31=0x103F
     localparam logic [15:0] REGNO_FPR_HI = 16'h103F;
 
+    // Classes used by cg_cmd_outcome / cg_hartsel_state / cg_gated_access.
+    localparam logic [1:0] RC_CSR = 2'd0, RC_GPR = 2'd1, RC_FPR = 2'd2, RC_OTHER = 2'd3;
+    localparam logic [2:0] HST_NONEXISTENT = 3'd0, HST_UNAVAILABLE = 3'd1,
+                           HST_RUNNING = 3'd2, HST_HALTED = 3'd3,
+                           HST_OVERLAP = 3'd4, HST_NONE = 3'd5;
+    localparam logic [2:0] GATE_NONE = 3'd0, GATE_DMACTIVE0 = 3'd1, GATE_NDMRESET = 3'd2,
+                           GATE_BUSY = 3'd3, GATE_SBBUSY = 3'd4;
+    localparam logic [2:0] REG_DMCONTROL = 3'd0, REG_DMSTATUS = 3'd1, REG_ABSTRACT = 3'd2,
+                           REG_SBA = 3'd3, REG_OTHER = 3'd4;
+
     // ── sbcs field bit positions (#3.14.20) ───────────────────────────────────
     // sbaccess=[19:17], sbreadonaddr=20, sbbusy=21, sberror=[14:12] match
     // api/riscv_dm.py's SBA read/write and _wait_sba poll.
@@ -1028,6 +1038,23 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     logic        s_haltreq_during_step;
     logic        s_stepping;        // dcsr.step set when the transition happened
       logic [2:0]  s_cmderr;
+
+    // cg_cmd_outcome: the last command written, resolved when busy drops.
+    logic [7:0]  s_oc_cmdtype;
+    logic [2:0]  s_oc_aarsize;
+    logic [1:0]  s_oc_regno_cls;
+    logic [1:0]  s_oc_flags;         // {transfer, postexec}
+    logic [2:0]  s_oc_cmderr;
+    int unsigned s_oc_pbfill;
+    bit          oc_pending;
+    int unsigned pb_fill;            // highest Program Buffer slot written + 1
+    // cg_dmactive
+    bit          s_act_prev, s_act_new, last_dmactive;
+    // cg_hartsel_state
+    logic [2:0]  s_hs_state;
+    // cg_gated_access
+    logic [2:0]  s_gate, s_regclass;
+    bit          s_acc_write;
     logic [2:0]  s_sbaccess;
     logic [2:0]  s_sberror;
     logic [1:0]  s_dpc_origin;
@@ -1338,6 +1365,202 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
       }
     endgroup
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // cg_cmd_outcome -- what each abstract command was, and how it ended.
+    // spec: debug_module.html#abstractcs (cmderr), #dm-command, #ac-accessregister
+    //
+    // cg_abstract_cmd bins the cmderr code on its own; it cannot say WHICH command
+    // produced it. The spec's error rules are per command kind: an unsupported
+    // cmdtype or aarsize gives cmderr=2, a missing register may give 2 or 3, a
+    // command to a running hart gives 4, one written while busy gives 1. Sampled
+    // once per command, at the first DMI transaction after it was written on
+    // which abstractcs.busy is 0 -- the value a debugger polling abstractcs sees.
+    // A command written while cmderr is already set is not executed; its sample
+    // records that sticky value, which is also what the debugger sees.
+    // ══════════════════════════════════════════════════════════════════════════
+    covergroup cg_cmd_outcome;
+      option.per_instance = 1;
+
+      // AC-013/AC-018: Access Register is mandatory; Quick Access and Access
+      // Memory are optional; 3..255 are not defined.
+      cp_cmdtype: coverpoint s_oc_cmdtype {
+        bins access_register = {0};
+        bins quick_access    = {1};
+        bins access_memory   = {2};
+        bins reserved        = {[3:255]};
+      }
+
+      // AC-017/AC-019: aarsize is only meaningful for an Access Register
+      // command that transfers. 0,1,5..7 are not defined sizes.
+      cp_aarsize: coverpoint s_oc_aarsize iff (s_oc_cmdtype == 0 && s_oc_flags[1]) {
+        bins size32   = {2};
+        bins size64   = {3};
+        bins size128  = {4};
+        bins reserved = {0, 1, 5, 6, 7};
+      }
+
+      // AC-017: the register namespaces of #regno. "other" is everything
+      // above the FPRs, which the spec leaves to the implementation.
+      cp_regno: coverpoint s_oc_regno_cls iff (s_oc_cmdtype == 0 && s_oc_flags[1]) {
+        bins csr   = {RC_CSR};
+        bins gpr   = {RC_GPR};
+        bins fpr   = {RC_FPR};
+        bins other = {RC_OTHER};
+      }
+
+      // AC-011/AC-023: {transfer, postexec}. `neither` is a legal no-op
+      // command the spec allows ("transfer=0, postexec=0").
+      cp_flags: coverpoint s_oc_flags iff (s_oc_cmdtype == 0) {
+        bins transfer_only     = {2'b10};
+        bins postexec_only     = {2'b01};
+        bins transfer_postexec = {2'b11};
+        bins neither           = {2'b00};
+      }
+
+      // AC-016: the defined cmderr values. 5 (bus) needs Access Memory; 6 is
+      // not a defined encoding.
+      cp_outcome: coverpoint s_oc_cmderr {
+        bins none          = {0};
+        bins busy          = {1};
+        bins not_supported = {2};
+        bins exception     = {3};
+        bins halt_resume   = {4};
+        bins bus           = {5};
+        bins other         = {7};
+        ignore_bins reserved = {6};
+      }
+
+      // PB-011/PB-014: how much of the Program Buffer holds a program when a
+      // postexec command runs -- one word, part of it, or all of it.
+      cp_pb_fill: coverpoint s_oc_pbfill iff (s_oc_cmdtype == 0 && s_oc_flags[0]) {
+        bins one     = {1};
+        bins partial = {[2:7]};
+        bins full    = {[8:16]};
+      }
+
+      // AC-021: which register class accepts which size. An undefined or
+      // unsupported size is rejected the same way whatever the register, so
+      // it is measured once, against a GPR, rather than per class.
+      x_regno_x_size: cross cp_regno, cp_aarsize {
+        ignore_bins reserved_any_but_gpr = binsof(cp_aarsize.reserved) && !binsof(cp_regno.gpr);
+        ignore_bins size128_any_but_gpr  = binsof(cp_aarsize.size128)  && !binsof(cp_regno.gpr);
+      }
+
+      // AC-022: an unimplemented command kind can only be rejected (2) or
+      // collide with a busy DM (1). Every other outcome needs the command to
+      // execute, so it exists only for Access Register.
+      x_cmdtype_x_cmderr: cross cp_cmdtype, cp_outcome {
+        ignore_bins unimplemented_kinds_execute =
+            !binsof(cp_cmdtype.access_register) &&
+            binsof(cp_outcome) intersect {0, 3, 4, 5, 7};
+        ignore_bins bus_needs_access_memory =
+            binsof(cp_cmdtype.access_register) && binsof(cp_outcome.bus);
+      }
+
+      // AC-023: a command can fail in either half. A transfer-only command
+      // cannot raise a Program Buffer exception it never ran, and a command
+      // that does neither has nothing to fail at except busy/halt_resume.
+      x_flags_x_cmderr: cross cp_flags, cp_outcome {
+        ignore_bins no_bus_on_access_register = binsof(cp_outcome.bus);
+        ignore_bins neither_cannot_fault      = binsof(cp_flags.neither) &&
+                                                binsof(cp_outcome) intersect {3, 7};
+      }
+
+      // PB-014: the last slot is where off-by-one errors live.
+      x_fill_x_outcome: cross cp_pb_fill, cp_outcome {
+        ignore_bins not_a_buffer_outcome = binsof(cp_outcome) intersect {2, 5, 7};
+      }
+    endgroup
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // cg_dmactive -- dmactive transitions. spec: debug_module.html#dm-dmcontrol
+    // RST-005-V. 1->0 resets the DM; 0->1 brings it up; 1->1 must change
+    // nothing; 0->0 is a write to an inactive DM, the only field it accepts.
+    // ══════════════════════════════════════════════════════════════════════════
+    covergroup cg_dmactive;
+      option.per_instance = 1;
+      cp_transition: coverpoint {s_act_prev, s_act_new} {
+        bins activate   = {2'b01};
+        bins deactivate = {2'b10};
+        bins stay_on    = {2'b11};
+        bins stay_off   = {2'b00};
+      }
+    endgroup
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // cg_hartsel_state -- the state dmstatus reports for each kind of selection.
+    // spec: debug_module.html#hart-states ("exactly one of ... non-existent,
+    // unavailable, running, or halted"). HS-005-V, HS-009-V.
+    // Sampled on each dmstatus read, with the hartsel class current at the time.
+    // ══════════════════════════════════════════════════════════════════════════
+    covergroup cg_hartsel_state;
+      option.per_instance = 1;
+      cp_sel: coverpoint cur_hartsel_cls {
+        bins zero        = {HS_ZERO};
+        bins nonexistent = {HS_NONEXISTENT};
+        ignore_bins max_impl_single_hart = {HS_MAX_IMPL};
+        ignore_bins other_single_hart    = {HS_OTHER};
+      }
+      // More than one state at once, or none, breaks "exactly one". Those are
+      // defects the reference model reports (MODEL_MISMATCH), not coverage
+      // goals, so they are ignored here rather than made targets.
+      cp_state: coverpoint s_hs_state {
+        bins nonexistent = {HST_NONEXISTENT};
+        bins unavailable = {HST_UNAVAILABLE};
+        bins running     = {HST_RUNNING};
+        bins halted      = {HST_HALTED};
+        ignore_bins more_than_one_state = {HST_OVERLAP};
+        ignore_bins no_state            = {HST_NONE};
+      }
+      // HS-009-V: an existing hart is never "nonexistent", and a nonexistent
+      // selection is only ever "nonexistent" (anything else is the overlap
+      // defect above).
+      x_sel_x_state: cross cp_sel, cp_state {
+        ignore_bins existing_is_never_nonexistent =
+            binsof(cp_sel.zero) && binsof(cp_state.nonexistent);
+        ignore_bins nonexistent_is_only_nonexistent =
+            binsof(cp_sel.nonexistent) && !binsof(cp_state.nonexistent);
+      }
+    endgroup
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // cg_gated_access -- DMI accesses made while the DM is in a state the spec
+    // restricts. spec: debug_module.html#dm-dmcontrol (dmactive, ndmreset),
+    // #abstractcs (busy), #dm-sbcs (sbbusy). RAP-045-V, RAP-048-V.
+    // The gate is read from the DM backdoor at the transaction; when several
+    // apply, the most restrictive wins (dmactive=0 > ndmreset > busy > sbbusy).
+    // authenticated=0 is a gate only on a DM that implements authentication.
+    // ══════════════════════════════════════════════════════════════════════════
+    covergroup cg_gated_access;
+      option.per_instance = 1;
+      cp_gate: coverpoint s_gate {
+        bins open         = {GATE_NONE};
+        bins dm_inactive  = {GATE_DMACTIVE0};
+        bins in_ndmreset  = {GATE_NDMRESET};
+        bins cmd_busy     = {GATE_BUSY};
+        bins sba_busy     = {GATE_SBBUSY};
+      }
+      cp_class: coverpoint s_regclass {
+        bins dmcontrol = {REG_DMCONTROL};
+        bins dmstatus  = {REG_DMSTATUS};
+        bins abstract  = {REG_ABSTRACT};   // abstractcs, command, abstractauto, data, progbuf
+        bins sba       = {REG_SBA};        // sbcs, sbaddress*, sbdata*
+        bins other     = {REG_OTHER};
+      }
+      cp_access: coverpoint s_acc_write {
+        bins read  = {0};
+        bins write = {1};
+      }
+      // RAP-048-V: each register class accessed under each gate. `other`
+      // registers carry no gating rule, so they are measured only when open.
+      x_class_x_gate: cross cp_class, cp_gate {
+        ignore_bins other_has_no_gating_rule =
+            binsof(cp_class.other) && !binsof(cp_gate.open);
+      }
+      // RAP-045-V: reads and writes under each gate.
+      x_access_x_gate: cross cp_access, cp_gate;
+    endgroup
+
     // ── Construction ─────────────────────────────────────────────────────────
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1390,6 +1613,10 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         cg_native_trigger = new();
         cg_abstract_cmd  = new();
         cg_sba           = new();
+        cg_cmd_outcome   = new();
+        cg_dmactive      = new();
+        cg_hartsel_state = new();
+        cg_gated_access  = new();
     endfunction
 
     function void build_phase(uvm_phase phase);
@@ -1540,6 +1767,7 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
     function void write(jtag_txn_c t);
         bit          is_write;
         bit          is_read;
+        bit          cmd_issued;
         logic [15:0] cmd_regno;
         is_write  = (t.dmi_op == dm_defines_pkg::DMI_WRITE);
         is_read   = (t.dmi_op == dm_defines_pkg::DMI_READ);
@@ -1554,7 +1782,10 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         // shift, exactly as jtag_dmi_read_seq.sv does from the driving side.
         if (pending_read_valid && t.dmi_status != dm_defines_pkg::DMI_STAT_BUSY) begin
             case (pending_read_addr)
-                ADDR_DMSTATUS:   sample_dmstatus_read(t.dmi_rdata);
+                ADDR_DMSTATUS: begin
+                    sample_dmstatus_read(t.dmi_rdata);
+                    sample_hartsel_state(t.dmi_rdata);
+                end
                 ADDR_ABSTRACTCS: cg_abstractcs_read.sample(t.dmi_rdata);
                 ADDR_HARTINFO:   cg_hartinfo_read.sample(t.dmi_rdata);
                 ADDR_HALTSUM0:   cg_haltsum0_read.sample(t.dmi_rdata);
@@ -1570,8 +1801,14 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         // only ever latch pending_read_addr/valid here -- Step 1 above (on
         // some LATER transaction) is what actually samples them.
         // ── Run-control slice (dmcontrol/dmstatus) ───────────────────────────
-        if (t.dmi_addr == ADDR_DMCONTROL && is_write)
+        if (t.dmi_addr == ADDR_DMCONTROL && is_write) begin
             sample_dmcontrol_write(t.dmi_wdata);
+            s_act_prev    = last_dmactive;
+            s_act_new     = t.dmi_wdata[DMC_DMACTIVE];
+            cg_dmactive.sample();
+            last_dmactive = s_act_new;
+            if (!s_act_new) pb_fill = 0;   // dmactive=0 resets the DM, buffer included
+        end
         else if (t.dmi_addr == ADDR_DMSTATUS && is_read) begin
             pending_read_addr  = ADDR_DMSTATUS;
             pending_read_valid = 1'b1;
@@ -1581,6 +1818,8 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         //    Program-Buffer execution (postexec) and Trigger-Module CSR access ──
         else if (t.dmi_addr == ADDR_COMMAND && is_write) begin
             cg_command_write.sample(t.dmi_wdata);
+            latch_command(t.dmi_wdata);
+            cmd_issued = 1'b1;
             if (t.dmi_wdata[CMD_POSTEXEC])
                 cg_progbuf.sample(1'b0, 1'b1);              // execution event
             if (t.dmi_wdata[CMD_TRANSFER] &&
@@ -1612,8 +1851,11 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
         end
 
         // ── Program Buffer write ─────────────────────────────────────────────
-        else if (t.dmi_addr inside {[ADDR_PROGBUF0 : ADDR_PROGBUF15]} && is_write)
+        else if (t.dmi_addr inside {[ADDR_PROGBUF0 : ADDR_PROGBUF15]} && is_write) begin
             cg_progbuf.sample(1'b1, 1'b0);                 // write event
+            if (int'(t.dmi_addr - ADDR_PROGBUF0) + 1 > pb_fill)
+                pb_fill = int'(t.dmi_addr - ADDR_PROGBUF0) + 1;
+        end
 
         // ── System Bus Access ────────────────────────────────────────────────
         else if (t.dmi_addr == ADDR_SBCS && is_write)
@@ -1650,7 +1892,61 @@ class debug_coverage extends uvm_subscriber #(jtag_txn_c);
             s_sbaccess = dm_vif.sbcs[19:17];
             s_sberror  = dm_vif.sbcs[14:12];
             cg_sba.sample();
+
+            // A command resolves on a LATER transaction with busy low -- never
+            // on the one that wrote it, when busy may not have risen yet.
+            if (oc_pending && !cmd_issued && !dm_vif.abstractcs[ABS_BUSY]) begin
+                s_oc_cmderr = dm_vif.abstractcs[ABS_CMDERR_LSB +: 3];
+                cg_cmd_outcome.sample();
+                oc_pending = 1'b0;
+            end
+            if (cmd_issued) oc_pending = 1'b1;
+
+            if (is_read || is_write) sample_gated_access(t.dmi_addr, is_write);
         end
+    endfunction
+
+    // ── cg_cmd_outcome: latch what the command asked for ─────────────────────
+    function void latch_command(logic [31:0] w);
+        logic [15:0] regno;
+        regno          = w[CMD_REGNO_LSB +: 16];
+        s_oc_cmdtype   = w[CMD_CMDTYPE_LSB +: 8];
+        s_oc_aarsize   = w[CMD_AARSIZE_LSB +: 3];
+        s_oc_flags     = {w[CMD_TRANSFER], w[CMD_POSTEXEC]};
+        s_oc_regno_cls = (regno inside {[REGNO_CSR_LO : REGNO_CSR_HI]}) ? RC_CSR :
+                         (regno inside {[REGNO_GPR_LO : REGNO_GPR_HI]}) ? RC_GPR :
+                         (regno inside {[REGNO_FPR_LO : REGNO_FPR_HI]}) ? RC_FPR : RC_OTHER;
+        s_oc_pbfill    = pb_fill;
+    endfunction
+
+    // ── cg_hartsel_state: which of the four states a dmstatus read reports ───
+    function void sample_hartsel_state(logic [31:0] r);
+        int unsigned n;
+        // The all* bits; with one hart selected any* and all* agree.
+        n = r[15] + r[13] + r[11] + r[9];
+        s_hs_state = (n > 1)  ? HST_OVERLAP     :
+                     (n == 0) ? HST_NONE        :
+                     r[15]    ? HST_NONEXISTENT :
+                     r[13]    ? HST_UNAVAILABLE :
+                     r[11]    ? HST_RUNNING     : HST_HALTED;
+        cg_hartsel_state.sample();
+    endfunction
+
+    // ── cg_gated_access: register class x the DM state gating it ────────────
+    function void sample_gated_access(logic [6:0] addr, bit wr);
+        s_gate = !dm_vif.dmcontrol[DMC_DMACTIVE]   ? GATE_DMACTIVE0 :
+                  dm_vif.dmcontrol[DMC_NDMRESET]    ? GATE_NDMRESET  :
+                  dm_vif.abstractcs[ABS_BUSY]       ? GATE_BUSY      :
+                  dm_vif.sbcs[SBCS_SBBUSY]          ? GATE_SBBUSY    : GATE_NONE;
+        // abstractcs 0x16, command 0x17, abstractauto 0x18, data 0x04-0x0f,
+        // progbuf 0x20-0x2f; sbcs..sbdata3 0x38-0x3f.
+        s_regclass = (addr == ADDR_DMCONTROL)                          ? REG_DMCONTROL :
+                     (addr == ADDR_DMSTATUS)                           ? REG_DMSTATUS  :
+                     (addr inside {[7'h16 : 7'h18], [ADDR_DATA0 : ADDR_DATA11],
+                                   [ADDR_PROGBUF0 : ADDR_PROGBUF15]})  ? REG_ABSTRACT  :
+                     (addr inside {[ADDR_SBCS : 7'h3f]})               ? REG_SBA       : REG_OTHER;
+        s_acc_write = wr;
+        cg_gated_access.sample();
     endfunction
 
     // ── dmcontrol write ───────────────────────────────────────────────────────
