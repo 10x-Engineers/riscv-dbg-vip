@@ -108,7 +108,7 @@ def _trace(tmp_path, tamper=False):
     r(DMSTATUS, 0x0040_0c83)
     w(SBCS, 1 << 20)
     r(SBCS, 0x2016_0808)
-    r(0x2F, 0)                                             # unclaimed by both
+    r(0x2F, 0)                                             # progbuf15: unimplemented, reads 0
     path = tmp_path / "t.model_trace"
     path.write_text("\n".join(lines) + "\n")
     return path
@@ -118,10 +118,81 @@ def _trace(tmp_path, tamper=False):
 def test_replay_agrees_with_a_consistent_trace(tmp_path):
     res = crosscheck.replay(_trace(tmp_path))
     assert res.divergences == []
-    assert res.tallies[(SBCS, "R")].agree == 1 and res.tallies[(0x2F, "R")].claimed == 0
+    assert res.tallies[(SBCS, "R")].agree == 1 and res.tallies[(0x2F, "R")].agree == 1
     assert res.tallies[(DMSTATUS, "V")].agree == 1
 
 
 def test_replay_reports_a_divergent_prediction(tmp_path):
     res = crosscheck.replay(_trace(tmp_path, tamper=True))
     assert [(a, why.split()[0]) for _, a, why in res.divergences] == [((SBCS, "R"), "prediction")]
+
+
+# ── Every DMI register has a prediction ───────────────────────────────────────
+
+DATA1, PROGBUF0, ABSTRACTAUTO, HALTSUM1, HALTSUM2 = 0x05, 0x20, 0x18, 0x13, 0x34
+SBADDRESS1, SBDATA1 = 0x3A, 0x3D
+AARSIZE64, TRANSFER, WRITE = 3 << 20, 1 << 17, 1 << 16
+
+
+def test_unimplemented_registers_are_claimed_and_read_zero(model):
+    """"Registers that are unimplemented or not mentioned in the table return 0
+    when read": data2 (datacount=2), progbuf8 (progbufsize=8), progbuf0 (not
+    readable on CVA6), confstrptr0, custom, and a hole in the map."""
+    for addr in (0x06, 0x28, PROGBUF0, 0x19, 0x1F, 0x7F):
+        assert model.has_model(addr), hex(addr)
+        assert model.predict(addr) == 0, hex(addr)
+
+
+def test_haltsum1_summarises_blocks_of_32_harts():
+    p = DMPredictor(num_harts=70)
+    p.set_config(load_dut_config("cva6").declared_config(num_harts=70))
+    p.on_write(DMCONTROL, ACTIVE)
+    p.harts[33].halted = True     # block 1
+    p.harts[69].halted = True     # block 2
+    assert p.predict(HALTSUM1) == 0b110
+    assert p.predict(HALTSUM2) == 0b1       # all 70 harts are in group 0
+
+
+def test_64bit_register_access_round_trips_through_data1(model):
+    """aarsize=3: a write takes data0/data1; a read of the same register
+    returns both words."""
+    model.on_write(DATA0, 0x1111_1111)
+    model.on_write(DATA1, 0x2222_2222)
+    model.on_write(COMMAND, AARSIZE64 | TRANSFER | WRITE | 0x1008)
+    model.on_write(DATA0, 0)
+    model.on_write(DATA1, 0)
+    model.on_write(COMMAND, AARSIZE64 | TRANSFER | 0x1008)
+    assert (model.predict(DATA0), model.predict(DATA1)) == (0x1111_1111, 0x2222_2222)
+
+
+def test_autoexec_replays_the_last_command_on_a_data_access(model):
+    """abstractauto.autoexecdata[0]: writing data0 re-runs the last command --
+    here a register write, so the new value lands in the shadow."""
+    model.on_write(DATA0, 5)
+    model.on_write(COMMAND, TRANSFER | WRITE | 0x1008)
+    model.on_write(ABSTRACTAUTO, 1)
+    model.on_write(DATA0, 7)                             # replays the write
+    model.on_write(ABSTRACTAUTO, 0)
+    model.on_write(COMMAND, TRANSFER | 0x1008)
+    assert model.predict(DATA0) == 7
+
+
+def test_sba_autoincrement_carries_into_sbaddress1(model):
+    """sbasize=64: a 64-bit access at 0xFFFFFFF8 increments into sbaddress1."""
+    model.on_write(SBCS, 1 << 16)                        # sbautoincrement
+    model.on_write(SBADDRESS1, 0)
+    model.on_write(SBADDRESS0, 0xFFFF_FFF8)
+    model.on_write(SBDATA0, 0)
+    assert (model.predict(SBADDRESS0), model.predict(SBADDRESS1)) == (0, 1)
+
+
+def test_replay_applies_read_side_effects(tmp_path):
+    """An "A" record (observe_read) must reach the Python model, or a replayed
+    autoexec on a data read would leave the two models apart."""
+    lines = [f"C {CVA6_CFG}", f"W {DMCONTROL:02x} {ACTIVE:08x}",
+             f"W {DATA0:02x} 00000009", f"W {COMMAND:02x} {TRANSFER | WRITE | 0x1008:08x}",
+             f"W {ABSTRACTAUTO:02x} 00000001", f"A {DATA0:02x}"]
+    path = tmp_path / "a.model_trace"
+    path.write_text("\n".join(lines) + "\n")
+    res = crosscheck.replay(path)
+    assert res.divergences == [] and res.inputs == 5

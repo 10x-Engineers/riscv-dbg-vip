@@ -115,6 +115,27 @@ class dm_ref_model;
   local bit          sbdata0_pending_valid;
   local bit [31:0]   sbdata0_pending_value;
 
+  // ── Every other DMI register ──────────────────────────────────────────────
+  // The spec: "Debug Module DMI Registers that are unimplemented or not
+  // mentioned in the table below return 0 when read." So every address has a
+  // defined read value; the state below tracks the implemented ones.
+  local bit [31:0]   data_q[12];                // data1..11 (data0 is data0_pending_*)
+  local bit          data_known[12];
+  local bit [31:0]   staged_data1;              // upper half of a 64-bit transfer
+  local bit [31:0]   shadow_hi[bit [15:0]];     // regno -> upper half WE wrote (aarsize=3)
+  local bit [31:0]   progbuf_q[16];
+  local bit [31:0]   last_command;              // re-run by abstractauto
+  local bit [31:0]   sbaddress1_q;
+  local bit [31:0]   sbdata1_q;
+  local bit          sbdata1_known;
+  local bit [31:0]   hawindow_q[bit [14:0]];
+
+  // Registers dm_defines_pkg names no constant for.
+  local const bit [6:0] A_HALTSUM1 = 7'h13, A_HALTSUM2 = 7'h34, A_HALTSUM3 = 7'h35;
+  local const bit [6:0] A_CONFSTRPTR0 = 7'h19, A_CONFSTRPTR3 = 7'h1C;
+  local const bit [6:0] A_SBADDRESS1 = 7'h3A, A_SBADDRESS2 = 7'h3B, A_SBADDRESS3 = 7'h37;
+  local const bit [6:0] A_SBDATA1 = 7'h3D, A_SBDATA2 = 7'h3E, A_SBDATA3 = 7'h3F;
+
   // ── Model-input trace ─────────────────────────────────────────────────────
   // Every input this model receives, and every prediction the checker asks of
   // it at a read, one line each. mk/model_crosscheck.py replays the file
@@ -220,6 +241,23 @@ class dm_ref_model;
     sbautoincrement = 1'b0;
     sbreadondata    = 1'b0;
     relaxedpriv     = cfg.relaxedpriv_reset;
+    // data*, progbuf*, sbaddress*, sbdata* all reset to 0 (dm_registers.xml).
+    // The abstract-command and memory shadows describe the hart and memory,
+    // not the DM, so a DM reset leaves them alone.
+    staged_data0          = '0;
+    staged_data1          = '0;
+    data0_pending_valid   = 1'b1;
+    data0_pending_value   = '0;
+    foreach (data_q[i]) begin data_q[i] = '0; data_known[i] = 1'b1; end
+    foreach (progbuf_q[i]) progbuf_q[i] = '0;
+    last_command          = '0;
+    sbaddress0_q          = '0;
+    sbaddress1_q          = '0;
+    sbdata0_pending_valid = 1'b1;
+    sbdata0_pending_value = '0;
+    sbdata1_q             = '0;
+    sbdata1_known         = 1'b1;
+    hawindow_q.delete();
   endfunction
 
   function void reset_dm(bit power_on = 1'b0);
@@ -302,6 +340,68 @@ class dm_ref_model;
             && addr <= dm_defines_pkg::DM_ADDR_PROGBUF15);
   endfunction
 
+  local function bit is_data(bit [6:0] addr);
+    return addr >= dm_defines_pkg::DM_ADDR_DATA0 && addr <= dm_defines_pkg::DM_ADDR_DATA11;
+  endfunction
+
+  local function bit is_progbuf(bit [6:0] addr);
+    return addr >= dm_defines_pkg::DM_ADDR_PROGBUF0 && addr <= dm_defines_pkg::DM_ADDR_PROGBUF15;
+  endfunction
+
+  // abstractauto (#dm-abstractauto): "If a bit in autoexecdata/autoexecprogbuf
+  // is set, then accesses to the corresponding data/progbuf word cause the
+  // command in command to be executed again." Only while not busy -- a busy
+  // access is refused with cmderr=1 instead.
+  local function bit autoexec_armed(bit [6:0] addr);
+    if (!cfg.abstractauto_enable || observed_cmdbusy) return 1'b0;
+    if (is_data(addr))
+      return abstractauto[addr - dm_defines_pkg::DM_ADDR_DATA0];
+    return abstractauto[16 + (addr - dm_defines_pkg::DM_ADDR_PROGBUF0)];
+  endfunction
+
+  // A write to data* or progbuf* (the busy case has already been dropped).
+  // Words beyond datacount/progbufsize are unimplemented: the write is lost.
+  local function void write_buffer(bit [6:0] addr, bit [31:0] value);
+    int unsigned i;
+    if (is_data(addr)) begin
+      i = addr - dm_defines_pkg::DM_ADDR_DATA0;
+      if (i >= cfg.datacount) return;
+      if (i == 0) begin
+        staged_data0        = value;
+        data0_pending_valid = 1'b1;
+        data0_pending_value = value;
+      end else begin
+        data_q[i]     = value;
+        data_known[i] = 1'b1;
+        if (i == 1) staged_data1 = value;
+      end
+    end else begin
+      i = addr - dm_defines_pkg::DM_ADDR_PROGBUF0;
+      if (i >= cfg.progbufsize) return;
+      progbuf_q[i] = value;
+    end
+    if (autoexec_armed(addr)) execute_command(last_command);
+  endfunction
+
+  // The hart array mask bits that exist in window `sel`: one per hart.
+  local function bit [31:0] hawindow_implemented(bit [14:0] sel);
+    bit [31:0] m = '0;
+    for (int unsigned h = 32 * sel; h < num_harts && h < 32 * (sel + 1); h++)
+      m[h - 32 * sel] = 1'b1;
+    return m;
+  endfunction
+
+  // ── Read side effects ───────────────────────────────────────────────────────
+  // Called by dm_checker after every DMI read, whether or not the value was
+  // compared: the DM performs these side effects either way.
+  function void observe_read(bit [6:0] addr);
+    if (trace_fd) $fdisplay(trace_fd, "A %02h", addr);
+    if (addr == dm_defines_pkg::DM_ADDR_SBDATA0) sbdata0_read_effects();
+    if ((is_data(addr) && (addr - dm_defines_pkg::DM_ADDR_DATA0) < cfg.datacount)
+        || (is_progbuf(addr) && (addr - dm_defines_pkg::DM_ADDR_PROGBUF0) < cfg.progbufsize))
+      if (autoexec_armed(addr)) execute_command(last_command);
+  endfunction
+
   // ── Write dispatch ─────────────────────────────────────────────────────────
   function void on_write(bit [6:0] addr, bit [31:0] value);
     if (trace_fd) $fdisplay(trace_fd, "W %02h %08h", addr, value);
@@ -313,10 +413,20 @@ class dm_ref_model;
       // own.
       return;
     end
+    if (is_data(addr) || is_progbuf(addr)) begin
+      write_buffer(addr, value);
+      return;
+    end
     case (addr)
       dm_defines_pkg::DM_ADDR_DMCONTROL:  write_dmcontrol(value);
-      dm_defines_pkg::DM_ADDR_DATA0:      staged_data0 = value;
       dm_defines_pkg::DM_ADDR_COMMAND:    write_command(value);
+      A_SBADDRESS1:                       sbaddress1_q = value;
+      A_SBDATA1: begin
+        sbdata1_q     = value;
+        sbdata1_known = 1'b1;
+      end
+      dm_defines_pkg::DM_ADDR_HAWINDOW:
+        if (cfg.hartarray_enable) hawindow_q[hawindowsel] = value & hawindow_implemented(hawindowsel);
       dm_defines_pkg::DM_ADDR_SBCS:       write_sbcs(value);
       dm_defines_pkg::DM_ADDR_SBADDRESS0: write_sbaddress0(value);
       dm_defines_pkg::DM_ADDR_SBDATA0:    write_sbdata0(value);
@@ -435,6 +545,7 @@ class dm_ref_model;
       // (#4.8) -- never preserved across a resume -- so a stale shadowed
       // value must not survive a resume/re-halt cycle (#113).
       shadow_regs.delete();
+      shadow_hi.delete();
     end
   endfunction
 
@@ -531,12 +642,37 @@ class dm_ref_model;
   // read_gpr()/write_gpr()/execute_progbuf(): cmd[18]=postexec,
   // cmd[17]=transfer, cmd[16]=write, cmd[15:0]=regno)
   local function void write_command(bit [31:0] value);
+    last_command = value;
+    execute_command(value);
+  endfunction
+
+  // One execution of an Access Register command -- from a write to command,
+  // or re-run by abstractauto. Only the Access Register cmdtype (0) moves
+  // data; aarsize above 3 is rejected (cmderr=2) without a transfer.
+  local function void execute_command(bit [31:0] value);
     bit        postexec = value[18];
     bit        transfer = value[17];
     bit        wr       = value[16];
     bit [15:0] regno    = value[15:0];
+    bit [2:0]  aarsize  = value[22:20];
+
+    if (value[31:24] != 8'd0 || aarsize > 3'd3) return;
 
     if (transfer) begin
+      // A 64-bit transfer moves data1 as the upper half (#ac-accessregister).
+      if (aarsize == 3'd3) begin
+        if (wr) begin
+          shadow_hi[regno] = staged_data1;
+        end else if (regno == GPR_X0_REGNO) begin
+          data_q[1] = '0; data_known[1] = 1'b1;
+        end else if (shadow_hi.exists(regno) && reads_back_as_written(regno)) begin
+          data_q[1] = shadow_hi[regno]; data_known[1] = 1'b1;
+        end else begin
+          data_known[1] = 1'b0;
+        end
+      end else if (wr) begin
+        shadow_hi.delete(regno);
+      end
       if (wr) begin
         // GPR/CSR WRITE: commit the staged data0 value into the shadow regfile.
         shadow_regs[regno] = staged_data0;
@@ -568,6 +704,7 @@ class dm_ref_model;
       // without an intervening write reports has_model()==0 rather than
       // asserting a now-stale pre-execution value (#110).
       shadow_regs.delete();
+      shadow_hi.delete();
     end
   endfunction
 
@@ -592,13 +729,21 @@ class dm_ref_model;
   // access of a burst against the first address, which reads as an RTL
   // mismatch on the second word of any autoincrementing transfer.
   local function void sba_autoincrement();
-    if (sbautoincrement) sbaddress0_q = sbaddress0_q + (32'd1 << sbaccess);
+    bit [63:0] a;
+    if (!sbautoincrement) return;
+    // sbaddress is sbasize bits wide; the increment carries into sbaddress1.
+    a = {sbaddress1_q, sbaddress0_q} + (64'd1 << sbaccess);
+    sbaddress0_q = a[31:0];
+    if (cfg.sbasize > 32) sbaddress1_q = a[63:32];
   endfunction
 
   // Arms the pending sbdata0 value for `a`, or marks it unpredictable when
   // this model has never written that address. A shadow, not a memory model:
   // it only knows words we put there ourselves.
   local function void sba_arm_read(bit [31:0] a);
+    // A bus read refills all of sbdata; the upper word comes from memory this
+    // shadow does not hold.
+    sbdata1_known = 1'b0;
     if (shadow_mem.exists(a)) begin
       sbdata0_pending_valid = 1'b1;
       sbdata0_pending_value = shadow_mem[a];
@@ -626,6 +771,10 @@ class dm_ref_model;
   // entry point -- dm_checker calls this after sampling a DMI read of sbdata0.
   function void observe_sbdata0_read();
     if (trace_fd) $fdisplay(trace_fd, "O");
+    sbdata0_read_effects();
+  endfunction
+
+  local function void sbdata0_read_effects();
     // Order matters: the triggered read happens at the address sbaddress0
     // holds NOW, and only then does the autoincrement advance it. Incrementing
     // first leaves the model one access ahead of the DM for the rest of the
@@ -643,36 +792,46 @@ class dm_ref_model;
   // unmodeled/not-yet-armed address returning 0 from predict() would look like
   // a real (and wrong) prediction otherwise.
   function bit has_model(bit [6:0] addr);
+    // Before the implementation is declared, only the two registers whose
+    // content needs no Preset are claimed.
+    if (addr == dm_defines_pkg::DM_ADDR_DMCONTROL || addr == dm_defines_pkg::DM_ADDR_DMSTATUS)
+      return 1'b1;
+    if (!cfg_valid) return 1'b0;
+    // Every other address is claimed. The exceptions are values this model
+    // cannot know: a data word a command or the hart has just overwritten, a
+    // system-bus word read back from memory it never wrote, and the registers
+    // of an optional feature the DUT declares it implements but this model
+    // does not simulate (authentication, halt groups, sbasize/width > 64).
+    if (addr == dm_defines_pkg::DM_ADDR_DATA0) return data0_pending_valid;
+    if (is_data(addr) && (addr - dm_defines_pkg::DM_ADDR_DATA0) < cfg.datacount)
+      return data_known[addr - dm_defines_pkg::DM_ADDR_DATA0];
     case (addr)
-      dm_defines_pkg::DM_ADDR_DMCONTROL: return 1'b1;
-      dm_defines_pkg::DM_ADDR_DMSTATUS:  return 1'b1;
-      dm_defines_pkg::DM_ADDR_DATA0:     return data0_pending_valid;
-      dm_defines_pkg::DM_ADDR_SBDATA0:   return cfg.sba_enable && sbdata0_pending_valid;
-      // Modelled only once the implementation has been declared: every one of
-      // these carries at least one Preset field, and guessing a Preset would
-      // turn a missing config into a false failure.
-      dm_defines_pkg::DM_ADDR_HARTINFO,
-      dm_defines_pkg::DM_ADDR_HALTSUM0,
-      dm_defines_pkg::DM_ADDR_COMMAND,
-      dm_defines_pkg::DM_ADDR_NEXTDM:    return cfg_valid;
-      // Optional features: claimed only when the implementation declares them.
-      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return cfg_valid && cfg.abstractauto_enable;
-      dm_defines_pkg::DM_ADDR_HAWINDOWSEL:  return cfg_valid && cfg.hartarray_enable;
-      // abstractcs and sbcs carry dynamic bits (busy, sberror) this untimed
-      // model does not predict; predict() returns the static picture and the
-      // caller masks. See predict_mask().
-      dm_defines_pkg::DM_ADDR_ABSTRACTCS: return cfg_valid;
-      dm_defines_pkg::DM_ADDR_SBCS:       return cfg_valid && cfg.sba_enable;
-      default:                           return 1'b0;
+      dm_defines_pkg::DM_ADDR_SBDATA0:  return !cfg.sba_enable || sbdata0_pending_valid;
+      A_SBDATA1:                        return !sba_wider_than_32() || sbdata1_known;
+      A_SBDATA2, A_SBDATA3:             return !(cfg.sba_enable && cfg.sbaccess128);
+      A_SBADDRESS2:                     return !(cfg.sba_enable && cfg.sbasize > 64);
+      A_SBADDRESS3:                     return !(cfg.sba_enable && cfg.sbasize > 96);
+      dm_defines_pkg::DM_ADDR_AUTHDATA: return !cfg.authentication_enable;
+      dm_defines_pkg::DM_ADDR_DMCS2:    return !cfg.haltgroups_enable;
+      default:                          return 1'b1;
     endcase
   endfunction
 
   function bit [31:0] predict(bit [6:0] addr);
+    int unsigned i;
+    if (is_data(addr)) begin
+      i = addr - dm_defines_pkg::DM_ADDR_DATA0;
+      if (i >= cfg.datacount) return '0;             // unimplemented
+      return (i == 0) ? data0_pending_value : data_q[i];
+    end
+    if (is_progbuf(addr)) begin
+      i = addr - dm_defines_pkg::DM_ADDR_PROGBUF0;
+      // "If reading is not supported, then all reads return 0."
+      return (i < cfg.progbufsize && cfg.progbuf_readable) ? progbuf_q[i] : '0;
+    end
     case (addr)
       dm_defines_pkg::DM_ADDR_DMCONTROL: return expect_dmcontrol();
       dm_defines_pkg::DM_ADDR_DMSTATUS:  return expect_dmstatus();
-      dm_defines_pkg::DM_ADDR_DATA0:     return data0_pending_value;
-      dm_defines_pkg::DM_ADDR_SBDATA0:   return sbdata0_pending_value;
       dm_defines_pkg::DM_ADDR_HARTINFO:  return expect_hartinfo();
       dm_defines_pkg::DM_ADDR_ABSTRACTCS: return expect_abstractcs();
       // command (0x17): cmdtype and control are both WARZ -- "Write any, read
@@ -683,13 +842,33 @@ class dm_ref_model;
       // it -- so this is a front-door expectation only; see dm_checker's
       // backdoor list.
       dm_defines_pkg::DM_ADDR_COMMAND:   return 32'h0;
-      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO: return expect_abstractauto();
-      dm_defines_pkg::DM_ADDR_SBCS:      return expect_sbcs();
+      dm_defines_pkg::DM_ADDR_ABSTRACTAUTO:
+        return cfg.abstractauto_enable ? expect_abstractauto() : '0;
       dm_defines_pkg::DM_ADDR_HALTSUM0:  return expect_haltsum0();
-      dm_defines_pkg::DM_ADDR_HAWINDOWSEL: return {17'h0, hawindowsel};
+      A_HALTSUM1:                        return expect_haltsum(1);
+      A_HALTSUM2:                        return expect_haltsum(2);
+      A_HALTSUM3:                        return expect_haltsum(3);
+      dm_defines_pkg::DM_ADDR_HAWINDOWSEL:
+        return cfg.hartarray_enable ? {17'h0, hawindowsel} : '0;
+      dm_defines_pkg::DM_ADDR_HAWINDOW:
+        return (cfg.hartarray_enable && hawindow_q.exists(hawindowsel)) ? hawindow_q[hawindowsel] : '0;
       dm_defines_pkg::DM_ADDR_NEXTDM:    return cfg.nextdm;
-      default:                           return 32'h0; // caller must check has_model()
+      dm_defines_pkg::DM_ADDR_SBCS:      return cfg.sba_enable ? expect_sbcs() : '0;
+      dm_defines_pkg::DM_ADDR_SBADDRESS0: return cfg.sba_enable ? sbaddress0_q : '0;
+      A_SBADDRESS1:  return (cfg.sba_enable && cfg.sbasize > 32) ? sbaddress1_q : '0;
+      dm_defines_pkg::DM_ADDR_SBDATA0:   return cfg.sba_enable ? sbdata0_pending_value : '0;
+      A_SBDATA1:     return sba_wider_than_32() ? sbdata1_q : '0;
+      // confstrptr0-3: confstrptrvalid is 0 on every declared DUT.
+      // authdata, dmcs2: reached only when the feature is declared absent.
+      // custom, custom0-15, and every address the register table does not
+      // list: "unimplemented or not mentioned ... return 0 when read".
+      default:                           return 32'h0;
     endcase
+  endfunction
+
+  // sbdata1 exists when the bus carries more than 32 bits.
+  local function bit sba_wider_than_32();
+    return cfg.sba_enable && (cfg.sbaccess64 || cfg.sbaccess128);
   endfunction
 
   // Called by dm_checker.sv on every real dmstatus read, BEFORE predict()
@@ -833,19 +1012,35 @@ class dm_ref_model;
     return w;
   endfunction
 
+  // haltsum1-3 (0x13, 0x34, 0x35): bit j summarises a group of harts --
+  // haltsum1 bit j covers {hartsel[19:10], j, 5'hxx}, haltsum2 bit j covers
+  // {hartsel[19:15], j, 10'hxxx}, haltsum3 bit j covers {j, 15'hxxxx}.
+  // "Unavailable/nonexistent harts are not considered to be halted."
+  // Absent (declared), they read 0.
+  local function bit [31:0] expect_haltsum(int n);
+    bit [31:0] w = '0;
+    int unsigned lo = 5 * n;                        // bits below the group index
+    if (!cfg.haltsum_groups_present) return '0;
+    for (int unsigned h = 0; h < num_harts; h++) begin
+      if (!harts[h].halted.get()) continue;
+      if (n < 3 && (h >> (lo + 5)) != (hartsel >> (lo + 5))) continue;
+      w[(h >> lo) & 31] = 1'b1;
+    end
+    return w;
+  endfunction
+
   // Which bits of predict() are actually predicted. Everything not set here is
   // dynamic state an untimed model cannot know -- an in-flight abstract command
   // or system bus access -- and must be checked front-door, against the
   // response the DM itself returns, rather than against this model.
   function bit [31:0] predict_mask(bit [6:0] addr);
     case (addr)
-      // busy (12) and cmderr (10:8) excluded.
-      dm_defines_pkg::DM_ADDR_ABSTRACTCS: return 32'h1F00_080F;
-      // sbbusyerror (22), sbbusy (21) and sberror (14:12) excluded; everything
-      // else is predicted. E01F_8FFF = sbversion 31:29, sbreadonaddr 20,
-      // sbaccess 19:17, sbautoincrement 16, sbreadondata 15, sbasize 11:5,
-      // sbaccess128..8 4:0.
-      dm_defines_pkg::DM_ADDR_SBCS:       return 32'hE01F_8FFF;
+      // Everything except busy (12, timing) and cmderr (10:8, checked
+      // front-door by dm_checker). Reserved bits are predicted 0.
+      dm_defines_pkg::DM_ADDR_ABSTRACTCS: return 32'hFFFF_E8FF;
+      // Everything except sbbusyerror (22), sbbusy (21) and sberror (14:12),
+      // which depend on bus timing and responses. Reserved 28:23 predicted 0.
+      dm_defines_pkg::DM_ADDR_SBCS:       return 32'hFF9F_8FFF;
       default:                            return 32'hFFFF_FFFF;
     endcase
   endfunction
