@@ -2,8 +2,10 @@
 #
 # Sourced by mk/dm_cov.sh for the *_excl functional reports. Every entry names
 # the RTL line or configuration that makes the bin unreachable; a bin that is
-# merely hard to reach belongs in a test, not here. The unexcluded report is
-# always written alongside, so nothing here hides a number.
+# merely hard to reach belongs in a test, not here. A bin unreachable only
+# because of a known RTL defect is not excluded either: it stays a hole until
+# the fix lands. The unexcluded report is always written alongside, so
+# nothing here hides a number.
 #
 # The bins stay in covergroups.sv on purpose: the model is DUT-agnostic, and a
 # DUT that implements these features is measured against them.
@@ -28,27 +30,14 @@ exclude -inst $I -coverbin cg_dmi_access.x_op_x_status.write?failed  -comment $w
 exclude -inst $I -coverbin cg_abstract_cmd.cp_cmderr.other \
     -comment "CmdErrorOther is never assigned (dm_pkg.sv:176; no driver in dm_csrs/dm_mem)"
 
-# ── SBA widths and bus errors ──────────────────────────────────────────────
-# RTL-002: dm_csrs.sv:618 overwrites sbcs.sbaccess with 3 every cycle, so the
-# only widths sbcs_q can hold are 3 and its reset value 0. dm_sba.sv raises
-# sberror only for sbaccess > 3 (line 149) and has no bus-error input.
-set why "RTL-002: sbaccess hardwired to 3 (dm_csrs.sv:618)"
-foreach b {size16 size32 size128 unsupported_written} {
-    exclude -inst $I -coverbin cg_sba.cp_sbaccess.$b -comment $why
-}
-set why "dm_sba.sv sets sberror only for sbaccess>3 (line 149), unreachable under RTL-002; no bus-error input"
-foreach b {timeout bad_address alignment unsupported_size other} {
-    exclude -inst $I -coverbin cg_sba.cp_sberror.$b -comment $why
-}
-
-# ── Trigger-caused debug entry (dcsr.cause=2) ──────────────────────────────
-# Triggers fire on this build (cva6_sim/cfg, Sdtrig=1), but RTL-012: CVA6
-# reports every action=1 trigger as dcsr.cause=3 -- csr_regfile.sv assigns
-# CauseRequest for all DEBUG_REQUEST exceptions and never CauseTrigger.
-set why "RTL-012: CVA6 reports a firing trigger as dcsr.cause=3 (csr_regfile.sv:2289)"
-exclude -inst $I -coverbin cg_debug_entry.cp_cause.trigger                          -comment $why
-exclude -inst $I -coverbin cg_debug_entry.x_cause_x_prv.trigger?*                   -comment $why
-exclude -inst $I -coverbin cg_debug_entry.x_cause_x_dpc.trigger?trap_handler_entry  -comment $why
+# ── SBA bus timeout ────────────────────────────────────────────────────────
+# dm_sba has no timeout, and the testplan defers it as out of design scope
+# (SBA-012). The other sberror values and the 8/16/32/128-bit widths are left
+# as holes on purpose: they are unreachable only because of RTL-002 (#147,
+# sbaccess hardwired) and the missing bus-error input (SBA-008), and a known
+# RTL defect is never excluded.
+exclude -inst $I -coverbin cg_sba.cp_sberror.timeout \
+    -comment "dm_sba has no bus timeout; deferred as out of design scope (SBA-012)"
 
 # ── Abstract-command outcome: cmderr "bus" (5) and "other" (7) ─────────────
 # dm_mem.sv assigns cmderror_o only HaltResume, NotSupported and Exception
@@ -68,10 +57,3 @@ foreach f {transfer_only postexec_only transfer_postexec} {
 set why "unavailable_i tied to '0 (ariane_testharness.sv:295)"
 exclude -inst $I -coverbin cg_hartsel_state.cp_state.unavailable            -comment $why
 exclude -inst $I -coverbin cg_hartsel_state.x_sel_x_state.zero?unavailable  -comment $why
-# RTL-003: a nonexistent hart also reports allrunning/anyrunning=1 (dmstatus
-# 0x0080cc83 in hart_selection), so the state reads as nonexistent+running
-# and lands in the ignored "overlap" bin, never in "nonexistent". Remove these
-# two lines when RTL-003 is fixed.
-set why "RTL-003: a nonexistent hart also reports allrunning=1, so the state is never nonexistent alone"
-exclude -inst $I -coverbin cg_hartsel_state.cp_state.nonexistent                 -comment $why
-exclude -inst $I -coverbin cg_hartsel_state.x_sel_x_state.nonexistent?nonexistent -comment $why
