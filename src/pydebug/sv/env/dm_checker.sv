@@ -101,6 +101,7 @@ class dm_checker extends uvm_component;
 
   int unsigned total_checked;
   int unsigned total_mismatches;
+  int unsigned total_unknown;     // reads that returned X/Z in any bit
 
   function new(string name, uvm_component parent);
     super.new(name, parent);
@@ -429,12 +430,34 @@ class dm_checker extends uvm_component;
     endcase
   endtask
 
-  local function void check_read_response(bit [6:0] addr, bit [31:0] actual, bit [1:0] status);
+  // Which bits of a 4-state value are X or Z.
+  local function bit [31:0] unknown_bits(logic [31:0] v);
+    for (int i = 0; i < 32; i++) unknown_bits[i] = $isunknown(v[i]);
+  endfunction
+
+  // `actual` is 4-state on purpose: jtag_txn carries the DM's response as
+  // logic, and narrowing it to bit turned an X into 0 -- which then matched
+  // any prediction of 0, so a register reading X passed unnoticed.
+  local function void check_read_response(bit [6:0] addr, logic [31:0] raw, logic [1:0] status);
+    bit [31:0] actual = raw;          // 2-state copy for the trace and the sync
+    bit [31:0] xz     = unknown_bits(raw);
+    bit [31:0] cmp;
+
     // A real DMI-level failure is debug_scoreboard's concern (protocol
     // status), not a register-value question -- skip rather than double-report.
-    if (status == dm_defines_pkg::DMI_STAT_FAILED) return;
+    if (status === dm_defines_pkg::DMI_STAT_FAILED) return;
 
     total_checked++;
+
+    // No register field reads X or Z: unimplemented ones read 0, and every
+    // other field has a defined value. Reported for every read, whether or
+    // not the model claims the address.
+    if (xz != '0 || $isunknown(status)) begin
+      total_unknown++;
+      `uvm_error("DMI_X", $sformatf(
+          "DMI addr=0x%02h: RTL returned 0x%08h (status %02b) with X/Z in bits 0x%08h -- a DMI read must return a defined value",
+          addr, raw, status, xz))
+    end
 
     // Traced before the sync below, so the trace holds the model's own
     // run-control prediction as well as the one actually compared.
@@ -457,13 +480,14 @@ class dm_checker extends uvm_component;
     // abstract command is in flight, and an untimed model cannot know when
     // that is. Masking here rather than in the caller keeps the front door and
     // the backdoor honest about the same set of bits.
-    if (model.has_model(addr) &&
-        (actual & model.predict_mask(addr)) !== (model.predict(addr) & model.predict_mask(addr))) begin
+    // X/Z bits were reported above; compare the defined ones.
+    cmp = model.predict_mask(addr) & ~xz;
+    if (model.has_model(addr) && (actual & cmp) != (model.predict(addr) & cmp)) begin
       total_mismatches++;
       `uvm_error("MODEL_MISMATCH",
         $sformatf(
           "DMI addr=0x%02h: RTL returned 0x%08h, dm_ref_model expected 0x%08h (compared over 0x%08h) -- reported only, not auto-resolved (author decides RTL vs model vs accepted difference; see VERIFICATION_STRATEGY.md)",
-          addr, actual, model.predict(addr), model.predict_mask(addr)))
+          addr, raw, model.predict(addr), cmp))
     end
 
     // Side effects of the read itself, applied after the comparison (or this
@@ -504,7 +528,7 @@ class dm_checker extends uvm_component;
   localparam bit [31:0] DMCONTROL_MODELLED = 32'h27FF_FFC3;
 
   task compare_model_vs_rtl();
-    bit [31:0] actual;
+    logic [31:0] actual;
     if (!backdoor_en) return;
     forever begin
       @(dmi_settled);
@@ -545,7 +569,7 @@ class dm_checker extends uvm_component;
     endcase
   endfunction
 
-  protected function bit [31:0] backdoor_value(bit [6:0] addr);
+  protected function logic [31:0] backdoor_value(bit [6:0] addr);
     case (addr)
       dm_defines_pkg::DM_ADDR_DMCONTROL:    return backdoor_vif.dmcontrol;
       dm_defines_pkg::DM_ADDR_ABSTRACTCS:   return backdoor_vif.abstractcs;
@@ -570,7 +594,7 @@ class dm_checker extends uvm_component;
   // Compare only if the model claims the address, and only over the bits it
   // claims to predict -- predict_mask() excludes the dynamic ones.
   protected function void bd_try(string name, bit [6:0] addr,
-                                 bit [31:0] actual, bit [31:0] extra_mask);
+                                 logic [31:0] actual, bit [31:0] extra_mask);
     if (!model.has_model(addr)) return;
     bd_check(name, addr, actual, model.predict_mask(addr) & extra_mask);
   endfunction
@@ -581,10 +605,11 @@ class dm_checker extends uvm_component;
   // mismatch count for a run's verdict to mean anything.
   protected int unsigned bd_seen[string];
 
+  // 4-state: an X/Z in a modelled bit fails the !== below and prints as x.
   protected function void bd_check(string name, bit [6:0] addr,
-                                   bit [31:0] actual, bit [31:0] mask);
-    bit [31:0] expected = model.predict(addr) & mask;
-    bit [31:0] got      = actual & mask;
+                                   logic [31:0] actual, bit [31:0] mask);
+    bit [31:0]   expected = model.predict(addr) & mask;
+    logic [31:0] got      = actual & mask;
     string     sig;
     bd_checked++;
     if (expected !== got) begin
@@ -605,7 +630,7 @@ class dm_checker extends uvm_component;
 
   function void report_phase(uvm_phase phase);
     `uvm_info("MODEL_CHECK",
-      $sformatf("Checked=%0d Mismatches=%0d", total_checked, total_mismatches), UVM_NONE)
+      $sformatf("Checked=%0d Mismatches=%0d Unknown(X/Z)=%0d", total_checked, total_mismatches, total_unknown), UVM_NONE)
     // Reported unconditionally, including the zero case: "no SBA traffic was
     // correlated" is itself worth seeing, since silence would otherwise look
     // the same as a correlator that never ran.
