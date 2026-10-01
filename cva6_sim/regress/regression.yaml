@@ -80,6 +80,20 @@ tests:
     covers: [RST-010, RST-011, RST-060, RST-062, RST-064-V]
     why: ndmreset and hartreset scope, and the havereset lifecycle.
 
+  - name: reset_values
+    config: configs/reset_values_uvm.json
+    covers: [RST-030, RST-032, RST-033, RST-034, RST-035, RST-036, RST-037,
+             RST-038, RST-039, RST-040, RST-042, RST-043]
+    why: >-
+      Reads every DM register straight after dmactive 0 -> 1 and compares it
+      with the spec's reset column and the declared presets
+      (dut_configs/cva6.json).
+    expect: fail
+    known: >-
+      12/13. RST-040-C fails on RTL-007 (#150): haltsum1 (0x13) reads X on this
+      single-hart DM. RST-038-C passes because cva6.json declares the hardwired
+      sbaccess=3 (RTL-002, #147); the spec reset value of 2 is RST-038-C2.
+
   - name: halt_on_reset
     config: configs/halt_on_reset_uvm.json
     covers: [RST-050, RST-051, RST-053]

@@ -111,22 +111,22 @@ wrong reset value in an unused field surfaces later as an unexplained mismatch.
 
 | ID | Type | Action / Check / Cover | Pri | Status | Remarks |
 |---|---|---|---|---|---|
-| RST-030-C | Check | `dmcontrol` == reset value, all fields, `dmactive=0` | P0 | Not started | |
+| RST-030-C | Check | `dmcontrol` == reset value, all fields, `dmactive=0` | P0 | Pass | reset_values (2026-09-30): dmcontrol=0x00000001, only dmactive set |
 | RST-031-C | Check | `dmstatus` == reset value: `version=3`, `impebreak`, `hasresethaltreq`, `authenticated=1` | P0 | Pass | Observed `0x00800c83`; `hasresethaltreq=0` |
-| RST-032-C | Check | `hartinfo` == reset value: `nscratch`, `dataaccess`, `datasize`, `dataaddr` | P1 | Not started | `nscratch=2` — the DM owns `dscratch0/1` |
-| RST-033-C | Check | `abstractcs` == reset value: `progbufsize=8`, `datacount=2`, `busy=0`, `cmderr=0` | P0 | Not started | |
-| RST-034-C | Check | `command` reads `0` (WARZ) | P1 | Not started | WARZ governs read-back, not storage |
-| RST-035-C | Check | `abstractauto` == 0 | P2 | Not started | |
-| RST-036-C | Check | `data0..1` == reset value | P1 | Not started | |
-| RST-037-C | Check | `progbuf0..7` == reset value | P1 | Not started | |
+| RST-032-C | Check | `hartinfo` == reset value: `nscratch`, `dataaccess`, `datasize`, `dataaddr` | P1 | Pass | `nscratch=2` — the DM owns `dscratch0/1`. reset_values (2026-09-30): hartinfo=0x00212380 matches the declared presets |
+| RST-033-C | Check | `abstractcs` == reset value: `progbufsize=8`, `datacount=2`, `busy=0`, `cmderr=0` | P0 | Pass | reset_values (2026-09-30): abstractcs=0x08000002: progbufsize=8, datacount=2, busy=0, cmderr=0 |
+| RST-034-C | Check | `command` reads `0` (WARZ) | P1 | Pass | WARZ governs read-back, not storage. reset_values (2026-09-30): command reads 0x00000000 |
+| RST-035-C | Check | `abstractauto` == 0 | P2 | Pass | reset_values (2026-09-30): abstractauto=0x00000000 |
+| RST-036-C | Check | `data0..1` == reset value | P1 | Pass | reset_values (2026-09-30): data0..1 all zero |
+| RST-037-C | Check | `progbuf0..7` == reset value | P1 | Pass | reset_values (2026-09-30): progbuf0..7 all zero |
 | RST-038-S | Stimulate | Read `sbcs` immediately after reset, before any other `sbcs` write | P0 | Not started | Both values recorded so far carry `sbreadonaddr=1`, whose reset is 0 — **neither was a post-reset read** |
-| RST-038-C | Check | `sbcs` == `0x20040808` for this DUT's presets (`sbasize=64`, `sbaccess64=1`), with `sbversion=1`, `sbbusy=0`, `sberror=0`, `sbreadonaddr=0` | P0 | Not started | Computed from the spec's per-field reset column, not observed |
+| RST-038-C | Check | `sbcs` == `0x20040808` for this DUT's presets (`sbasize=64`, `sbaccess64=1`), with `sbversion=1`, `sbbusy=0`, `sberror=0`, `sbreadonaddr=0` | P0 | Pass | Computed from the spec's per-field reset column, not observed. reset_values (2026-09-30): sbcs=0x20060808. Matches the declared presets, which include the hardwired sbaccess=3 (RTL-002); the spec reset value of 2 is RST-038-C2 |
 | RST-038-C2 | Check | `sbcs.sbaccess` == **2** after reset | P0 | Fail | Spec gives `sbaccess` a reset of constant `2`, **not** `Preset`, with no exception for a DM that lacks 32-bit support. RTL forces 3 at `dm_csrs.sv:618`: `sbaccess = (BusWidth == 64) ? 3 : 2` — Fix proposed: riscv-dbg#9 (#147). |
-| RST-039-C | Check | `sbaddress0..3`, `sbdata0..3` == reset value | P1 | Not started | |
-| RST-040-C | Check | `haltsum0..3` == 0 with no hart halted | P2 | Not started | |
+| RST-039-C | Check | `sbaddress0..3`, `sbdata0..3` == reset value | P1 | Pass | reset_values (2026-09-30): sbaddress0..3 and sbdata0..3 all zero |
+| RST-040-C | Check | `haltsum0..3` == 0 with no hart halted | P2 | Fail | reset_values (2026-09-30): haltsum1 (0x13) reads X, RTL-007 (#150) |
 | RST-041-C | Check | `dmcs2` == reset value | P2 | Pass | `external_trigger_uvm` |
-| RST-042-C | Check | `nextdm` == 0; `confstrptr0..3` == reset value | P2 | Not started | |
-| RST-043-C | Check | `dtmcs` == reset value: `version`, `abits`, `idle`, `dmistat=0` | P0 | Not started | |
+| RST-042-C | Check | `nextdm` == 0; `confstrptr0..3` == reset value | P2 | Pass | reset_values (2026-09-30): nextdm, confstrptr0..3 and authdata read 0 |
+| RST-043-C | Check | `dtmcs` == reset value: `version`, `abits`, `idle`, `dmistat=0` | P0 | Pass | reset_values (2026-09-30): dtmcs=0x00001071: version=1, abits=7, idle=1, dmistat=0 |
 | RST-044-C | Check | After first halt: `dcsr.debugver=4`, `dcsr.cause` valid, `dpc` == halt PC | P0 | Not started | Read via abstract command |
 
 ## 1.5 Reset during an operation
