@@ -221,6 +221,30 @@ tests:
       Also covers writes to R/O registers, abstractauto, and keepalive.
     expect: pass
 
+  - name: cmd_outcome
+    config: configs/cmd_outcome_uvm.json
+    covers: [AC-021-V, AC-022-V, AC-023-V, PB-014-V, RAP-048-V]
+    why: >-
+      Abstract-command outcomes by kind, flags, Program Buffer fill and DM
+      state: every cmderr each {transfer, postexec} combination can end with,
+      busy for Quick Access / Access Memory / a reserved cmdtype, a reserved
+      aarsize, a 64-bit access above the FPRs, and a one-, four- and
+      eight-word buffer made to collide, fault and meet a running hart. The
+      one-word cases need a fresh DM (the fill level only grows), so this is
+      its own scenario; a one-word buffer stays busy by jumping to a delay
+      loop placed in RAM over SBA.
+    expect: fail
+    known: >-
+      11/13. Two Access Register deviations, both in dm_mem.sv and both
+      inherited from pulp upstream. TC-AC-031: with transfer=0 an invalid
+      aarsize must not matter (the transfer bit exists so the buffer can run
+      "without having to worry about placing valid values into aarsize or
+      regno"), but the DM rejects it with cmderr=2 -- pulp-platform/riscv-dbg#32,
+      agreed upstream in 2019 and never changed. TC-AC-033: a command with
+      neither transfer nor postexec jumps to the abstract-command ROM, whose
+      first word is still dm::illegal(), and fails with cmderr=3 on a halted
+      hart; not reported anywhere yet.
+
   - name: dmi_error
     config: configs/dmi_error_uvm.json
     covers: [DTM-002, DTM-010, DTM-011, DTM-012, DTM-013, DTM-014, DTM-015,

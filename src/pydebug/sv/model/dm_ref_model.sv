@@ -797,6 +797,9 @@ class dm_ref_model;
     if (addr == dm_defines_pkg::DM_ADDR_DMCONTROL || addr == dm_defines_pkg::DM_ADDR_DMSTATUS)
       return 1'b1;
     if (!cfg_valid) return 1'b0;
+    // dmcontrol.dmactive=0: "Any accesses to the module may fail." Nothing
+    // beyond dmcontrol/dmstatus has a defined read value until it is set again.
+    if (!dmactive) return 1'b0;
     // Every other address is claimed. The exceptions are values this model
     // cannot know: a data word a command or the hart has just overwritten, a
     // system-bus word read back from memory it never wrote, and the registers

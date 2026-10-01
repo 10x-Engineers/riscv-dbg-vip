@@ -471,6 +471,10 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
         dm.ndmreset(False)
         dm.ackhavereset()
         busy_now = bool((dm.t.read(DMI.SBCS) >> SB_BUSY) & 1)
+        # An abstract register read while the stalled transfer holds sbbusy:
+        # the only window in the suite where SBA is busy for longer than a
+        # DMI access takes (cg_gated_access abstract x sba_busy).
+        dm.t.read(DMI.ABSTRACTCS)
         dm.t.write(DMI.SBCS, (1 << SB_BUSYERROR) | (0x7 << SB_ERROR_LSB)
                    | _sbcs_read_on_addr())
         after = dm.t.read(DMI.SBCS)
@@ -479,6 +483,11 @@ def build_dm_corners_sequence(dm: RISCVDebug, mode: str = "batch",
         # dmactive=0 resets the DM's own state (#3.14.2), sbcs included, so
         # it is the debugger's way out of a sticky sbbusyerror it cannot W1C.
         dm.deactivate()
+        # Abstract and SBA registers read while dmactive=0 (cg_gated_access
+        # x dm_inactive). The spec lets such accesses fail, so nothing is
+        # asserted about the values.
+        dm.t.read(DMI.ABSTRACTCS)
+        dm.t.read(DMI.SBCS)
         dm.activate()
         reset_err = (dm.t.read(DMI.SBCS) >> SB_BUSYERROR) & 1
         dm.halt()
