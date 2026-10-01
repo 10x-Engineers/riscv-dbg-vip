@@ -88,10 +88,14 @@ tests:
       Reads every DM register straight after dmactive 0 -> 1 and compares it
       with the spec's reset column and the declared presets
       (dut_configs/cva6.json).
+    # RST-040-C reads haltsum1, which is X on this DUT (RTL-007); the model
+    # checker reports that as DMI_X. Stopping at that first error would drop
+    # RST-042/043, so run every step.
+    plusargs: ["+UVM_MAX_QUIT_COUNT=0,NO"]
     expect: fail
     known: >-
       12/13. RST-040-C fails on RTL-007 (#150): haltsum1 (0x13) reads X on this
-      single-hart DM. RST-038-C passes because cva6.json declares the hardwired
+      single-hart DM, which the model checker also reports as DMI_X. RST-038-C passes because cva6.json declares the hardwired
       sbaccess=3 (RTL-002, #147); the spec reset value of 2 is RST-038-C2.
 
   - name: halt_on_reset
@@ -248,8 +252,9 @@ tests:
       three steps on known RTL defects: TC-DMC-001 (RTL-008, dmstatus reads X
       for a nonexistent hart), TC-DMC-007 (RTL-006, sbcs reserved bits read
       back as written) and TC-DMC-008 (RTL-007, haltsum1-3 read X). The model
-      checker reports RTL-006 and RTL-007 as well (MODEL_MISMATCH on sbcs and
-      haltsum1-3, BACKDOOR on sbcs). A fourth step, TC-DMC-009, has timed out
+      checker reports them as well: MODEL_MISMATCH and BACKDOOR on sbcs
+      (RTL-006), DMI_X on haltsum1-3 (RTL-007) and on dmstatus[13:10]
+      (RTL-008). A fourth step, TC-DMC-009, has timed out
       on sbcs.sbbusy since 2026-09-24 and is not yet triaged. 8/12 is the
       known state.
 
