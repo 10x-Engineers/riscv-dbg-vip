@@ -809,6 +809,10 @@ class DMPredictor:
             return True
         if not self.cfg_valid:
             return False
+        # dmcontrol.dmactive=0: "Any accesses to the module may fail." Nothing
+        # beyond dmcontrol/dmstatus has a defined read value until it is set.
+        if not self.dmactive:
+            return False
         # Every other address is claimed, except values this model cannot
         # know: a data word a command or the hart just overwrote, a bus word
         # read from memory it never wrote, and the registers of an optional

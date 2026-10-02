@@ -92,6 +92,10 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.cmd_busy_sequence",
         "builder": "build_cmd_busy_sequence",
     },
+    "cmd_outcome": {
+        "module": "pydebug.sequences.cmd_outcome_sequence",
+        "builder": "build_cmd_outcome_sequence",
+    },
     "priv_irq": {
         "module": "pydebug.sequences.priv_irq_sequence",
         "builder": "build_priv_irq_sequence",
