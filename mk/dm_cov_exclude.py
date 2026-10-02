@@ -10,8 +10,11 @@ deliberate.
 
 Every rule carries the reason the code is unreachable **on this DUT**, and the
 condition that would make it reachable again. A rule that stops matching is
-reported rather than ignored: if RTL-002 is fixed, the sbaccess rules stop
-matching and the report says so, which is the signal to delete them.
+reported rather than ignored, which is the signal to delete it.
+
+Code that is dead only because of a known RTL defect (RTL-002 sbaccess,
+RTL-005 keepalive, RTL-007 haltsum, the missing SBA bus-error input) is NOT
+excluded: it is reported as a hole until the fix lands.
 
     python3 mk/dm_cov_exclude.py out/dm_code.rpt --out out/dm_exclusions.tcl
 
@@ -125,24 +128,6 @@ RULES = [
      "a build with NumRegs < 1, which would not elaborate",
      {"inst": r"i_rstgen"}),
 
-    ("sba-access-size",
-     r"3'b(001|010): begin|be_mask\[int'|else\s+be_mask = '1",
-     "sbcs.sbaccess is hardwired to 3 (64-bit) by dm_csrs.sv:618, so the "
-     "8/16/32-bit byte-enable arms can never be selected",
-     "issue #147 (RTL-002) fixed, making sbaccess writable"),
-
-    ("sba-unsupported-size",
-     r"sbaccess_i > 3",
-     "the spec's sberror=4 path needs sbaccess to hold an unsupported value; "
-     "it is hardwired to 3 and cannot",
-     "issue #147 (RTL-002) fixed"),
-
-    ("sba-no-bus-error",
-     r"if \(sberror_valid_i\)",
-     "dm_sba raises sberror_valid only on the sbaccess > 3 path above; dm_top "
-     "has no bus-error input, so an AXI error response never reaches it",
-     "issue #147 (RTL-002) fixed, or bus-error reporting added to dm_sba"),
-
     ("readbyteenable-param",
      r"if \(ReadByteEnable\) be = be_mask",
      "ReadByteEnable is a compile-time parameter, so one arm is dead by "
@@ -161,13 +146,6 @@ RULES = [
      "ariane_testharness.sv ties dm_top's unavailable_i to '0, so no hart can "
      "report unavailable and the sticky bit can never set",
      "an integration that drives unavailable_i"),
-
-    ("keepalive-dead-code",
-     r"if\s*\(dmcontrol_d\.(set|clr)keepalive\)",
-     "dm_csrs.sv clears dmcontrol_d.setkeepalive/clrkeepalive earlier in the "
-     "same always_comb that tests them, so both conditions are constant 0 "
-     "(RTL-005); TC-AC-025 writes both bits and they are dropped",
-     "issue #148 (RTL-005) fixed"),
 
     ("dtm-parasitic-state",
      r"if \(dmi_resp_valid\)",
@@ -232,12 +210,6 @@ EXPR_RULES = [
      "and dmi_jtag's dmi_resp_ready (tied 1) on the response side",
      "a DTM that pipelines requests, or back-pressures responses",
      r"i_cdc_(req|resp)\.i_dst$"),
-
-    ("sba-unsupported-size",
-     r"sbaccess_i > 3", r"^1 1$",
-     "the spec's sberror=4 path needs sbaccess to hold an unsupported value; "
-     "it is hardwired to 3 and cannot",
-     "issue #147 (RTL-002) fixed", r"i_dm_sba$"),
 
     ("dtm-unencoded-error",
      r"error_q == DMIBusy \|\| error_dmi_busy", r"^0 0$",
@@ -347,30 +319,6 @@ TOGGLE_RULES = [
      "address bit above the region never sets",
      "a DM mapped at a higher address, or a larger region",
      r"i_dm_axi2mem$"),
-
-    ("sbaccess-hardwired",
-     r"^(sbaccess|sbaccess_[io])\[2\]$|^sbcs_q\.sbaccess\[19\]$",
-     "sbcs.sbaccess is forced to 3 (RTL-002), so its top bit never sets",
-     "issue #147 (RTL-002) fixed"),
-
-    ("sba-no-bus-error",
-     r"^(sberror_valid(_[io])?|(sberror|sberror_[io])\[\d\]|sbcs_q\.sberror\[\d+\])$",
-     "dm_sba raises sberror only on the sbaccess > 3 path (RTL-002) and dm_top "
-     "has no bus-error input",
-     "issue #147 (RTL-002) fixed, or bus-error reporting added to dm_sba"),
-
-    ("keepalive-dead-code",
-     r"^(keepalive_[odq]|dmcontrol_q\.(set|clr)keepalive)$",
-     "setkeepalive/clrkeepalive are cleared before they are tested (RTL-005), "
-     "so keepalive never changes",
-     "issue #148 (RTL-005) fixed"),
-
-    ("haltsum-undriven",
-     r"^(haltsum[123]|halted|halted_flat[123])\[\d+\]$|^halted_reshaped[012]\[\d+\]\[\d+\]$",
-     "with NrHarts = 1 the haltsum1-3 trees read a vector nothing drives "
-     "(RTL-007), so they are X for the whole simulation",
-     "RTL-007 fixed and a multi-hart build (with one hart they would be "
-     "constant 0)"),
 
     # Only the padded slots nothing can write. dm_mem's halted/resuming
     # slots are indexed by the hart id written to it, so id 1 reaches them
