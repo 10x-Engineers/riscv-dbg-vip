@@ -126,11 +126,18 @@ tests:
 
   - name: sba
     config: configs/sba_uvm.json
-    covers: [SBA-001, SBA-002, SBA-003, SBA-004]
+    covers: [SBA-001, SBA-002, SBA-003, SBA-004, SBA-007, SBA-008]
     why: >-
       System Bus Access reads and writes. This DM implements sbaccess as a
       writable field over 8/16/32, so unlike CVA6 (RTL-002) the width bins are
-      genuinely reachable.
+      genuinely reachable. It also detects misalignment: TC-SBA-011 reads
+      sberror=3.
+    expect: fail
+    known: >-
+      11/12. TC-SBA-007 fails: an access to unmapped 0xF0000000 leaves
+      sberror=0. Not the DM -- this pulp copy has bus-error inputs -- but the
+      SoC: ibex-demo-system's rtl/system/dm_top.sv:180-181 ties
+      master_r_err_i and master_r_other_err_i to 0, so no bus error reaches it.
 
   # ── Ported from the CVA6 suite ────────────────────────────────────────
   # These five are DMI-level: they need no firmware and no core feature, so

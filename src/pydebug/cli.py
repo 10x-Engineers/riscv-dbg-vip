@@ -96,6 +96,18 @@ SCENARIO_REGISTRY = {
         "module": "pydebug.sequences.cmd_outcome_sequence",
         "builder": "build_cmd_outcome_sequence",
     },
+    "abstractauto": {
+        "module": "pydebug.sequences.abstractauto_sequence",
+        "builder": "build_abstractauto_sequence",
+    },
+    "priv_state": {
+        "module": "pydebug.sequences.priv_state_sequence",
+        "builder": "build_priv_state_sequence",
+    },
+    "load_and_run": {
+        "module": "pydebug.sequences.load_and_run_sequence",
+        "builder": "build_load_and_run_sequence",
+    },
     "priv_irq": {
         "module": "pydebug.sequences.priv_irq_sequence",
         "builder": "build_priv_irq_sequence",

@@ -1,0 +1,33 @@
+# regression.yaml — the multi-hart Debug VIP regression.
+#
+# Same runner and the same rules as cva6_sim/regress/regression.yaml
+# (`python3 mk/run_regression.py --dut multihart`). There is no SoC here:
+# tb_top_multihart.sv instantiates the CVA6 fork's dm_top with NrHarts=2 and
+# dummy harts behind it. It is the only testbench in this project where
+# dmstatus's all*/any* pairs can differ, so the rows that need "some but not
+# all" selected harts in a state live here and nowhere else.
+#
+# `expect` is the known state today, not an aspiration:
+#   pass     every step passes
+#   fail     a known RTL defect makes it fail; see testplans/results/rtl_findings.md
+#   partial  runs but aborts before its verdict, blocked behind a known defect
+
+suite: multihart-debug-vip
+description: >-
+  Multi-hart halt, resume and hart selection against dm_top with two harts.
+  No processor and no memory, so no test here takes an ELF.
+
+defaults:
+  timeout_s: 900
+  expect: pass
+
+tests:
+
+  - name: hart_array
+    config: configs/hart_array_uvm.json
+    covers: [HS-007, HS-008, HALT-010]
+    why: >-
+      Some-but-not-all: one of two harts halted, then both, then neither, by
+      hartsel and through the hart array mask. A single-hart DM answers the
+      all and any bits the same way forever, so only this DUT can show them
+      disagreeing when they should.

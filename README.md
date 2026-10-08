@@ -828,10 +828,10 @@ it.
 | RTL-002 | `sbcs.sbaccess` hardwired, and its spec reset value lost | filed — [#147](https://github.com/10x-Engineers/riscv-dbg-vip/issues/147); blocks all SBA coverage |
 | RTL-003 | `allrunning`/`anyrunning` asserted for a nonexistent hart | already filed upstream by a third party — [pulp-platform/riscv-dbg#200](https://github.com/pulp-platform/riscv-dbg/issues/200); internal `#130` |
 | RTL-004 | Halt-on-reset not implemented | not a defect — optional feature; also upstream [#187](https://github.com/pulp-platform/riscv-dbg/issues/187) |
-| RTL-005 | `setkeepalive`/`clrkeepalive` cleared before they are tested | filed, [#148](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148) |
-| RTL-006 | `sbcs` reserved bits [28:23] read back as written | [#149](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching upstream issue |
-| RTL-007 | `haltsum1`–`haltsum3` read X on a single-hart DM | [#150](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`) |
-| RTL-008 | `dmstatus` reads X for a nonexistent hart | [#151](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — PR #4's #520 change indexes a one-hart vector with `hartsel` |
+| RTL-005 | `setkeepalive`/`clrkeepalive` cleared before they are tested | filed, [#148](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148); closed, fixed by [riscv-dbg#8](https://github.com/10x-Engineers/riscv-dbg/pull/8) (`0ae0c96`) on PR #4's branch |
+| RTL-006 | `sbcs` reserved bits [28:23] read back as written | [#149](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching upstream issue; closed, fixed by [riscv-dbg#6](https://github.com/10x-Engineers/riscv-dbg/pull/6) (`69d283e`) on PR #4's branch |
+| RTL-007 | `haltsum1`–`haltsum3` read X on a single-hart DM | [#150](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`); closed, fixed by `f58f2c1` (superseded [riscv-dbg#7](https://github.com/10x-Engineers/riscv-dbg/pull/7)) on PR #4's branch |
+| RTL-008 | `dmstatus` reads X for a nonexistent hart | [#151](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — PR #4's #520 change indexes a one-hart vector with `hartsel`; closed, fixed by [riscv-dbg#5](https://github.com/10x-Engineers/riscv-dbg/pull/5) (`d6a3165`) on PR #4's branch |
 | RTL-009 | `dtmcs.dmihardreset` is not implemented | [#152](https://github.com/10x-Engineers/riscv-dbg-vip/issues/152) — this DTM predates upstream's support; upstream already has it ([pulp-platform/riscv-dbg#87](https://github.com/pulp-platform/riscv-dbg/issues/87), [#123](https://github.com/pulp-platform/riscv-dbg/pull/123)) |
 | RTL-010 | A stepped instruction that traps runs the handler's first instruction before halting | already filed upstream by a third party — [openhwgroup/cva6#3429](https://github.com/openhwgroup/cva6/issues/3429) |
 | RTL-011 | A stepped `mret`/`sret` reports `dpc`=pc+4 and the pre-return privilege | [#159](https://github.com/10x-Engineers/riscv-dbg-vip/issues/159) — same ordering upstream; not yet raised there |
@@ -841,6 +841,9 @@ it.
 | RTL-015 | `etrigger`/`itrigger` never match in S-mode without `textra` | [#164](https://github.com/10x-Engineers/riscv-dbg-vip/issues/164) — present on upstream master |
 | RTL-016 | `itrigger` fires when the handler returns, not before it runs | [#165](https://github.com/10x-Engineers/riscv-dbg-vip/issues/165) — present on upstream master |
 | RTL-017 | No re-entrancy protection for `action=0` triggers (Sdtrig SHOULD) | [#166](https://github.com/10x-Engineers/riscv-dbg-vip/issues/166) — present on upstream master |
+| RTL-018 | Abstract commands start while `cmderr` is non-zero | [#188](https://github.com/10x-Engineers/riscv-dbg-vip/issues/188) — fix [riscv-dbg#10](https://github.com/10x-Engineers/riscv-dbg/pull/10); upstream fixed it in pulp-platform/riscv-dbg#206 |
+| RTL-019 | System bus errors are never reported in `sberror` | [#189](https://github.com/10x-Engineers/riscv-dbg-vip/issues/189) — introduced by PR #4 `17e912c`; fix [riscv-dbg#11](https://github.com/10x-Engineers/riscv-dbg/pull/11) + [CVA6-fork#3](https://github.com/10x-Engineers/CVA6-fork/pull/3) |
+| RTL-020 | `ebreak` into Debug Mode also performs the breakpoint trap's CSR update | [#190](https://github.com/10x-Engineers/riscv-dbg-vip/issues/190) — fix [CVA6-fork#2](https://github.com/10x-Engineers/CVA6-fork/pull/2); also openhwgroup/cva6#1980 |
 
 RTL defects are deliberately **not** attached to any milestone — milestones track
 development work. RTL findings are tracked in that file and upstream.

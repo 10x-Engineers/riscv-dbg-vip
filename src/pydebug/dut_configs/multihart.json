@@ -32,7 +32,7 @@
     "_features_note": "Optional features. Set one false to declare the feature absent: its registers are then unimplemented, which the spec says read 0, so the model predicts 0 and still compares every read.",
     "sba_enable": false,
     "abstractauto_enable": true,
-    "hartarray_enable": true,
+    "hartarray_enable": false,
     "authentication_enable": false,
     "haltgroups_enable": true,
     "_read_behaviour_note": "progbuf_readable: whether progbuf0-15 read back what was written (the spec allows reads to return 0). haltsum_groups_present: whether haltsum1-3 exist (optional below 33 harts; absent they read 0). Both taken from this DM's DMI read decode.",

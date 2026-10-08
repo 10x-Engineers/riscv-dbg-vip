@@ -167,25 +167,66 @@ def build_sba_sequence(
 
     # ── TC-SBA-007: sberror on an unmapped address ────────────────────────
     # Drives sberror_valid_i (dm_csrs.sv:574) and the sberror write-1-to-clear
-    # path. The spec requires the error be sticky until explicitly cleared.
+    # path. sbcs.sberror: "When the Debug Module's system bus manager
+    # encounters an error, this field gets set." The CVA6 interconnect answers
+    # 0xF0000000 with DECERR (the AXI monitor logs it), so the error must show.
+    # This step used to check only that sberror cleared, and passed with
+    # sberror=0 -- clearing a field that was never set proves nothing.
+    def _sba_read_error(target: int, access: int) -> int:
+        """Start one read at `target`, return the sberror it left (raw polling:
+        _wait_sbus() raises on the error this is looking for)."""
+        dm.t.write(DMI.SBCS, (1 << SB_READONADDR) | (access << SB_ACCESS_LSB))
+        dm.t.write(DMI.SBADDRESS0, target)
+        for _ in range(200):
+            sbcs = dm.t.read(DMI.SBCS)
+            if not (sbcs >> SB_BUSY) & 1:
+                break
+        return (sbcs >> SB_ERROR_LSB) & 0x7
+
+    def _sba_clear_error() -> int:
+        dm.t.write(DMI.SBCS, (0x7 << SB_ERROR_LSB) | (2 << SB_ACCESS_LSB))
+        return (dm.t.read(DMI.SBCS) >> SB_ERROR_LSB) & 0x7
+
     def tc_sba_007():
         bad = 0xF000_0000                        # outside CVA6's RAM map
-        dm.t.write(DMI.SBCS, (1 << SB_READONADDR) | (2 << SB_ACCESS_LSB))
-        dm.t.write(DMI.SBADDRESS0, bad)
-        dm._wait_sbus()
-        sbcs = dm.t.read(DMI.SBCS)
-        err = (sbcs >> SB_ERROR_LSB) & 0x7
-        # W1C: writing the error field back clears it.
-        dm.t.write(DMI.SBCS, (0x7 << SB_ERROR_LSB) | (2 << SB_ACCESS_LSB))
-        cleared = (dm.t.read(DMI.SBCS) >> SB_ERROR_LSB) & 0x7
-        ok = cleared == 0
+        err = _sba_read_error(bad, 2)
+        cleared = _sba_clear_error()
+        ok = err != 0 and cleared == 0
+        if ok:
+            verdict = "OK"
+        elif err == 0:
+            verdict = "bus error not reported (sberror stayed 0)"
+        else:
+            verdict = "sberror did not clear"
         return StepResult(
             ok=ok,
-            msg=f"TC-SBA-007: access to 0x{bad:08x} -> sberror={err}, "
-                f"after W1C sberror={cleared}  "
-                f"{'OK' if ok else 'sberror did not clear'}",
+            msg=f"TC-SBA-007: access to 0x{bad:08x} -> sberror={err} (expect nonzero), "
+                f"after W1C sberror={cleared}  {verdict}",
         )
     session.add_step("TC-SBA-007: sberror set and write-1-to-clear", tc_sba_007)
+
+    # ── TC-SBA-011: a misaligned access ───────────────────────────────────
+    # sberror=3 is "There was an alignment error", but the spec does not say a
+    # DM must detect one: some buses perform the access with byte enables. So
+    # the value is recorded, not required; what must hold is that whatever the
+    # DM reported clears and the next aligned access works.
+    def tc_sba_011():
+        width = _effective_stride(dm)
+        if width == 1:
+            return StepResult(ok=True, msg="TC-SBA-011: N/A -- 8-bit accesses cannot be misaligned")
+        access = width.bit_length() - 1
+        err = _sba_read_error(addr + width // 2, access)
+        cleared = _sba_clear_error()
+        usable = dm.read_mem32(addr) is not None
+        ok = cleared == 0 and usable
+        return StepResult(
+            ok=ok,
+            msg=f"TC-SBA-011: {8 * width}-bit read at 0x{addr + width // 2:08x} -> "
+                f"sberror={err} ({'alignment' if err == 3 else 'not reported' if err == 0 else 'other'}), "
+                f"after W1C sberror={cleared}, aligned read afterwards ok={usable}  "
+                + ("OK" if ok else "DM not usable after the misaligned access"),
+        )
+    session.add_step("TC-SBA-011: misaligned access reported and recoverable", tc_sba_011)
 
     # ── TC-SBA-009: sbbusyerror ───────────────────────────────────────────
     # Accessing sbdata/sbaddress while sbbusy=1 must set sbbusyerror rather
@@ -231,10 +272,10 @@ def build_sba_sequence(
     # ── TC-SBA-019: every access width the DM says it supports ────────────
     # sbcs advertises a width mask (sbaccess8/16/32/64/128) and sbaccess
     # selects which one an access uses. Nothing exercised the narrow widths,
-    # so dm_sba's 8- and 16-bit arms were dead code in coverage. On a DM that
-    # hardwires sbaccess (CVA6, RTL-002) the write does not stick and this
-    # reports that rather than asserting; on one that implements it the narrow
-    # accesses are real bus transfers.
+    # so dm_sba's 8- and 16-bit arms were dead code in coverage. CVA6's DM
+    # (RTL-002) hardwires sbaccess but advertises only that one width, so
+    # nothing is refused there; a DM that advertises a width and then will not
+    # select it fails.
     def tc_sba_019():
         advertised = [(w, bit) for w, bit in ((8, 0), (16, 1), (32, 2), (64, 3))
                       if (dm.t.read(DMI.SBCS) >> bit) & 1]
@@ -254,11 +295,15 @@ def build_sba_sequence(
         # Leave sbaccess back at 32-bit for whatever runs next.
         base = dm.t.read(DMI.SBCS) & ~(0x7 << SB_ACCESS_LSB)
         dm.t.write(DMI.SBCS, base | (2 << SB_ACCESS_LSB))
+        # An advertised width the DM will not select is a defect, not a
+        # remark: this step used to return ok whatever it found.
+        ok = bool(used) and not refused
         return StepResult(
-            ok=True,
+            ok=ok,
             msg=f"TC-SBA-019: sbcs advertises {[w for w, _ in advertised]}-bit; "
                 f"accessed {used or 'none'}"
-                + (f"; refused (hardwired sbaccess) {refused}" if refused else ""),
+                + (f"; refused (hardwired sbaccess) {refused}" if refused else "")
+                + ("  OK" if ok else "  an advertised width could not be used"),
         )
     session.add_step("TC-SBA-019: each advertised access width", tc_sba_019)
 

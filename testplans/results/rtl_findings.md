@@ -152,7 +152,7 @@ reset is held, release. The hart enters Debug Mode on release and reports
 
 ## RTL-005 — `setkeepalive`/`clrkeepalive` cleared before they are tested
 
-**Status:** filed · [`10x-Engineers/riscv-dbg-vip#148`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148)
+**Status:** filed · [`10x-Engineers/riscv-dbg-vip#148`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148) · **closed 2026-10-08**: fixed on PR #4's branch by [riscv-dbg#8](https://github.com/10x-Engineers/riscv-dbg/pull/8) (`0ae0c96`). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:590-591` vs `:602-607`
 **Severity:** low — `keepalive` is a hint, but its control bits are specified writable
 
@@ -182,7 +182,7 @@ assignment in one `always_comb` killing an earlier one. Worth sweeping
 
 ## RTL-006 — `sbcs` reserved bits [28:23] read back as written
 
-**Status:** filed · [`#149`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching issue in `pulp-platform/riscv-dbg` as of 2026-09-16
+**Status:** filed · [`#149`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching issue in `pulp-platform/riscv-dbg` as of 2026-09-16 · **closed 2026-10-08**: fixed on PR #4's branch by [riscv-dbg#6](https://github.com/10x-Engineers/riscv-dbg/pull/6) (`69d283e`). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:513` (`sbcs_d = sbcs;`) vs the fixed-field block at `:610-618`
 **Severity:** low — a spec deviation a debugger is unlikely to trip over, but a conformance failure
 
@@ -222,7 +222,7 @@ it predicts, so reserved bits were checked by nobody until this step.
 
 ## RTL-007 — `haltsum1`–`haltsum3` read X on a single-hart DM
 
-**Status:** filed · [`#150`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`), whose repository has issues disabled
+**Status:** filed · [`#150`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`), whose repository has issues disabled · **closed 2026-10-08**: fixed on PR #4's branch by `f58f2c1` (superseded [riscv-dbg#7](https://github.com/10x-Engineers/riscv-dbg/pull/7)). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:110-126` (`gen_haltsum0_single`) vs `:129-170`
 **Severity:** low — the registers are optional below 33 harts, but a read must not return X
 
@@ -260,7 +260,7 @@ reads it. Found through toggle coverage: `halted_flat1..3` were the only
 
 ## RTL-008 — `dmstatus` reads X for a nonexistent hart
 
-**Status:** filed · [`#151`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — the indexing is in PR #4's "#520" change; related to, but not the same as, RTL-003 (#130)
+**Status:** filed · [`#151`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — the indexing is in PR #4's "#520" change; related to, but not the same as, RTL-003 (#130) · **closed 2026-10-08**: fixed on PR #4's branch by [riscv-dbg#5](https://github.com/10x-Engineers/riscv-dbg/pull/5) (`d6a3165`). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:255` vs `:306-320`
 **Severity:** low — a debugger enumerating harts gets an undefined answer
 
@@ -498,6 +498,71 @@ the M trap handler, as it should not.
 `native_hit` (hit bits identify the trigger that fired; `tval` is the matched
 address) and `native_dbgcsr` (`dcsr`/`dpc`/`dscratch0-1` raise illegal
 instruction from M-mode), and riscv-arch-test `SdtrigSm_Access-00`.
+
+---
+
+## RTL-018 — Abstract commands start while `cmderr` is non-zero
+
+**Status:** [#188](https://github.com/10x-Engineers/riscv-dbg-vip/issues/188); fix proposed in [riscv-dbg#10](https://github.com/10x-Engineers/riscv-dbg/pull/10). Same defect upstream as openhwgroup/cva6#3498, fixed in [pulp-platform/riscv-dbg#206](https://github.com/pulp-platform/riscv-dbg/pull/206) (merged 2026-09-15). PR #4's base `1cd764a` predates that fix.
+**Component:** `riscv-dbg` `src/dm_csrs.sv:473` (`command` write), `:365`/`:437` (autoexecdata), `:384`/`:501` (autoexecprogbuf)
+**Severity:** medium — a debugger that streams commands without checking `cmderr` keeps executing them after the first one failed
+
+`command`: *"If `cmderr` is non-zero, writes to this register are ignored."*
+`abstractauto` makes a data or progbuf access *"act as if the current value in
+`command` was written there again"*, so the same rule covers it. Every path
+that raises `cmd_valid_d` here is gated on `!cmdbusy_i` only.
+
+Measured, `abstractauto_uvm` TC-AC-043, with an accumulator command (data0
+into x6, then the Program Buffer adds x6 to x5, x5=0). cmderr=4 is raised by
+an autoexec while the hart runs, which leaves `command` unchanged, and the
+hart is halted again with cmderr still 4. Then, each in its own episode:
+- a data0 write of 7 (autoexecdata armed): x5=7 — the command ran;
+- a write to `command` with abstractauto off: x5=5 — the command ran.
+
+Both must leave x5=0. `cmderr` itself stays 4 throughout, so a check that
+only reads `cmderr` -- `cmderr_uvm`'s stickiness step, for one -- cannot see
+this.
+
+---
+
+## RTL-019 — System bus errors are never reported in `sberror`
+
+**Status:** [#189](https://github.com/10x-Engineers/riscv-dbg-vip/issues/189); fix proposed in [riscv-dbg#11](https://github.com/10x-Engineers/riscv-dbg/pull/11), with CVA6 testharness wiring in [CVA6-fork#3](https://github.com/10x-Engineers/CVA6-fork/pull/3) (draft). Introduced by PR #4's `17e912c`, which removed the error inputs that its base `1cd764a` had from [pulp-platform/riscv-dbg#129](https://github.com/pulp-platform/riscv-dbg/pull/129).
+**Component:** `riscv-dbg` `src/dm_sba.sv` (no `master_r_err_i`), `src/dm_top.sv`
+**Severity:** medium — a debugger reading an unmapped address gets data back with `sberror`=0 and cannot tell it from memory
+
+`sbcs.sberror`: *"When the Debug Module's system bus manager encounters an
+error, this field gets set."* `dm_sba`'s only error path is an unsupported
+`sbaccess` (`sberror`=3 at `dm_sba.sv:149-155`, itself the wrong code — 4 is
+"unsupported size"); a bus error response has nowhere to go. In CVA6 the
+testharness's `axi_adapter` also drops the AXI response code, so the DM
+fix needs CVA6-fork#3 as well.
+
+Measured, `sba_uvm` TC-SBA-007: a 32-bit read of 0xF0000000. The AXI monitor
+on the DM's manager port logs `resp=DECERR`; `sbcs.sberror` reads 0.
+
+**It passed a check first.** TC-SBA-007 used to require only that `sberror`
+cleared after a write of 1s, which a field that was never set satisfies.
+
+---
+
+## RTL-020 — `ebreak` into Debug Mode also performs the breakpoint trap's CSR update
+
+**Status:** [#190](https://github.com/10x-Engineers/riscv-dbg-vip/issues/190); fix proposed in [CVA6-fork#2](https://github.com/10x-Engineers/CVA6-fork/pull/2). Also reported upstream as [openhwgroup/cva6#1980](https://github.com/openhwgroup/cva6/issues/1980) (open since 2024-03, no fix).
+**Component:** CVA6 `core/csr_regfile.sv:2094` (trap-CSR update), `:2249-2270` (debug entry)
+**Severity:** medium — a software breakpoint in a trap handler destroys the state the handler is about to use
+
+Sdext: with `dcsr.ebreakm/s/u` set, *"ebreak instructions in M/S/U-mode
+enter Debug Mode"*; "Halt" lists what changes on entry — `dcsr.cause`,
+`dcsr.prv/v`, `dpc`. The exception-stack update at `csr_regfile.sv:2094` is
+skipped only for `DEBUG_REQUEST` or when already in Debug Mode, so a
+`BREAKPOINT` that enters Debug Mode takes it as well.
+
+Measured, `priv_state_uvm` TC-DCSR-021, sentinels in the trap CSRs before each
+entry: from M, S and U alike `mepc`→the ebreak, `mcause`→3, `mtval`→the
+ebreak, and `mstatus` MPP/MPIE/MIE rewritten (MPP→the entry privilege). Halt
+request and step entry (TC-DCSR-020, -022) leave every one of them alone, as
+do exceptions inside the Program Buffer (TC-DCSR-023).
 
 ---
 
