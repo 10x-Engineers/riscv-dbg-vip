@@ -212,7 +212,7 @@ tests:
       (7f7f384); the access-size bins still wait on RTL-002 (see cg_sba).
     expect: fail
     known: >-
-      11/12. TC-SBA-007 fails on RTL-019: the bus answers 0xF0000000 with
+      11/12. TC-SBA-007 fails on RTL-019 (#189): the bus answers 0xF0000000 with
       DECERR and sberror stays 0 -- this DM has no bus-error input. It used to
       pass by checking only that sberror cleared.
 
@@ -274,7 +274,7 @@ tests:
       cmd_busy only round-trips the register.
     expect: fail
     known: >-
-      7/8. TC-AC-043 fails on RTL-018: with cmderr=4 held, both an autoexec
+      7/8. TC-AC-043 fails on RTL-018 (#188): with cmderr=4 held, both an autoexec
       data0 write and a plain command write still run the command (x5=7 and
       x5=5, expected 0). Fixed upstream by pulp-platform/riscv-dbg#206.
 
@@ -353,7 +353,7 @@ tests:
       succeeds with mprven=0 and faults with mprven=1.
     expect: fail
     known: >-
-      8/9. TC-DCSR-021 fails on RTL-020 (openhwgroup/cva6#1980): ebreak entry
+      8/9. TC-DCSR-021 fails on RTL-020 (#190, openhwgroup/cva6#1980): ebreak entry
       from M, S and U rewrites mepc, mcause=3, mtval and mstatus MPP/MPIE/MIE,
       as if the breakpoint had also trapped. haltreq and step entry, Program
       Buffer exceptions and mprven all pass.

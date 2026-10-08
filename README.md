@@ -841,6 +841,9 @@ it.
 | RTL-015 | `etrigger`/`itrigger` never match in S-mode without `textra` | [#164](https://github.com/10x-Engineers/riscv-dbg-vip/issues/164) — present on upstream master |
 | RTL-016 | `itrigger` fires when the handler returns, not before it runs | [#165](https://github.com/10x-Engineers/riscv-dbg-vip/issues/165) — present on upstream master |
 | RTL-017 | No re-entrancy protection for `action=0` triggers (Sdtrig SHOULD) | [#166](https://github.com/10x-Engineers/riscv-dbg-vip/issues/166) — present on upstream master |
+| RTL-018 | Abstract commands start while `cmderr` is non-zero | [#188](https://github.com/10x-Engineers/riscv-dbg-vip/issues/188) — fix [riscv-dbg#10](https://github.com/10x-Engineers/riscv-dbg/pull/10); upstream fixed it in pulp-platform/riscv-dbg#206 |
+| RTL-019 | System bus errors are never reported in `sberror` | [#189](https://github.com/10x-Engineers/riscv-dbg-vip/issues/189) — introduced by PR #4 `17e912c`; fix [riscv-dbg#11](https://github.com/10x-Engineers/riscv-dbg/pull/11) + [CVA6-fork#3](https://github.com/10x-Engineers/CVA6-fork/pull/3) |
+| RTL-020 | `ebreak` into Debug Mode also performs the breakpoint trap's CSR update | [#190](https://github.com/10x-Engineers/riscv-dbg-vip/issues/190) — fix [CVA6-fork#2](https://github.com/10x-Engineers/CVA6-fork/pull/2); also openhwgroup/cva6#1980 |
 
 RTL defects are deliberately **not** attached to any milestone — milestones track
 development work. RTL findings are tracked in that file and upstream.

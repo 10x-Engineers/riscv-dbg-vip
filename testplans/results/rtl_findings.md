@@ -503,7 +503,7 @@ instruction from M-mode), and riscv-arch-test `SdtrigSm_Access-00`.
 
 ## RTL-018 — Abstract commands start while `cmderr` is non-zero
 
-**Status:** unfiled — fixed upstream by [pulp-platform/riscv-dbg#206](https://github.com/pulp-platform/riscv-dbg/pull/206) (merged 2026-09-15, raised as openhwgroup/cva6#3498); this fork's `dm_csrs.sv` predates it
+**Status:** [#188](https://github.com/10x-Engineers/riscv-dbg-vip/issues/188); fix proposed in [riscv-dbg#10](https://github.com/10x-Engineers/riscv-dbg/pull/10). Same defect upstream as openhwgroup/cva6#3498, fixed in [pulp-platform/riscv-dbg#206](https://github.com/pulp-platform/riscv-dbg/pull/206) (merged 2026-09-15). PR #4's base `1cd764a` predates that fix.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:473` (`command` write), `:365`/`:437` (autoexecdata), `:384`/`:501` (autoexecprogbuf)
 **Severity:** medium — a debugger that streams commands without checking `cmderr` keeps executing them after the first one failed
 
@@ -527,14 +527,16 @@ this.
 
 ## RTL-019 — System bus errors are never reported in `sberror`
 
-**Status:** unfiled — upstream added bus-error support in [pulp-platform/riscv-dbg#129](https://github.com/pulp-platform/riscv-dbg/pull/129) (requested in [#86](https://github.com/pulp-platform/riscv-dbg/issues/86)); this fork's `dm_sba` has no error input
+**Status:** [#189](https://github.com/10x-Engineers/riscv-dbg-vip/issues/189); fix proposed in [riscv-dbg#11](https://github.com/10x-Engineers/riscv-dbg/pull/11), with CVA6 testharness wiring in [CVA6-fork#3](https://github.com/10x-Engineers/CVA6-fork/pull/3) (draft). Introduced by PR #4's `17e912c`, which removed the error inputs that its base `1cd764a` had from [pulp-platform/riscv-dbg#129](https://github.com/pulp-platform/riscv-dbg/pull/129).
 **Component:** `riscv-dbg` `src/dm_sba.sv` (no `master_r_err_i`), `src/dm_top.sv`
 **Severity:** medium — a debugger reading an unmapped address gets data back with `sberror`=0 and cannot tell it from memory
 
 `sbcs.sberror`: *"When the Debug Module's system bus manager encounters an
 error, this field gets set."* `dm_sba`'s only error path is an unsupported
 `sbaccess` (`sberror`=3 at `dm_sba.sv:149-155`, itself the wrong code — 4 is
-"unsupported size"); a bus error response has nowhere to go.
+"unsupported size"); a bus error response has nowhere to go. In CVA6 the
+testharness's `axi_adapter` also drops the AXI response code, so the DM
+fix needs CVA6-fork#3 as well.
 
 Measured, `sba_uvm` TC-SBA-007: a 32-bit read of 0xF0000000. The AXI monitor
 on the DM's manager port logs `resp=DECERR`; `sbcs.sberror` reads 0.
@@ -546,7 +548,7 @@ cleared after a write of 1s, which a field that was never set satisfies.
 
 ## RTL-020 — `ebreak` into Debug Mode also performs the breakpoint trap's CSR update
 
-**Status:** unfiled — tracked upstream as [openhwgroup/cva6#1980](https://github.com/openhwgroup/cva6/issues/1980) (open since 2024-03)
+**Status:** [#190](https://github.com/10x-Engineers/riscv-dbg-vip/issues/190); fix proposed in [CVA6-fork#2](https://github.com/10x-Engineers/CVA6-fork/pull/2). Also reported upstream as [openhwgroup/cva6#1980](https://github.com/openhwgroup/cva6/issues/1980) (open since 2024-03, no fix).
 **Component:** CVA6 `core/csr_regfile.sv:2094` (trap-CSR update), `:2249-2270` (debug entry)
 **Severity:** medium — a software breakpoint in a trap handler destroys the state the handler is about to use
 
