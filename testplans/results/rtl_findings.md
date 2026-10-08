@@ -152,7 +152,7 @@ reset is held, release. The hart enters Debug Mode on release and reports
 
 ## RTL-005 — `setkeepalive`/`clrkeepalive` cleared before they are tested
 
-**Status:** filed · [`10x-Engineers/riscv-dbg-vip#148`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148)
+**Status:** filed · [`10x-Engineers/riscv-dbg-vip#148`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/148) · **closed 2026-10-08**: fixed on PR #4's branch by [riscv-dbg#8](https://github.com/10x-Engineers/riscv-dbg/pull/8) (`0ae0c96`). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:590-591` vs `:602-607`
 **Severity:** low — `keepalive` is a hint, but its control bits are specified writable
 
@@ -182,7 +182,7 @@ assignment in one `always_comb` killing an earlier one. Worth sweeping
 
 ## RTL-006 — `sbcs` reserved bits [28:23] read back as written
 
-**Status:** filed · [`#149`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching issue in `pulp-platform/riscv-dbg` as of 2026-09-16
+**Status:** filed · [`#149`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/149) — inherited from pulp upstream; no matching issue in `pulp-platform/riscv-dbg` as of 2026-09-16 · **closed 2026-10-08**: fixed on PR #4's branch by [riscv-dbg#6](https://github.com/10x-Engineers/riscv-dbg/pull/6) (`69d283e`). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:513` (`sbcs_d = sbcs;`) vs the fixed-field block at `:610-618`
 **Severity:** low — a spec deviation a debugger is unlikely to trip over, but a conformance failure
 
@@ -222,7 +222,7 @@ it predicts, so reserved bits were checked by nobody until this step.
 
 ## RTL-007 — `haltsum1`–`haltsum3` read X on a single-hart DM
 
-**Status:** filed · [`#150`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`), whose repository has issues disabled
+**Status:** filed · [`#150`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/150) — introduced by 10x PR #4 (`17e912c`), whose repository has issues disabled · **closed 2026-10-08**: fixed on PR #4's branch by `f58f2c1` (superseded [riscv-dbg#7](https://github.com/10x-Engineers/riscv-dbg/pull/7)). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:110-126` (`gen_haltsum0_single`) vs `:129-170`
 **Severity:** low — the registers are optional below 33 harts, but a read must not return X
 
@@ -260,7 +260,7 @@ reads it. Found through toggle coverage: `halted_flat1..3` were the only
 
 ## RTL-008 — `dmstatus` reads X for a nonexistent hart
 
-**Status:** filed · [`#151`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — the indexing is in PR #4's "#520" change; related to, but not the same as, RTL-003 (#130)
+**Status:** filed · [`#151`](https://github.com/10x-Engineers/riscv-dbg-vip/issues/151) — the indexing is in PR #4's "#520" change; related to, but not the same as, RTL-003 (#130) · **closed 2026-10-08**: fixed on PR #4's branch by [riscv-dbg#5](https://github.com/10x-Engineers/riscv-dbg/pull/5) (`d6a3165`). The pinned `6051a09` still has the defect until the pin bump.
 **Component:** `riscv-dbg` `src/dm_csrs.sv:255` vs `:306-320`
 **Severity:** low — a debugger enumerating harts gets an undefined answer
 
