@@ -21,9 +21,18 @@ cv64a6_imafdc_sv39_config_pkg.sv); the trigger CSRs do not exist and the step
 reports N/A. `resethaltreq` (5) needs halt-on-reset (RTL-004); `group` (6)
 needs more than one hart.
 
+Load and store watchpoints (TC-DCSR-016..018) arm mcontrol6 with action=1
+on watch_data and resume into watch_load: the hart must halt on the access by
+itself, at the instruction that made it, and only in the privilege modes the
+trigger's m/s/u bits select. Triggers are disarmed by writing an mcontrol6
+with no mode or match bits rather than tdata1=0, which this core ignores on
+RV64 (RTL-013) -- a "disarmed" trigger left armed would fire in a later step.
+
 Traces to: TC-DCSR-010 (ebreak entry, M), TC-DCSR-011 (trigger entry),
-TC-DCSR-012 (ebreakm gates ebreak entry), TC-DCSR-013 (ebreak entry, S and U),
-TC-DCSR-014 (haltreq from S and U), TC-DCSR-015 (step from S and U).
+TC-DCSR-012 (ebreakm/s/u gate ebreak entry), TC-DCSR-013 (ebreak entry, S and
+U), TC-DCSR-014 (haltreq from S and U), TC-DCSR-015 (step from S and U),
+TC-DCSR-016 (load watchpoint), TC-DCSR-017 (store watchpoint), TC-DCSR-018
+(watchpoint privilege filter).
 """
 
 from pydebug.api import RISCVDebug, DebugSession, StepResult
@@ -46,7 +55,12 @@ MC6_TYPE = 6 << 60
 MC6_DMODE = 1 << 59
 MC6_ACTION_DBG = 1 << 12
 MC6_M, MC6_S, MC6_U = 1 << 6, 1 << 4, 1 << 3
-MC6_EXECUTE = 1 << 2
+MC6_EXECUTE, MC6_STORE, MC6_LOAD = 1 << 2, 1 << 1, 1 << 0
+#: A valid mcontrol6 that matches nothing: no mode and no match bits.
+MC6_DISARMED = MC6_TYPE | MC6_DMODE
+MC6_MODE = {PRV_M: MC6_M, PRV_S: MC6_S, PRV_U: MC6_U}
+
+S1_REGNO = 0x1009
 
 #: mcause for a breakpoint exception (Priv. spec 3.1.15).
 MCAUSE_BREAKPOINT = 3
@@ -67,7 +81,8 @@ def build_debug_entry_sequence(
     session.add_step("Halt hart", lambda: dm.halt())
 
     def setup():
-        for sym in ("cls_ebreak", "ebreak_park", "cls_trigger_target", "trigger_lead", "step_loop"):
+        for sym in ("cls_ebreak", "ebreak_park", "cls_trigger_target", "trigger_lead", "step_loop",
+                    "watch_load", "watch_store", "watch_park", "watch_data"):
             addrs[sym] = symbol_addr(elf, sym)
         open_pmp(dm)
         return StepResult(
@@ -92,20 +107,28 @@ def build_debug_entry_sequence(
     # Checked first: if ebreak entered Debug Mode regardless of ebreakm, the
     # positive case would pass for the wrong reason. And the ebreak must
     # really have run -- as a breakpoint exception into the hart's handler.
-    def tc_dcsr_012():
-        if not ensure_halted(dm):
-            return StepResult(ok=False, msg="hart would not halt")
-        dm.write_reg64(MCAUSE, 0)
-        entered, cause, _, _ = enter_via_ebreak(PRV_M, 0)
-        mcause, mepc = dm.read_reg64(MCAUSE), dm.read_reg64(MEPC)
-        reached = mcause == MCAUSE_BREAKPOINT and mepc in (addrs["cls_ebreak"], addrs["cls_ebreak"] + 4)
-        ok = cause != CAUSE_EBREAK and reached
-        return StepResult(
-            ok=ok,
-            msg=f"TC-DCSR-012: ebreakm=0 -> dcsr.cause={cause} (not ebreak), "
-                f"mcause={mcause} mepc=0x{mepc:x} (breakpoint trap at the ebreak: {reached})  "
-                + ("OK" if ok else "entered Debug Mode, or never reached the ebreak"))
-    session.add_step("TC-DCSR-012: ebreakm=0 does not enter Debug Mode", tc_dcsr_012)
+    # S and U as well: each ebreak* bit gates its own privilege, so a core
+    # that wired ebreaks/ebreaku to ebreakm passes the M case alone. With
+    # medeleg clear the breakpoint traps to M from any level.
+    def no_ebreak_entry(prv: int):
+        def step():
+            if not ensure_halted(dm):
+                return StepResult(ok=False, msg="hart would not halt")
+            dm.write_reg64(MCAUSE, 0)
+            entered, cause, _, _ = enter_via_ebreak(prv, 0)
+            mcause, mepc = dm.read_reg64(MCAUSE), dm.read_reg64(MEPC)
+            reached = mcause == MCAUSE_BREAKPOINT and mepc in (addrs["cls_ebreak"], addrs["cls_ebreak"] + 4)
+            ok = cause != CAUSE_EBREAK and reached
+            bit = f"ebreak{PRV_NAME[prv].lower()}"
+            return StepResult(
+                ok=ok,
+                msg=f"TC-DCSR-012: {bit}=0 in {PRV_NAME[prv]} -> dcsr.cause={cause} (not ebreak), "
+                    f"mcause={mcause} mepc=0x{mepc:x} (breakpoint trap at the ebreak: {reached})  "
+                    + ("OK" if ok else "entered Debug Mode, or never reached the ebreak"))
+        return step
+    session.add_step("TC-DCSR-012: ebreakm=0 does not enter Debug Mode", no_ebreak_entry(PRV_M))
+    session.add_step("TC-DCSR-012: ebreaks=0 does not enter Debug Mode from S", no_ebreak_entry(PRV_S))
+    session.add_step("TC-DCSR-012: ebreaku=0 does not enter Debug Mode from U", no_ebreak_entry(PRV_U))
 
     # ── TC-DCSR-010 / 013: ebreak enters Debug Mode from M, S and U ───────
     def ebreak_entry(prv: int, tc: str):
@@ -221,6 +244,103 @@ def build_debug_entry_sequence(
             msg=f"TC-DCSR-011: execute trigger at 0x{target:x} -> self-halted={entered} "
                 f"dpc=0x{dpc:x} cause={cause} (expect {CAUSE_TRIGGER})  {verdict}")
     session.add_step("TC-DCSR-011: trigger enters Debug Mode (cause=2)", tc_dcsr_011)
+
+    # ── TC-DCSR-016..018: load and store watchpoints (action=1) ───────────
+    def arm_watch(match: int, addr: int, modes: int):
+        """Arm trigger 0. Returns None, or a StepResult saying why it cannot be."""
+        try:
+            dm.write_gpr(TSELECT, 0)
+            dm.write_reg64(TDATA1, MC6_DISARMED)
+            dm.write_reg64(TDATA2, addr)
+            dm.write_reg64(TDATA1, MC6_TYPE | MC6_DMODE | MC6_ACTION_DBG | modes | match)
+            readback = dm.read_reg64(TDATA1)
+        except DebugError as e:
+            ensure_halted(dm)
+            return f"N/A -- the trigger CSRs raise an exception ({e})"
+        if readback & (modes | match) != modes | match:
+            return f"N/A -- trigger 0 did not take the configuration (tdata1=0x{readback:016x})"
+        return None
+
+    def run_watch(prv: int, limit: int = 400):
+        """Resume at watch_load in `prv` with s1 -> watch_data. Returns
+        (self-halted, cause, dpc, dcsr.prv) and leaves the trigger disarmed."""
+        modify_dcsr(dm, clear_bits=DCSR_EBREAKM | DCSR_EBREAKS | DCSR_EBREAKU | DCSR_STEP)
+        dm.write_reg64(S1_REGNO, addrs["watch_data"])
+        place(dm, addrs["watch_load"], prv)
+        entered = run_until_halted(dm, limit)    # no halt request: only the trigger can halt it
+        if not entered:
+            ensure_halted(dm)
+        dcsr = dm.read_gpr(DCSR)
+        dpc = dm.read_reg64(DPC)
+        dm.write_reg64(TDATA1, MC6_DISARMED)
+        return entered, cause_of(dcsr), dpc, dcsr & 0x3
+
+    def watch_verdict(tc: str, what: str, target: int, entered: bool, cause: int, dpc: int,
+                      at: int) -> StepResult:
+        fired = entered and dpc == at
+        ok = fired and cause == CAUSE_TRIGGER
+        if ok:
+            verdict = "OK"
+        elif fired:
+            verdict = f"trigger fired but dcsr.cause={cause}, not {CAUSE_TRIGGER} -- RTL-012"
+        else:
+            verdict = "watchpoint did not halt the hart at the access"
+        return StepResult(
+            ok=ok,
+            msg=f"{tc}: {what} watchpoint on 0x{target:x} -> self-halted={entered} "
+                f"dpc=0x{dpc:x} (expect the {what}, 0x{at:x}) cause={cause} "
+                f"(expect {CAUSE_TRIGGER})  {verdict}")
+
+    def tc_dcsr_016():
+        if not ensure_halted(dm):
+            return StepResult(ok=False, msg="hart would not halt")
+        why = arm_watch(MC6_LOAD, addrs["watch_data"], MC6_M)
+        if why:
+            return StepResult(ok=True, msg=f"TC-DCSR-016: {why}")
+        entered, cause, dpc, _ = run_watch(PRV_M)
+        return watch_verdict("TC-DCSR-016", "load", addrs["watch_data"], entered, cause, dpc,
+                             addrs["watch_load"])
+    session.add_step("TC-DCSR-016: load watchpoint enters Debug Mode", tc_dcsr_016)
+
+    def tc_dcsr_017():
+        if not ensure_halted(dm):
+            return StepResult(ok=False, msg="hart would not halt")
+        # The load reads watch_data; only the store, to the next doubleword,
+        # matches -- so a store trigger that also fired on loads halts early.
+        why = arm_watch(MC6_STORE, addrs["watch_data"] + 8, MC6_M)
+        if why:
+            return StepResult(ok=True, msg=f"TC-DCSR-017: {why}")
+        entered, cause, dpc, _ = run_watch(PRV_M)
+        return watch_verdict("TC-DCSR-017", "store", addrs["watch_data"] + 8, entered, cause, dpc,
+                             addrs["watch_store"])
+    session.add_step("TC-DCSR-017: store watchpoint enters Debug Mode", tc_dcsr_017)
+
+    # Every (enabled mode, running mode) pair: the load must halt the hart
+    # exactly when they match. A miss runs on to watch_park, where the
+    # debugger's own halt request stops it.
+    def tc_dcsr_018():
+        if not ensure_halted(dm):
+            return StepResult(ok=False, msg="hart would not halt")
+        bad, cells = [], []
+        for enabled in (PRV_M, PRV_S, PRV_U):
+            for running in (PRV_M, PRV_S, PRV_U):
+                ensure_halted(dm)
+                why = arm_watch(MC6_LOAD, addrs["watch_data"], MC6_MODE[enabled])
+                if why:
+                    return StepResult(ok=True, msg=f"TC-DCSR-018: {why}")
+                want = enabled == running
+                entered, cause, dpc, prv = run_watch(running, 400 if want else 100)
+                fired = entered and dpc == addrs["watch_load"]
+                cell = f"{PRV_NAME[enabled]}-only in {PRV_NAME[running]}: fired={fired}"
+                cells.append(cell)
+                if fired != want or (fired and prv != running):
+                    bad.append(cell + (f" prv={prv}" if fired else ""))
+        ok = not bad
+        return StepResult(
+            ok=ok,
+            msg="TC-DCSR-018: load watchpoint, enabled mode x running mode -- "
+                + ("; ".join(cells) + "  OK" if ok else f"wrong cells: {bad}"))
+    session.add_step("TC-DCSR-018: watchpoint fires only in its enabled modes", tc_dcsr_018)
 
     # ── restore ───────────────────────────────────────────────────────────
     def restore():

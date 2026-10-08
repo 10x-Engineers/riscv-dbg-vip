@@ -10,6 +10,7 @@ thing on both.
 
     python3 mk/run_regression.py                      # everything, on CVA6
     python3 mk/run_regression.py --dut ibex           # the Ibex suite
+    python3 mk/run_regression.py --dut multihart      # dm_top with two harts
     python3 mk/run_regression.py --only step_classes,cmderr
     python3 mk/run_regression.py --coverage           # build with -coverage all
     python3 mk/run_regression.py --list
@@ -163,7 +164,7 @@ def run_one(test: dict, defaults: dict, coverage: bool) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dut", default="cva6", choices=("cva6", "ibex"),
+    ap.add_argument("--dut", default="cva6", choices=("cva6", "ibex", "multihart"),
                     help="which SoC to run against (default: cva6)")
     ap.add_argument("--only", help="comma-separated test names")
     ap.add_argument("--coverage", action="store_true",

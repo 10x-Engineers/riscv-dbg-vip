@@ -501,6 +501,69 @@ instruction from M-mode), and riscv-arch-test `SdtrigSm_Access-00`.
 
 ---
 
+## RTL-018 — Abstract commands start while `cmderr` is non-zero
+
+**Status:** unfiled — fixed upstream by [pulp-platform/riscv-dbg#206](https://github.com/pulp-platform/riscv-dbg/pull/206) (merged 2026-09-15, raised as openhwgroup/cva6#3498); this fork's `dm_csrs.sv` predates it
+**Component:** `riscv-dbg` `src/dm_csrs.sv:473` (`command` write), `:365`/`:437` (autoexecdata), `:384`/`:501` (autoexecprogbuf)
+**Severity:** medium — a debugger that streams commands without checking `cmderr` keeps executing them after the first one failed
+
+`command`: *"If `cmderr` is non-zero, writes to this register are ignored."*
+`abstractauto` makes a data or progbuf access *"act as if the current value in
+`command` was written there again"*, so the same rule covers it. Every path
+that raises `cmd_valid_d` here is gated on `!cmdbusy_i` only.
+
+Measured, `abstractauto_uvm` TC-AC-043, with an accumulator command (data0
+into x6, then the Program Buffer adds x6 to x5, x5=0). cmderr=4 is raised by
+an autoexec while the hart runs, which leaves `command` unchanged, and the
+hart is halted again with cmderr still 4. Then, each in its own episode:
+- a data0 write of 7 (autoexecdata armed): x5=7 — the command ran;
+- a write to `command` with abstractauto off: x5=5 — the command ran.
+
+Both must leave x5=0. `cmderr` itself stays 4 throughout, so a check that
+only reads `cmderr` -- `cmderr_uvm`'s stickiness step, for one -- cannot see
+this.
+
+---
+
+## RTL-019 — System bus errors are never reported in `sberror`
+
+**Status:** unfiled — upstream added bus-error support in [pulp-platform/riscv-dbg#129](https://github.com/pulp-platform/riscv-dbg/pull/129) (requested in [#86](https://github.com/pulp-platform/riscv-dbg/issues/86)); this fork's `dm_sba` has no error input
+**Component:** `riscv-dbg` `src/dm_sba.sv` (no `master_r_err_i`), `src/dm_top.sv`
+**Severity:** medium — a debugger reading an unmapped address gets data back with `sberror`=0 and cannot tell it from memory
+
+`sbcs.sberror`: *"When the Debug Module's system bus manager encounters an
+error, this field gets set."* `dm_sba`'s only error path is an unsupported
+`sbaccess` (`sberror`=3 at `dm_sba.sv:149-155`, itself the wrong code — 4 is
+"unsupported size"); a bus error response has nowhere to go.
+
+Measured, `sba_uvm` TC-SBA-007: a 32-bit read of 0xF0000000. The AXI monitor
+on the DM's manager port logs `resp=DECERR`; `sbcs.sberror` reads 0.
+
+**It passed a check first.** TC-SBA-007 used to require only that `sberror`
+cleared after a write of 1s, which a field that was never set satisfies.
+
+---
+
+## RTL-020 — `ebreak` into Debug Mode also performs the breakpoint trap's CSR update
+
+**Status:** unfiled — tracked upstream as [openhwgroup/cva6#1980](https://github.com/openhwgroup/cva6/issues/1980) (open since 2024-03)
+**Component:** CVA6 `core/csr_regfile.sv:2094` (trap-CSR update), `:2249-2270` (debug entry)
+**Severity:** medium — a software breakpoint in a trap handler destroys the state the handler is about to use
+
+Sdext: with `dcsr.ebreakm/s/u` set, *"ebreak instructions in M/S/U-mode
+enter Debug Mode"*; "Halt" lists what changes on entry — `dcsr.cause`,
+`dcsr.prv/v`, `dpc`. The exception-stack update at `csr_regfile.sv:2094` is
+skipped only for `DEBUG_REQUEST` or when already in Debug Mode, so a
+`BREAKPOINT` that enters Debug Mode takes it as well.
+
+Measured, `priv_state_uvm` TC-DCSR-021, sentinels in the trap CSRs before each
+entry: from M, S and U alike `mepc`→the ebreak, `mcause`→3, `mtval`→the
+ebreak, and `mstatus` MPP/MPIE/MIE rewritten (MPP→the entry privilege). Halt
+request and step entry (TC-DCSR-020, -022) leave every one of them alone, as
+do exceptions inside the Program Buffer (TC-DCSR-023).
+
+---
+
 ## Observations that are NOT RTL defects
 
 Recorded because each cost time to diagnose and would otherwise be re-diagnosed.

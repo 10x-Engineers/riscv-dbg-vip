@@ -6,7 +6,7 @@ Implements the Halt/Resume individual hart CAT2 feature (Ch.3 op 2, spec #3.5),
 `anyrunning` (#3.14.2 / #3.14.1).
 
 Traces to: TC-RC-001, TC-RC-002, TC-RC-003, TC-RC-004, TC-RC-005, TC-RC-006,
-TC-RC-007
+TC-RC-007, TC-RC-008
 
 Where a golden model is attached (`ModelBackedMockTransport` carries a
 `.predictor`), a check requires the *fields it names* to hold in the predicted
@@ -27,13 +27,17 @@ import time
 from pydebug.api import RISCVDebug, DebugSession, StepResult, DMI
 from pydebug.api.riscv_dm import (
     allhalted, anyhalted, allrunning, anyrunning,
-    allresumeack, anyresumeack,
+    allresumeack, anyresumeack, dmcontrol,
 )
 
 #: Spec #3.5: "When halt or resume is requested, a hart must respond in less
 #: than one second". This is the spec's own number, not an invented bound —
 #: TC-RC-006's "Priority P2" latency check is this sentence and nothing else.
 HALT_RESUME_RESPONSE_BOUND_S = 1.0
+
+#: TC-RC-008 rounds of each kind. Enough to cycle the DM's going/resuming
+#: flags many times over; each round is a handful of DMI accesses.
+STRESS_ROUNDS = 16
 
 
 def _predictor(dm: RISCVDebug):
@@ -275,6 +279,48 @@ def build_run_control_sequence(
     session.add_step(
         "TC-RC-007: resumereq while the hart is in reset (spec #3.2)",
         tc_rc_007,
+    )
+
+    # ── TC-RC-008: repeated and back-to-back halt/resume ──────────────────
+    # Every step above makes one request and waits for it. A debugger
+    # stepping through code with breakpoints issues them in long runs, and
+    # the DM's going/resuming flags and the hart's resume handshake only get
+    # raced when one request follows another without a pause. Two kinds of
+    # round: waited (halt, check, resume, check), and back-to-back (resumereq
+    # immediately followed by haltreq, no poll between). Each must end in a
+    # consistent state; the back-to-back ones must end halted by the request.
+    def tc_rc_008():
+        bad = []
+        for i in range(STRESS_ROUNDS):
+            dm.halt()
+            word = dm.read_dmstatus()
+            cause = dm.get_dcsr_cause()
+            if not (allhalted(word) and not anyrunning(word) and cause == 3):
+                bad.append(f"waited #{i}: halted={allhalted(word)} cause={cause}")
+            dm.resume()
+            word = dm.read_dmstatus()
+            if not (allrunning(word) and allresumeack(word) and not anyhalted(word)):
+                bad.append(f"waited #{i}: running={allrunning(word)} "
+                           f"resumeack={allresumeack(word)} after resume")
+        dm.halt()
+        for i in range(STRESS_ROUNDS):
+            dm.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, resumereq=True, hartsel=hartsel))
+            dm.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, haltreq=True, hartsel=hartsel))
+            halted = any(allhalted(dm.read_dmstatus()) for _ in range(200))
+            dm.t.write(DMI.DMCONTROL, dmcontrol(dmactive=True, hartsel=hartsel))
+            cause = dm.get_dcsr_cause() if halted else None
+            if not (halted and cause == 3):
+                bad.append(f"back-to-back #{i}: halted={halted} cause={cause}")
+        dm.resume()                 # leave it running, as TC-RC-007 did
+        return StepResult(
+            ok=not bad,
+            msg=f"TC-RC-008: {STRESS_ROUNDS} waited and {STRESS_ROUNDS} back-to-back "
+                f"halt/resume rounds  " + ("OK -- every round consistent" if not bad
+                                           else f"{len(bad)} inconsistent: {bad[:4]}"),
+        )
+    session.add_step(
+        "TC-RC-008: repeated and back-to-back halt/resume (spec #3.5)",
+        tc_rc_008,
     )
 
     return session

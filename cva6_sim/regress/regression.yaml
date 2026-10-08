@@ -57,8 +57,10 @@ tests:
 
   - name: run_control
     config: configs/run_control_uvm.json
-    covers: [HALT-001, RES-001, RES-002, RES-003, RES-007-V]
-    why: Halt and resume, including the section 3.5 resumeack asymmetry.
+    covers: [HALT-001, RES-001, RES-002, RES-003, RES-007-V, HALT-012]
+    why: >-
+      Halt and resume, including the section 3.5 resumeack asymmetry, then 16
+      waited and 16 back-to-back halt/resume rounds (TC-RC-008).
 
   - name: report_halt_status
     config: configs/report_halt_status_uvm.json
@@ -77,8 +79,11 @@ tests:
   # ── Reset ─────────────────────────────────────────────────────────────
   - name: reset_ctrl
     config: configs/reset_ctrl_uvm.json
-    covers: [RST-010, RST-011, RST-060, RST-062, RST-064-V]
-    why: ndmreset and hartreset scope, and the havereset lifecycle.
+    covers: [RST-010, RST-011, RST-060, RST-062, RST-064-V, RST-053-C2]
+    why: >-
+      ndmreset and hartreset scope, and the havereset lifecycle. The halt held
+      across ndmreset must leave dpc at the reset vector (params.boot_addr),
+      i.e. nothing ran before Debug Mode.
 
   - name: reset_values
     config: configs/reset_values_uvm.json
@@ -200,11 +205,25 @@ tests:
   # ── System bus ────────────────────────────────────────────────────────
   - name: sba
     config: configs/sba_uvm.json
-    covers: [SBA-001, SBA-002]
+    covers: [SBA-001, SBA-002, SBA-007, SBA-008]
     why: >-
-      SBA discovery, round-trips and sbbusyerror. Was partial behind RTL-002;
-      passes since the model honours a hardwired sbaccess (7f7f384). The
-      access-size bins still wait on RTL-002 (see cg_sba).
+      SBA discovery, round-trips, sberror on an unmapped address, a
+      misaligned access, sbbusyerror. The model honours a hardwired sbaccess
+      (7f7f384); the access-size bins still wait on RTL-002 (see cg_sba).
+    expect: fail
+    known: >-
+      11/12. TC-SBA-007 fails on RTL-019: the bus answers 0xF0000000 with
+      DECERR and sberror stays 0 -- this DM has no bus-error input. It used to
+      pass by checking only that sberror cleared.
+
+  - name: load_and_run
+    config: configs/load_and_run_uvm.json
+    covers: [RES-011, RES-004]
+    why: >-
+      Bring-up with no program in memory: download over SBA, fence.i, set
+      dpc, resume, come back through ebreak, read the result as a register
+      and as memory. A second, different program over the first catches a
+      hart that runs stale instructions.
 
   - name: mem_scan
     config: configs/mem_scan_uvm.json
@@ -244,6 +263,20 @@ tests:
       neither transfer nor postexec jumps to the abstract-command ROM, whose
       first word is still dm::illegal(), and fails with cmderr=3 on a halted
       hart; not reported anywhere yet.
+
+  - name: abstractauto
+    config: configs/abstractauto_uvm.json
+    covers: [AC-014, AC-008-C2]
+    why: >-
+      abstractauto actually re-running the command: a data0 read, a data0
+      write and a progbuf access each re-run it exactly once (the buffer adds
+      to x5, so x5 counts the runs), and nothing runs while cmderr is set.
+      cmd_busy only round-trips the register.
+    expect: fail
+    known: >-
+      7/8. TC-AC-043 fails on RTL-018: with cmderr=4 held, both an autoexec
+      data0 write and a plain command write still run the command (x5=7 and
+      x5=5, expected 0). Fixed upstream by pulp-platform/riscv-dbg#206.
 
   - name: dmi_error
     config: configs/dmi_error_uvm.json
@@ -285,7 +318,8 @@ tests:
   - name: debug_entry
     config: configs/debug_entry_uvm.json
     elf: sw/step_classes.elf
-    covers: [DCSR-010, DCSR-011, DCSR-012, DCSR-013, DCSR-014, DCSR-015]
+    covers: [DCSR-010, DCSR-011, DCSR-012, DCSR-013, DCSR-014, DCSR-015,
+             TRIG-004, TRIG-005, TRIG-012-V]
     timeout_s: 1500
     why: >-
       dcsr.cause values that come from the hart's own execution rather than from
@@ -296,11 +330,33 @@ tests:
       32-bit write sign-extends to 0xFFFFFFFF8000xxxx and the hart faults, which
       is what this test used to report as 5/7. TC-DCSR-011 resumes the hart one
       instruction before an armed mcontrol6 execute trigger and sends no halt
-      request.
+      request. TC-DCSR-016..018 are load and store watchpoints (action=1) on
+      watch_data, and a load watchpoint enabled for each of M/S/U run from
+      each of M/S/U.
     expect: fail
     known: >-
-      TC-DCSR-011 fails on RTL-012 (#161): the trigger fires (the hart halts by
-      itself with dpc on the target) but dcsr.cause reads 3, not 2.
+      15/18. TC-DCSR-011, -016 and -017 fail on RTL-012 (#161): each trigger
+      fires (the hart halts by itself with dpc on the execute target, the load
+      or the store) but dcsr.cause reads 3, not 2. The privilege filter
+      (TC-DCSR-018) is correct in all nine cells.
+
+  - name: priv_state
+    config: configs/priv_state_uvm.json
+    elf: sw/step_classes.elf
+    timeout_s: 1500
+    covers: [DM-012, DM-017, PB-006, PB-015, DCSR-016]
+    why: >-
+      What Debug Mode must leave alone: mepc/mcause/mtval and
+      sepc/scause/stval across haltreq, ebreak and step entry from M, S and
+      U, and across exceptions inside the Program Buffer. Then dcsr.mprven:
+      with MPRV=1 and MPP=U, a Program Buffer load from a page PMP denies to U
+      succeeds with mprven=0 and faults with mprven=1.
+    expect: fail
+    known: >-
+      8/9. TC-DCSR-021 fails on RTL-020 (openhwgroup/cva6#1980): ebreak entry
+      from M, S and U rewrites mepc, mcause=3, mtval and mstatus MPP/MPIE/MIE,
+      as if the breakpoint had also trapped. haltreq and step entry, Program
+      Buffer exceptions and mprven all pass.
 
   - name: step_matrix
     config: configs/step_matrix_uvm.json

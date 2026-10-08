@@ -43,7 +43,7 @@ the plan.
 
 ### Status
 
-468 rows. **174 pass, 22 fail, 11 blocked, 11 N/A, 250 not started** (updated 2026-09-30 against the regression on `master` at the pins) — so roughly half of this plan is specified and not yet run, and saying so here is the point: a reader should not have to tally the column to find that out.
+482 rows. **250 pass, 31 fail, 15 blocked, 21 N/A, 165 not started** (recounted 2026-10-08 with the command below, after the debugger-scenario gap closure) — so roughly a third of this plan is specified and not yet run, and saying so here is the point: a reader should not have to tally the column to find that out.
 
 Every `Fail` names the RTL finding it belongs to, and every `Blocked` names what
 blocks it. Run-control, abstract-command, program-buffer, single-step, trigger
@@ -143,6 +143,7 @@ The interesting failures are resets that land mid-transaction.
 | RST-052-C | Check | DTM returns to idle; no stuck busy | P2 | Not started | |
 | RST-053-S | Stimulate | Assert `ndmreset`, write `dmcontrol.haltreq=1` while held, release reset | P1 | Pass | The portable substitute for halt-on-reset when `hasresethaltreq=0` |
 | RST-053-C | Check | Hart is not reported halted during reset; enters Debug Mode on release | P1 | Pass | |
+| RST-053-C2 | Check | `dpc` is the reset vector — the hart halted before executing any instruction (Sdext "Reset") | P1 | Pass | reset_ctrl TC-RST-001 (cont'd): `dpc`=0x10000, `ariane_soc::ROMBase` |
 | RST-054-C | Check | While `ndmreset` asserted, DMI accesses other than `dmcontrol` do not hang the DM | P2 | Not started | Spec says UNSPECIFIED — check for absence of hang, assert no value |
 | RST-055-S | Stimulate | Ten back-to-back `ndmreset` assert/deassert pairs with no settling time | P2 | Not started | |
 | RST-055-C | Check | DM reaches a consistent state; `dmstatus` readable after the last one | P2 | Not started | |
@@ -349,6 +350,8 @@ clear `haltreq` → read `dcsr.cause`.
 | HALT-009-V | Cover | Hart activity at halt = {ordinary insn, `wfi`, taking a trap, in a tight loop, executing a load/store} | `debug_module.html#dmcontrol` | P1 | Not started | |
 | HALT-010-S | Stimulate | Select multiple harts and assert `haltreq` | `debug_module.html#dmstatus` | P1 | Pass | `hart_array_uvm` on `multihart_sim` (dm_top with NrHarts=2 and dummy harts). This DM implements no hart array mask — `hasel` reads back 0 — so the harts are halted one selection at a time and `haltsum0` carries the aggregate: 0x2 for hart 1 alone, 0x3 for both |
 | HALT-011-C | Check | A halt on a hart executing ordinary instructions completes within ~10 cycles | `debug_module.html#dmcontrol` | P2 | Not started | Coverage: the immediate-latency bin. Separating it from the stalled case stops a slow path hiding behind the bound |
+| HALT-012-S | Stimulate | 16 rounds of halt → check → resume → check, then 16 rounds of `resumereq` immediately followed by `haltreq` with no poll between | `debug_module.html#dmcontrol` | P1 | Pass | run_control TC-RC-008 |
+| HALT-012-C | Check | Every waited round halts with `cause`=3 and resumes with `allresumeack`=1; every back-to-back round ends halted with `cause`=3 | `debug_module.html#dmstatus` | P1 | Pass | run_control TC-RC-008: 32/32 rounds consistent |
 
 ## 3.5 Resume
 
@@ -377,6 +380,8 @@ confirm the resume actually happened.
 | RES-008-V | Cover | `resumereq` × prior state = {halted, running, in reset} | `debug_module.html#dmcontrol` | P1 | Pass | |
 | RES-009-V | Cover | Hart transition × `resumeack` | `debug_module.html#dmstatus` | P1 | Not started | `x_transition_x_resumeack` — the §3.5 asymmetry exists only as the pairing |
 | RES-010-V | Cover | Request × prior state × halt latency | `debug_module.html#dmcontrol` | P2 | Not started | `x_request_x_latency` — ignored requests have no latency; conflating them hides a slow path |
+| RES-011-S | Stimulate | Halted, write a program into RAM over SBA, run `fence.i` from the Program Buffer, set `dcsr.ebreakm`, write `dpc` to it, resume; then download a different program over the same address and repeat | `debug_module.html#system-bus-access` | P0 | Pass | load_and_run TC-LR-001/002: the bring-up flow with nothing preloaded |
+| RES-011-C | Check | Each run returns through its `ebreak` (`cause`=1, `dpc` on it); its result is in the register it wrote and, after a `fence`, in memory over SBA; the second run computes the second program's result, not the first's | `Sdext.html#csr-dpc` | P0 | Pass | load_and_run: a0 and the stored word 0x234, then 0x678 |
 
 ## 3.6 Abstract commands
 
@@ -416,6 +421,7 @@ write `command` → poll `abstractcs.busy` → read `cmderr` → read `data0..`.
 | AC-007-C | Check | `cmderr=4` (halt/resume) | `debug_module.html#abstractcs` | P0 | Pass | Observed while root-causing SSTEP-004 |
 | AC-008-S | Stimulate | Provoke `cmderr!=0`, then issue a **valid** command without clearing it | `debug_module.html#abstractcs` | P0 | Pass | cmderr: failing command, then a valid one without clearing |
 | AC-008-C | Check | `cmderr` retains its original value — it is sticky, and the valid command does not clear it | `debug_module.html#abstractcs` | P0 | Pass | cmderr: cmderr=2 after the failing command and still 2 after the valid one |
+| AC-008-C2 | Check | With `cmderr`≠0, neither a write to `command` nor an autoexec access starts a command | `debug_module.html#dm-command` | P0 | Fail | RTL-018: abstractauto TC-AC-043 — both ran (accumulator x5=7 and x5=5, expected 0). Fixed upstream by pulp-platform/riscv-dbg#206 |
 | AC-009-S | Stimulate | Write 1s to `cmderr`, then issue a valid command | `debug_module.html#abstractcs` | P0 | Pass | cmderr: W1C of cmderr, then a valid command |
 | AC-009-C | Check | `cmderr=0` and the command completes normally | `debug_module.html#abstractcs` | P0 | Pass | cmderr: cmderr=0 after W1C, and the valid command gives cmderr=0 |
 | AC-010-S | Stimulate | Access Register with `postexec=1` and a program buffer loaded | `debug_module.html#access-register` | P1 | Pass | `program_buffer_uvm` (6/6) |
@@ -426,8 +432,10 @@ write `command` → poll `abstractcs.busy` → read `cmderr` → read `data0..`.
 | AC-012-C | Check | `command.regno` has advanced by one between the two | `debug_module.html#access-register` | P2 | Not started | |
 | AC-013-S | Stimulate | Issue `cmdtype=1` (Quick Access) and `cmdtype=2` (Access Memory) | `debug_module.html#abstractcs` | P1 | Pass | cmderr: cmdtype=1 (Quick Access) and cmdtype=2 (Access Memory) |
 | AC-013-C | Check | `cmderr=2` (not supported); DM remains usable | `debug_module.html#abstractcs` | P1 | Pass | cmderr: both → cmderr=2; later steps show the DM usable |
-| AC-014-S | Stimulate | Set `abstractauto`, then read `data0` | `debug_module.html#abstractauto` | P2 | Not started | |
-| AC-014-C | Check | The command re-executes automatically on the `data0` access | `debug_module.html#abstractauto` | P2 | Not started | |
+| AC-014-S | Stimulate | Set `abstractauto`, then read `data0` | `debug_module.html#abstractauto` | P2 | Pass | abstractauto TC-AC-040: command = read x5 + postexec `addi x5,x5,1`, autoexecdata[0] armed, data0 read 5 times |
+| AC-014-C | Check | The command re-executes automatically on the `data0` access | `debug_module.html#abstractauto` | P2 | Pass | TC-AC-040: data0 reads 100..104, x5=106 — re-run exactly once per read |
+| AC-014-C2 | Check | A data0 WRITE re-runs the command once — streamed words 1,2,3,4 sum into x5 | `debug_module.html#dm-abstractauto` | P2 | Pass | abstractauto TC-AC-041: x5=10 |
+| AC-014-C3 | Check | A progbuf access re-runs the command once, for writes and for reads (autoexecprogbuf[1]) | `debug_module.html#dm-abstractauto` | P2 | Pass | abstractauto TC-AC-042: 3 writes + 2 reads, x5=6 |
 | AC-015-C | Check | After any abstract command, GPRs/CSRs other than the target are unchanged | `debug_module.html#abstract-commands` | P0 | Not started | Except `dscratch0/1` — see RAP-023 |
 | AC-016-V | Cover | `cmderr` = {0 none, 1 busy, 2 not supported, 3 exception, 4 halt/resume, 5 bus, 7 other} | `debug_module.html#abstractcs` | P1 | Pass | 2026-09-30 merged coverage: `cg_abstract_cmd.cp_cmderr` and `cg_cmd_outcome.cp_outcome` hit 0-4. 5 (bus) and 7 (other) are never assigned by this DM (dm_mem.sv:154,198,203; dm_pkg.sv:176) and are excluded |
 | AC-017-V | Cover | `regno` class = {GPR, FPR, CSR, unimplemented}; `aarsize` = {32, 64, unsupported} | `debug_module.html#access-register` | P1 | Pass | 2026-09-30 merged coverage: `cg_cmd_outcome.cp_regno` 4/4 (CSR, GPR, FPR, other) and `cp_aarsize` 32/64/128 (128 unsupported). Reserved aarsize (0, 1, 5-7) not yet exercised: see AC-021-V |
@@ -456,8 +464,8 @@ abstract commands cannot express.
 | PB-004-C | Check | With `dmstatus.impebreak=1`, a buffer with no explicit `ebreak` still returns to Debug Mode | `debug_module.html#dmstatus` | P1 | Pass | `impebreak=1` on this DUT |
 | PB-005-S | Stimulate | Place an instruction that faults (e.g. load from an unmapped address) in the buffer | `debug_module.html#program-buffer` | P0 | Pass | `sw_breakpoint_progbuf_uvm` (3/3) |
 | PB-005-C | Check | `cmderr=3` (exception); hart stays in Debug Mode and accepts the next command | `debug_module.html#abstractcs` | P0 | Pass | |
-| PB-006-S | Stimulate | Place an illegal instruction encoding in the buffer | `debug_module.html#program-buffer` | P1 | Not started | |
-| PB-006-C | Check | `cmderr=3`; DM recovers | `debug_module.html#abstractcs` | P1 | Not started | |
+| PB-006-S | Stimulate | Place an illegal instruction encoding in the buffer | `debug_module.html#program-buffer` | P1 | Pass | priv_state TC-DCSR-023: an all-zero word, then `ecall` |
+| PB-006-C | Check | `cmderr=3`; DM recovers | `debug_module.html#abstractcs` | P1 | Pass | priv_state TC-DCSR-023: cmderr=3 for both; hart stays halted |
 | PB-007-S | Stimulate | Place a jump targeting an address outside the program buffer | `debug_module.html#program-buffer` | P2 | Not started | |
 | PB-007-C | Check | Record the behaviour — the spec permits treating it as an illegal instruction | `debug_module.html#program-buffer` | P2 | Not started | Document what this DUT does; do not assert one option |
 | PB-008-S | Stimulate | Execute the buffer twice without rewriting it | `debug_module.html#program-buffer` | P2 | Not started | |
@@ -470,6 +478,8 @@ abstract commands cannot express.
 | PB-012-C | Check | Memory holds the written value, honouring the hart's MMU and PMP | `debug_module.html#program-buffer` | P0 | Not started | Contrast with SBA, which bypasses both — RAP-028 |
 | PB-013-V | Cover | Buffer outcome × operation performed | `debug_module.html#program-buffer` | P1 | Not started | `x_outcome_x_operation` — an exception during a store leaves different state from one during a register read |
 | PB-014-V | Cover | Buffer fill level × outcome | `debug_module.html#abstractcs` | P1 | Pass | `x_fill_x_outcome` — the last slot is where off-by-one errors live. 2026-10-01 coverage (cmd_outcome merged with the 2026-09-30 run): `x_fill_x_outcome` 12/12 (TC-PB-010/011/012: one, four and eight words x busy, exception, halt/resume) |
+| PB-015-S | Stimulate | Arm sentinels in `mepc`/`mcause`/`mtval`, `sepc`/`scause`/`stval` and `mstatus` MPP/MPIE/MIE; raise an exception inside the Program Buffer | `Sdext.html#debugmode` | P1 | Pass | priv_state TC-DCSR-023 |
+| PB-015-C | Check | No trap CSR and not `dpc` changes — "they do not update registers such as `mepc`, `mcause`, `mtval`" | `Sdext.html#debugmode` | P1 | Pass | priv_state TC-DCSR-023: all intact |
 
 ## 3.8 System Bus Access
 
@@ -488,10 +498,10 @@ and its PMP.
 | SBA-004-S | Stimulate | Set `sbautoincrement`, write a 4-word burst, read `sbaddress0` back | `debug_module.html#dm-sbcs` | P1 | Pass | `sba_uvm`. Stride is read back from `sbcs`, never assumed: this DUT hardwires `sbaccess`, so a test that assumes its own write stuck computes the wrong stride |
 | SBA-005-S | Stimulate | Set `sbreadondata` and stream successive words by reading `sbdata0` | `debug_module.html#dm-sbcs` | P1 | Pass | Trigger is the data READ, not the address write |
 | SBA-006-C | Check | `sbaddress1`/`sbdata1` decode when `sbasize`>32 | `debug_module.html#dm-sbaddress1` | P2 | Pass | |
-| SBA-007-C | Check | An access to an unmapped address sets `sberror`, and writing 1s clears it | `debug_module.html#dm-sbcs` | P1 | Fail | Passed vacuously: TC-SBA-007 checks only that sberror clears, never that it was set. The fork's dm_top/dm_sba have no bus-error input, so an unmapped access reports sberror=0. |
+| SBA-007-C | Check | An access to an unmapped address sets `sberror`, and writing 1s clears it | `debug_module.html#dm-sbcs` | P1 | Fail | RTL-019: TC-SBA-007 now requires sberror≠0 and fails — DECERR on the bus, sberror=0. It used to check only that sberror cleared, and passed vacuously |
 | SBA-009-C | Check | Racing `sbdata`/`sbaddress` against a live transfer sets `sbbusyerror`, which clears and leaves the DM usable | `debug_module.html#dm-sbcs` | P2 | Pass | Does not assert the race lands: a DM fast enough to finish first is not wrong |
 | SBA-010-C | Check | SBA works with the hart **running** — it is hart-independent | `debug_module.html#system-bus-access` | P1 | Pass | |
-| SBA-019-V | Cover | `cg_sba.cp_sbaccess` widths other than the hardwired one | `debug_module.html#dm-sbcs` | P1 | Blocked (CVA6) / Pass (Ibex) | Excluded on CVA6 while #147 stands: a hardwired field cannot hold another width. `sba_uvm`'s TC-SBA-019 now drives every width `sbcs` advertises and reports which ones the DM refuses -- on Ibex `sbaccess` is writable, so the 8- and 16-bit arms of `dm_sba` are reachable there |
+| SBA-019-V | Cover | `cg_sba.cp_sbaccess` widths other than the hardwired one | `debug_module.html#dm-sbcs` | P1 | Blocked (CVA6) / Pass (Ibex) | Excluded on CVA6 while #147 stands: a hardwired field cannot hold another width. `sba_uvm`'s TC-SBA-019 now drives every width `sbcs` advertises and fails on any it refuses -- on Ibex `sbaccess` is writable, so the 8- and 16-bit arms of `dm_sba` are reachable there |
 | SBA-001-S | Stimulate | Set `sbaccess=2` (32-bit), write `sbaddress0=A`, read `sbdata0` | `debug_module.html#sbcs` | P0 | Blocked | Blocked by RTL-002 (#147): sbaccess is hardwired to 3, so a 32-bit access cannot be selected. Fix proposed: riscv-dbg#9. |
 | SBA-001-C | Check | `sbdata0` holds the contents of A; `sberror=0` | `debug_module.html#sbcs` | P0 | Blocked | See SBA-001-S (#147). |
 | SBA-002-S | Stimulate | Write `sbaddress0=A`, write `sbdata0=V`, then read A back | `debug_module.html#sbcs` | P0 | Pass | sba TC-SBA-002/003. |
@@ -504,10 +514,10 @@ and its PMP.
 | SBA-005-C | Check | `sbaddress0` advances by the access size each time | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone. No step does autoincrement READS; TC-SBA-004 autoincrements writes. |
 | SBA-006-S | Stimulate | Set `sbaccess` to an unsupported size | `debug_module.html#sbcs` | P1 | Blocked | Blocked by RTL-002 (#147): hardwired sbaccess cannot hold an unsupported size. Fix proposed: riscv-dbg#9 (also reports sberror=4). |
 | SBA-006-C | Check | `sberror=4` (unsupported size) | `debug_module.html#sbcs` | P1 | Blocked | See SBA-006-S (#147). |
-| SBA-007-S | Stimulate | Write a misaligned `sbaddress0` for the selected size | `debug_module.html#sbcs` | P1 | Not started | Blocker (RST-038) gone; no step drives a misaligned address. Note: dm_sba has no alignment check (upstream has one). |
-| SBA-007-C | Check | `sberror=3` (alignment) | `debug_module.html#sbcs` | P1 | Not started | See SBA-007-S. |
+| SBA-007-S | Stimulate | Write a misaligned `sbaddress0` for the selected size | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-011: a 64-bit read at 0x80000004 |
+| SBA-007-C | Check | `sberror=3` (alignment) | `debug_module.html#sbcs` | P1 | N/A | The spec defines code 3 but does not require a DM to detect misalignment; this one performs the access with byte enables (sberror=0, TC-SBA-011), clears, and the next aligned access works. Upstream pulp has a check |
 | SBA-008-S | Stimulate | Target an unmapped physical address | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-007 targets the unmapped 0xf0000000. |
-| SBA-008-C | Check | `sberror=2` (bus error) | `debug_module.html#sbcs` | P1 | Fail | sberror stays 0 on an unmapped access: dm_top/dm_sba have no bus-error input (pulp upstream has master_r_err_i). No issue filed yet. |
+| SBA-008-C | Check | `sberror=2` (bus error) | `debug_module.html#sbcs` | P1 | Fail | RTL-019: sberror stays 0 on a DECERR — dm_top/dm_sba have no bus-error input (upstream pulp-platform/riscv-dbg#129 added one) |
 | SBA-009-C | Check | `sberror` is sticky and clears only on a write of 1s | `debug_module.html#sbcs` | P1 | Blocked | No access on this DUT raises sberror (SBA-008-C), so stickiness cannot be observed. |
 | SBA-010-S | Stimulate | Perform SBA reads while the hart is running | `debug_module.html#sbcs` | P1 | Pass | sba TC-SBA-010. |
 | SBA-010-C | Check | Hart continues undisturbed; `dmstatus.allrunning=1` throughout | `debug_module.html#sbcs` | P1 | Not started | TC-SBA-010 reads with the hart running but does not check dmstatus.allrunning throughout. |
@@ -654,13 +664,15 @@ on Spike. Operation catalog: VERIFICATION_STRATEGY.md, "Sdext & Trigger Module �
 | DCSR-010-C | Check | The hart re-enters Debug Mode with `dcsr.cause`=1 (ebreak) | `Sdext.html#csr-dcsr` | P0 | Pass | |
 | DCSR-011-S | Stimulate | Arm an mcontrol6 execute trigger (`action`=1) on a known instruction, resume into it | `Sdtrig.html` | P1 | N/A | cv64a6_imafdc_sv39 is built with `SDTRIG=0`; the tdata writes raise cmderr=3 |
 | DCSR-011-C | Check | The hart enters Debug Mode with `dcsr.cause`=2 (trigger) | `Sdtrig.html` | P1 | N/A | As DCSR-011-S; the trigger bins are excluded at report time (`mk/fcov_exclusions.tcl`) |
-| DCSR-012-C | Check | With `ebreakm=0`, executing `ebreak` does **not** enter Debug Mode; it traps with `mcause`=3 at the ebreak | `Sdext.html#csr-dcsr` | P0 | Pass | Checked BEFORE DCSR-010, or that test passes for the wrong reason |
+| DCSR-012-C | Check | With `ebreakm=0` (and `ebreaks=0` in S, `ebreaku=0` in U), executing `ebreak` does **not** enter Debug Mode; it traps with `mcause`=3 at the ebreak | `Sdext.html#csr-dcsr` | P0 | Pass | Checked BEFORE DCSR-010, or that test passes for the wrong reason. debug_entry TC-DCSR-012 for M, S and U |
 | DCSR-013-S | Stimulate | With `dcsr.ebreaks=1` / `ebreaku=1`, resume into an `ebreak` at S / U (`dcsr.prv`, PMP entry 0 opened) | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` |
 | DCSR-013-C | Check | Debug Mode entered with `cause`=1, `dpc` == the ebreak, `dcsr.prv` == the level it ran at | `Sdext.html#csr-dcsr` | P0 | Pass | |
 | DCSR-014-S | Stimulate | Resume into a spin loop at S / U, then assert `haltreq` | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` |
 | DCSR-014-C | Check | `cause`=3, `dcsr.prv` == S / U, `dpc` == the interrupted instruction | `Sdext.html#csr-dpc` | P0 | Pass | |
 | DCSR-015-S | Stimulate | Single-step one ordinary instruction at S / U | `Sdext.html#stepbit` | P0 | Pass | `debug_entry_uvm` |
 | DCSR-015-C | Check | `cause`=4, `dcsr.prv` unchanged, `dpc` == the next instruction | `Sdext.html#csr-dpc` | P0 | Pass | |
+| DCSR-016-S | Stimulate | Write `dcsr.mprven` 0 and 1; PMP entry 0 denies a page to S/U, `mstatus` MPRV=1 MPP=U; load from that page in the Program Buffer under each | `Sdext.html#csr-dcsr` | P1 | Pass | priv_state TC-DCSR-024 |
+| DCSR-016-C | Check | `mprven` reads back what was written (or a tied value); the load succeeds with `mprven`=0 (MPRV ignored) and faults, `cmderr`=3, with `mprven`=1 | `Sdext.html#csr-dcsr` | P1 | Pass | priv_state TC-DCSR-024: settable to 0 and 1; cmderr 0 and 3 |
 | DM-001-S | Stimulate | Enable `dcsr.ebreakm=1`; execute `ebreak` in M-mode | `Sdext.html#csr-dcsr` | P0 | Pass | `sw_breakpoint_progbuf_uvm` |
 | DM-001-C | Check | Debug Mode entered; `dcsr.cause=1` (ebreak) | `Sdext.html#csr-dcsr` | P0 | Pass | |
 | DM-002-S | Stimulate | Set `dcsr.ebreakm=0`; execute `ebreak` in M-mode | `Sdext.html#csr-dcsr` | P0 | Pass | `debug_entry_uvm` (TC-DCSR-012) |
@@ -681,8 +693,10 @@ on Spike. Operation catalog: VERIFICATION_STRATEGY.md, "Sdext & Trigger Module �
 | DM-014-V | Cover | `dcsr.cause` × `dpc` origin | `Sdext.html#csr-dpc` | P0 | Fail | `x_cause_x_dpc` — `dpc` means something different per cause; a DM can get it right for `haltreq` and wrong for `ebreak`. 2026-09-30 merged coverage: `x_cause_x_dpc` 4/4 for ebreak/haltreq/step; trigger × trap_handler_entry never hit: RTL-012 |
 | DM-015-V | Cover | `dcsr.stopcount` × `dcsr.stoptime` | `Sdext.html#csr-dcsr` | P2 | Not started | `x_stopcount_x_stoptime` — two independent timebases; an implementation wiring them together passes both coverpoints separately while being wrong |
 | DM-016-V | Cover | `dret` context × debug-CSR access context | `Sdext.html#dret` | P1 | Not started | `x_dret_x_csr_access` — confirms the check is on Debug Mode itself rather than on machine privilege |
-| DM-012-S | Stimulate | Enter Debug Mode by each cause from each privilege the cause can occur in: `ebreak` from M/S/U with the matching `ebreak*` bit set, `haltreq` from M/S/U, step from M/S/U | `Sdext.html#csr-dcsr` | P1 | Not started | Coverage hole: no item drove the cause × privilege combination |
-| DM-012-C | Check | `dcsr.cause` and `dcsr.prv` are both correct for every combination reached | `Sdext.html#csr-dcsr` | P1 | Not started | `ebreak` gating is per-privilege, so this cross is where a wrongly-gated `ebreak` shows up — neither coverpoint alone finds it |
+| DM-012-S | Stimulate | Enter Debug Mode by each cause from each privilege the cause can occur in: `ebreak` from M/S/U with the matching `ebreak*` bit set, `haltreq` from M/S/U, step from M/S/U | `Sdext.html#csr-dcsr` | P1 | Pass | priv_state TC-DCSR-020/021/022 and debug_entry TC-DCSR-010/013/014/015 |
+| DM-012-C | Check | `dcsr.cause` and `dcsr.prv` are both correct for every combination reached | `Sdext.html#csr-dcsr` | P1 | Pass | cause and prv correct in all nine combinations |
+| DM-017-S | Stimulate | Arm sentinels in `mepc`/`mcause`/`mtval`, `sepc`/`scause`/`stval` and `mstatus` MPP/MPIE/MIE; enter Debug Mode by `haltreq`, `ebreak` and step from M, S and U | `Sdext.html#debugmode` | P1 | Pass | priv_state TC-DCSR-020/021/022 |
+| DM-017-C | Check | No sentinel changes — entry updates only `dcsr.cause`, `dcsr.prv/v` and `dpc` (Sdext "Halt") | `Sdext.html#debugmode` | P1 | Fail | RTL-020 (openhwgroup/cva6#1980): `ebreak` entry from every privilege rewrites `mepc`, `mcause`=3, `mtval` and `mstatus` MPP/MPIE/MIE; `haltreq` and step leave them alone |
 | DM-013-V | Cover | `dcsr.cause` × `dcsr.prv`, excluding `resethaltreq` × {S, U} — reset-halt entry always reports the post-reset privilege, which is M by definition | `Sdext.html#csr-dcsr` | P1 | Fail | Owned by `cg_debug_entry.x_cause_x_prv`. 2026-09-30 merged coverage: `x_cause_x_prv` 9/9 for ebreak/haltreq/step × {M, S, U}; trigger × prv never hit: RTL-012 |
 
 ## 3.12 Triggers (Sdtrig)
@@ -698,10 +712,10 @@ untested area in this plan.
 | TRIG-002-C | Check | `tselect` reads back a legal (implemented) index | `Sdtrig.html` | P1 | Pass | |
 | TRIG-003-S | Stimulate | Configure `mcontrol6` as an execute trigger at a known instruction address; run | `Sdtrig.html#mcontrol6` | P0 | Pass | `debug_entry_uvm` TC-DCSR-011; the hart runs into the target with no halt request |
 | TRIG-003-C | Check | Debug Mode entered at that address; `dcsr.cause=2` (trigger) | `Sdext.html#csr-dcsr` | P0 | Fail | RTL-012 (#161): Debug Mode is entered at the target but `dcsr.cause`=3 |
-| TRIG-004-S | Stimulate | Configure `mcontrol6` as a load trigger on a known data address; run a load | `Sdtrig.html#mcontrol6` | P0 | Not started | |
-| TRIG-004-C | Check | `dcsr.cause=2`; `dpc` is the load instruction | `Sdtrig.html#mcontrol6` | P0 | Not started | |
-| TRIG-005-S | Stimulate | Configure a store trigger; run a store | `Sdtrig.html#mcontrol6` | P0 | Not started | |
-| TRIG-005-C | Check | `dcsr.cause=2` | `Sdtrig.html#mcontrol6` | P0 | Not started | |
+| TRIG-004-S | Stimulate | Configure `mcontrol6` as a load trigger on a known data address; run a load | `Sdtrig.html#mcontrol6` | P0 | Pass | debug_entry TC-DCSR-016: mcontrol6 load, action=1, on `watch_data` |
+| TRIG-004-C | Check | `dcsr.cause=2`; `dpc` is the load instruction | `Sdtrig.html#mcontrol6` | P0 | Fail | RTL-012 (#161): the hart halts by itself with `dpc` on the load, but `dcsr.cause`=3 |
+| TRIG-005-S | Stimulate | Configure a store trigger; run a store | `Sdtrig.html#mcontrol6` | P0 | Pass | debug_entry TC-DCSR-017: store trigger on the doubleword after the loaded one |
+| TRIG-005-C | Check | `dcsr.cause=2` | `Sdtrig.html#mcontrol6` | P0 | Fail | RTL-012 (#161): halts with `dpc` on the store, `dcsr.cause`=3 |
 | TRIG-006-S | Stimulate | Write `tdata1=0` for a configured trigger; re-run the matching access | `Sdtrig.html` | P1 | Pass | `trigger_uvm` TC-TRIG-006 (DMI); riscv-arch-test `SdtrigSm_Mcontrol6-00` (native) |
 | TRIG-006-C | Check | No trigger fires | `Sdtrig.html` | P1 | Fail | RTL-013 (#162): on RV64 `tdata1=0` is ignored; the trigger stays armed and fires. Previously marked Pass without being checked |
 | TRIG-007-S | Stimulate | Attempt `tdata1` writes while the hart is running | `Sdtrig.html` | P1 | Not started | |
@@ -712,7 +726,7 @@ untested area in this plan.
 | TRIG-009-C | Check | Fire on the configured interrupt and exception respectively | `Sdtrig.html#itrigger` | P2 | Fail | RTL-015 (#164): etrigger never matches in S; RTL-016 (#165): itrigger fires after the handler returns |
 | TRIG-010-C | Check | Trigger priority against a simultaneous exception matches §5.1.3 | `Sdtrig.html#5-1-3-priority` | P2 | Not started | |
 | TRIG-011-V | Cover | Trigger type = {execute, load, store, `icount`, `itrigger`, `etrigger`} | `Sdtrig.html` | P1 | Not started | |
-| TRIG-012-V | Cover | Privilege enable bits = {m, s, u} × fired/not-fired | `Sdtrig.html#mcontrol6` | P1 | Not started | |
+| TRIG-012-V | Cover | Privilege enable bits = {m, s, u} × fired/not-fired | `Sdtrig.html#mcontrol6` | P1 | Pass | Directed, not sampled by a covergroup: debug_entry TC-DCSR-018 runs a load trigger enabled for each of M, S, U from each of M, S, U — fires on the 3 matching cells only |
 | TRIG-015-S | Stimulate | Configure `mcontrol6` with both load and store match, then run each | `Sdtrig.html#mcontrol6` | P1 | Not started | Coverage: `load_and_store` — a watchpoint on any access |
 | TRIG-015-C | Check | The trigger fires on both a load and a store to the address | `Sdtrig.html#mcontrol6` | P1 | Not started |  |
 | TRIG-016-S | Stimulate | Configure a trigger with m, s and u all enabled; execute the match from each privilege | `Sdtrig.html#mcontrol6` | P1 | Not started | Coverage: `all_privileges` |

@@ -130,7 +130,8 @@ from pathlib import Path                                     # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 TESTPLAN = ROOT / "testplans" / "riscv_debug_testplan.md"
 SUITES = [ROOT / "cva6_sim" / "regress" / "regression.yaml",
-          ROOT / "ibex_sim" / "regress" / "regression.yaml"]
+          ROOT / "ibex_sim" / "regress" / "regression.yaml",
+          ROOT / "multihart_sim" / "regress" / "regression.yaml"]
 
 #: `covers:` may name a testplan row, a native-debug operation from the
 #: testplan's NATIVE-OP section, or an RTL finding a test exists to pin down.

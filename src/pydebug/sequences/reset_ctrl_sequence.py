@@ -76,6 +76,7 @@ def build_reset_ctrl_sequence(
     dm: RISCVDebug,
     mode: str = "batch",
     hartsel: int = 0,
+    boot_addr: int = None,
     **params,
 ) -> DebugSession:
     """
@@ -89,6 +90,8 @@ def build_reset_ctrl_sequence(
         dm:      RISCVDebug instance (already has transport attached)
         mode:    "batch" or "interactive"
         hartsel: which hart to exercise (default 0)
+        boot_addr: the hart's reset vector; when given, the halt taken on
+                   reset release must leave dpc there (Sdext "Reset")
     """
     session = DebugSession(mode=mode, stop_on_error=False)
 
@@ -221,13 +224,23 @@ def build_reset_ctrl_sequence(
         # reasoning as the removed trailing dm.resume() bug from the first
         # attempt at this step, 2026-07-25 -- haltreq is now persistently
         # set and resuming would just hang).
+        # Sdext "Reset": the hart "must enter Debug Mode before executing any
+        # instructions", so dpc is the reset vector. This is what makes the
+        # halt usable for boot: the debugger can load a program and resume
+        # knowing nothing ran first. Halted-on-release alone does not show
+        # it -- a hart that ran some boot code and then halted passes that.
+        dpc_ok, dpc_msg = True, "dpc not checked (no boot_addr configured)"
+        if halted_on_release and boot_addr is not None:
+            dpc = dm.read_reg64(0x07B1)
+            dpc_ok = dpc == boot_addr
+            dpc_msg = f"dpc=0x{dpc:x} (expect the reset vector 0x{boot_addr:x})"
         return StepResult(
-            ok=still_in_reset and halted_on_release,
+            ok=still_in_reset and halted_on_release and dpc_ok,
             msg=f"TC-RST-001 (cont'd): haltreq written while ndmreset "
                 f"asserted — still not halted mid-reset={still_in_reset}, "
                 f"halted on release={halted_on_release} (spec #3.5: a "
                 f"pending halt request takes effect the moment reset "
-                f"deasserts)",
+                f"deasserts), {dpc_msg}",
         )
     session.add_step(
         "TC-RST-001 (cont'd): haltreq asserted while a hart is in ndmreset (spec #3.5)",

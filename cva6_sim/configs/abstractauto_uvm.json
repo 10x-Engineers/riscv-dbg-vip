@@ -1,8 +1,8 @@
 {
-    "scenario":  "reset_ctrl",
+    "scenario":  "abstractauto",
     "transport": "uvm",
     "mode":      "batch",
-    "params": { "boot_addr": "0x10000" },
+    "params": {},
     "uvm": {
         "socket_path": "/tmp/uvm_bridge.sock",
         "timeout":     300.0

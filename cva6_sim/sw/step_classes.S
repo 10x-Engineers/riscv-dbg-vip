@@ -140,6 +140,25 @@ never_taken:
         # than falling through into the trap handler.
         j       never_taken
 
+# ── a load and a store for a watchpoint to match ──────────────────────────
+# Load and store triggers (mcontrol6 load/store, action=1) need a data access
+# at a known address. The debugger sets s1 = watch_data and resumes at
+# watch_load, at any privilege; the load reads watch_data, the store writes
+# the doubleword after it, and the hart parks.
+        .globl watch_load
+        .globl watch_store
+        .globl watch_park
+        .globl watch_data
+        .option push
+        .option norvc
+watch_load:
+        ld      t0, 0(s1)
+watch_store:
+        sd      t0, 8(s1)
+watch_park:
+        j       watch_park
+        .option pop
+
 # ── a loop to single-step through, at any privilege ──────────────────────
 # cg_step_external crosses each instruction class with stepie, a pending
 # interrupt, the privilege level and the length of a run of consecutive
@@ -198,4 +217,7 @@ handler_end:
         .align 3
 scratch_area:
         .dword 0
+        .dword 0
+watch_data:
+        .dword 0x1122334455667788
         .dword 0
